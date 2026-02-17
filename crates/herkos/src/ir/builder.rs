@@ -55,7 +55,7 @@ pub struct ModuleContext {
 
     /// Number of imported functions (these occupy indices 0..N-1 in the
     /// function index space, before local functions).
-    pub num_imported_functions: u32,
+    pub num_imported_functions: usize,
 
     /// Function import details: (module_name, func_name) for each imported function.
     /// Indexed by import_idx (0..num_imported_functions-1).
@@ -97,7 +97,7 @@ pub struct IrBuilder {
 
     /// Number of imported functions (these occupy indices 0..N-1 in the
     /// function index space, before local functions).
-    num_imported_functions: u32,
+    num_imported_functions: usize,
 
     /// Function import details: (module_name, func_name) for each imported function.
     /// Indexed by import_idx (0..num_imported_functions-1).
@@ -333,7 +333,7 @@ impl IrBuilder {
                 let dest = self.new_var();
                 self.emit(IrInstr::GlobalGet {
                     dest,
-                    index: *global_index,
+                    index: *global_index as usize,
                 });
                 self.value_stack.push(dest);
             }
@@ -344,7 +344,7 @@ impl IrBuilder {
                     .pop()
                     .ok_or_else(|| anyhow::anyhow!("Stack underflow for global.set"))?;
                 self.emit(IrInstr::GlobalSet {
-                    index: *global_index,
+                    index: *global_index as usize,
                     value,
                 });
             }
@@ -933,10 +933,10 @@ impl IrBuilder {
             }
 
             Operator::Call { function_index } => {
-                let func_idx = *function_index;
+                let func_idx = *function_index as usize;
                 let (param_count, callee_return_type) = *self
                     .func_signatures
-                    .get(func_idx as usize)
+                    .get(func_idx)
                     .ok_or_else(|| anyhow::anyhow!("Call to unknown function {}", func_idx))?;
 
                 if self.value_stack.len() < param_count {
@@ -958,7 +958,7 @@ impl IrBuilder {
                     let import_idx = func_idx;
                     let (module_name, func_name) = self
                         .func_imports
-                        .get(import_idx as usize)
+                        .get(import_idx)
                         .cloned()
                         .unwrap_or_else(|| ("unknown".to_string(), "unknown".to_string())); // TODO: really unknown? Isnt that an error?
 
@@ -991,9 +991,9 @@ impl IrBuilder {
                 if *table_index != 0 {
                     bail!("Multi-table not supported (table_index={})", table_index);
                 }
-                let type_idx = *type_index;
+                let type_idx = *type_index as usize;
                 let (param_count, callee_return_type) =
-                    *self.type_signatures.get(type_idx as usize).ok_or_else(|| {
+                    *self.type_signatures.get(type_idx).ok_or_else(|| {
                         anyhow::anyhow!("CallIndirect: unknown type index {}", type_idx)
                     })?;
 
@@ -1287,7 +1287,7 @@ pub fn build_module_info(parsed: &ParsedModule, options: &TranspileOptions) -> R
         &table_info,
         &canonical_type,
         ir_functions,
-        num_imported_functions,
+        num_imported_functions as usize,
         &imported_globals,
     )
 }
@@ -1296,14 +1296,14 @@ pub fn build_module_info(parsed: &ParsedModule, options: &TranspileOptions) -> R
 struct MemoryInfo {
     has_memory: bool,
     has_memory_import: bool,
-    max_pages: u32,
-    initial_pages: u32,
+    max_pages: usize,
+    initial_pages: usize,
 }
 
 /// Table information extracted from the module.
 struct TableInfo {
-    initial: u32,
-    max: u32,
+    initial: usize,
+    max: usize,
 }
 
 /// Extracts memory information from a parsed WASM module.
@@ -1314,11 +1314,17 @@ fn extract_memory_info(parsed: &ParsedModule, options: &TranspileOptions) -> Res
         .iter()
         .any(|imp| matches!(imp.kind, ImportKind::Memory { .. }));
     let max_pages = if let Some(ref mem) = parsed.memory {
-        mem.maximum_pages.unwrap_or(options.max_pages as u32)
+        mem.maximum_pages
+            .map(|p| p as usize)
+            .unwrap_or(options.max_pages)
     } else {
-        options.max_pages as u32
+        options.max_pages
     };
-    let initial_pages = parsed.memory.as_ref().map(|m| m.initial_pages).unwrap_or(0);
+    let initial_pages = parsed
+        .memory
+        .as_ref()
+        .map(|m| m.initial_pages as usize)
+        .unwrap_or(0);
 
     Ok(MemoryInfo {
         has_memory,
@@ -1332,8 +1338,8 @@ fn extract_memory_info(parsed: &ParsedModule, options: &TranspileOptions) -> Res
 fn extract_table_info(parsed: &ParsedModule) -> TableInfo {
     if let Some(ref tbl) = parsed.table {
         TableInfo {
-            initial: tbl.initial_size,
-            max: tbl.max_size.unwrap_or(tbl.initial_size),
+            initial: tbl.initial_size as usize,
+            max: (tbl.max_size.unwrap_or(tbl.initial_size) as usize),
         }
     } else {
         TableInfo { initial: 0, max: 0 }
@@ -1345,8 +1351,8 @@ fn extract_table_info(parsed: &ParsedModule) -> TableInfo {
 /// Canonical mapping ensures that call_indirect type checks follow the Wasm spec:
 /// two different type indices with identical (params, results) must match.
 /// We map each type_idx to the smallest index with the same structural signature.
-fn build_type_mappings(parsed: &ParsedModule) -> (Vec<u32>, Vec<(usize, Option<WasmType>)>) {
-    let canonical_type: Vec<u32> = {
+fn build_type_mappings(parsed: &ParsedModule) -> (Vec<usize>, Vec<(usize, Option<WasmType>)>) {
+    let canonical_type: Vec<usize> = {
         let mut mapping = Vec::with_capacity(parsed.types.len());
         for (i, ty) in parsed.types.iter().enumerate() {
             let canon = parsed.types[..i]
@@ -1355,7 +1361,7 @@ fn build_type_mappings(parsed: &ParsedModule) -> (Vec<u32>, Vec<(usize, Option<W
                     earlier.params() == ty.params() && earlier.results() == ty.results()
                 })
                 .map(|pos| mapping[pos])
-                .unwrap_or(i as u32);
+                .unwrap_or(i);
             mapping.push(canon);
         }
         mapping
@@ -1422,7 +1428,7 @@ fn build_ir_functions(
     let module_ctx = ModuleContext {
         func_signatures: func_sigs,
         type_signatures: type_sigs.to_vec(),
-        num_imported_functions,
+        num_imported_functions: num_imported_functions as usize,
         func_imports,
     };
 
@@ -1504,9 +1510,9 @@ fn assemble_module_metadata(
     parsed: &ParsedModule,
     mem_info: &MemoryInfo,
     table_info: &TableInfo,
-    canonical_type: &[u32],
+    canonical_type: &[usize],
     ir_functions: Vec<IrFunction>,
-    num_imported_functions: u32,
+    num_imported_functions: usize,
     imported_globals: &[ImportedGlobalDef],
 ) -> Result<ModuleInfo> {
     let globals = build_globals(parsed);
@@ -1578,8 +1584,8 @@ fn build_element_segments(parsed: &ParsedModule) -> Vec<ElementSegmentDef> {
         .element_segments
         .iter()
         .map(|es| ElementSegmentDef {
-            offset: es.offset,
-            func_indices: es.func_indices.clone(),
+            offset: es.offset as usize,
+            func_indices: es.func_indices.iter().map(|idx| *idx as usize).collect(),
         })
         .collect()
 }
@@ -1588,14 +1594,14 @@ fn build_element_segments(parsed: &ParsedModule) -> Vec<ElementSegmentDef> {
 ///
 /// Export indices use global numbering (imports + locals). We filter to local
 /// functions and offset to local function index space for codegen (func_0, func_1, ...).
-fn build_function_exports(parsed: &ParsedModule, num_imported_functions: u32) -> Vec<FuncExport> {
+fn build_function_exports(parsed: &ParsedModule, num_imported_functions: usize) -> Vec<FuncExport> {
     parsed
         .exports
         .iter()
-        .filter(|e| e.kind == ExportKind::Func && e.index >= num_imported_functions)
+        .filter(|e| e.kind == ExportKind::Func && (e.index as usize) >= num_imported_functions)
         .map(|e| FuncExport {
             name: e.name.clone(),
-            func_index: e.index - num_imported_functions,
+            func_index: (e.index as usize) - num_imported_functions,
         })
         .collect()
 }
@@ -1606,11 +1612,11 @@ fn build_function_exports(parsed: &ParsedModule, num_imported_functions: u32) ->
 /// the `needs_host` flag to indicate if a function requires a host parameter.
 fn build_function_type_signatures(
     parsed: &ParsedModule,
-    canonical_type: &[u32],
+    canonical_type: &[usize],
     ir_functions: &[IrFunction],
     imported_globals: &[ImportedGlobalDef],
 ) -> Vec<FuncSignature> {
-    let num_imported_globals_u32 = imported_globals.len() as u32;
+    let num_imported_globals = imported_globals.len();
     parsed
         .functions
         .iter()
@@ -1629,7 +1635,7 @@ fn build_function_type_signatures(
 
             let needs_host = ir_functions
                 .get(func_idx)
-                .map(|ir_func| function_calls_imports(ir_func, num_imported_globals_u32))
+                .map(|ir_func| function_calls_imports(ir_func, num_imported_globals))
                 .unwrap_or(false);
 
             FuncSignature {
@@ -1643,7 +1649,7 @@ fn build_function_type_signatures(
 }
 
 /// Determines if a function calls imports or accesses imported globals.
-fn function_calls_imports(ir_func: &IrFunction, num_imported_globals: u32) -> bool {
+fn function_calls_imports(ir_func: &IrFunction, num_imported_globals: usize) -> bool {
     ir_func.blocks.iter().any(|block| {
         block.instructions.iter().any(|instr| {
             matches!(instr, IrInstr::CallImport { .. })

@@ -473,7 +473,7 @@ impl Backend for SafeBackend {
     fn emit_call(
         &self,
         dest: Option<VarId>,
-        func_idx: u32,
+        func_idx: usize,
         args: &[VarId],
         has_globals: bool,
         has_memory: bool,
@@ -513,7 +513,7 @@ impl Backend for SafeBackend {
         }
     }
 
-    fn emit_global_get(&self, dest: VarId, index: u32, is_mutable: bool) -> String {
+    fn emit_global_get(&self, dest: VarId, index: usize, is_mutable: bool) -> String {
         if is_mutable {
             format!("                {dest} = globals.g{index};")
         } else {
@@ -521,7 +521,7 @@ impl Backend for SafeBackend {
         }
     }
 
-    fn emit_global_set(&self, index: u32, value: VarId) -> String {
+    fn emit_global_set(&self, index: usize, value: VarId) -> String {
         format!("                globals.g{index} = {value};")
     }
 

@@ -49,7 +49,7 @@ pub trait Backend {
     fn emit_call(
         &self,
         dest: Option<VarId>,
-        func_idx: u32,
+        func_idx: usize,
         args: &[VarId],
         has_globals: bool,
         has_memory: bool,
@@ -68,10 +68,10 @@ pub trait Backend {
 
     /// Emit Rust code for reading a global variable.
     /// Mutable globals: `globals.g{index}`, immutable: `G{index}` (const item).
-    fn emit_global_get(&self, dest: VarId, index: u32, is_mutable: bool) -> String;
+    fn emit_global_get(&self, dest: VarId, index: usize, is_mutable: bool) -> String;
 
     /// Emit Rust code for writing a mutable global variable.
-    fn emit_global_set(&self, index: u32, value: VarId) -> String;
+    fn emit_global_set(&self, index: usize, value: VarId) -> String;
 
     /// Emit Rust code for an assignment.
     fn emit_assign(&self, dest: VarId, src: VarId) -> String;

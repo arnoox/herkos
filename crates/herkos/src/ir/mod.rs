@@ -12,4 +12,4 @@ mod types;
 pub use types::*;
 
 pub mod builder;
-pub use builder::{build_module_info, IrBuilder, ModuleContext};
+pub use builder::{build_module_info, ModuleContext};

@@ -401,13 +401,13 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
             // Element segment initialization
             for seg in &info.element_segments {
                 for (i, func_idx) in seg.func_indices.iter().enumerate() {
-                    let table_idx = seg.offset as usize + i;
+                    let table_idx = seg.offset + i;
                     // func_idx is in global space (imports + locals).
                     // Convert to local function index for lookup and storage.
                     let local_func_idx = *func_idx - info.num_imported_functions();
                     let type_idx = info
                         .func_signatures
-                        .get(local_func_idx as usize)
+                        .get(local_func_idx)
                         .map(|s| s.type_idx)
                         .unwrap_or(0);
                     code.push_str(&format!(
@@ -423,13 +423,13 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
             code.push_str(&format!("    let mut table = {};\n", table_init));
             for seg in &info.element_segments {
                 for (i, func_idx) in seg.func_indices.iter().enumerate() {
-                    let table_idx = seg.offset as usize + i;
+                    let table_idx = seg.offset + i;
                     // func_idx is in global space (imports + locals).
                     // Convert to local function index for lookup and storage.
                     let local_func_idx = *func_idx - info.num_imported_functions();
                     let type_idx = info
                         .func_signatures
-                        .get(local_func_idx as usize)
+                        .get(local_func_idx)
                         .map(|s| s.type_idx)
                         .unwrap_or(0);
                     code.push_str(&format!(
@@ -461,7 +461,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
         code.push_str("impl WasmModule {\n");
 
         for export in &info.func_exports {
-            let func_idx = export.func_index as usize;
+            let func_idx = export.func_index;
             let sig = &info.func_signatures[func_idx];
 
             // Determine trait bounds for this export
@@ -585,7 +585,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
                 matches!(
                     instr,
                     IrInstr::GlobalGet { index, .. } | IrInstr::GlobalSet { index, .. }
-                    if (*index as usize) < num_imported_globals
+                    if *index < num_imported_globals
                 )
             })
         })
@@ -657,7 +657,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
                         let ty = if *func_idx >= info.num_imported_functions() {
                             let local_idx = func_idx - info.num_imported_functions();
                             info.func_signatures
-                                .get(local_idx as usize)
+                                .get(local_idx)
                                 .and_then(|s| s.return_type)
                                 .unwrap_or(WasmType::I32)
                         } else {
@@ -675,7 +675,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
                         // Look up import signature from func_imports
                         let ty = info
                             .func_imports
-                            .get(*import_idx as usize)
+                            .get(*import_idx)
                             .and_then(|imp| imp.return_type)
                             .unwrap_or(WasmType::I32);
                         var_types.insert(*dest, ty);
@@ -689,12 +689,12 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
                     }
                     IrInstr::GlobalGet { dest, index } => {
                         // Distinguish imported globals (lower indices) from local globals
-                        let ty = if (*index as usize) < info.imported_globals.len() {
+                        let ty = if *index < info.imported_globals.len() {
                             // Imported global
-                            info.imported_globals[*index as usize].wasm_type
+                            info.imported_globals[*index].wasm_type
                         } else {
                             // Local global — adjust index by removing imported count
-                            let local_idx = (*index as usize) - info.imported_globals.len();
+                            let local_idx = *index - info.imported_globals.len();
                             info.globals
                                 .get(local_idx)
                                 .map(|g| g.wasm_type)
@@ -709,7 +709,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
                     } => {
                         let ty = info
                             .type_signatures
-                            .get(*type_idx as usize)
+                            .get(*type_idx)
                             .and_then(|s| s.return_type)
                             .unwrap_or(WasmType::I32);
                         var_types.insert(*dest, ty);
@@ -983,16 +983,16 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
             IrInstr::Assign { dest, src } => self.backend.emit_assign(*dest, *src),
 
             IrInstr::GlobalGet { dest, index } => {
-                if (*index as usize) < info.imported_globals.len() {
+                if *index < info.imported_globals.len() {
                     // Imported global — access via host trait getter
-                    let g = &info.imported_globals[*index as usize];
+                    let g = &info.imported_globals[*index];
                     format!("                {} = host.get_{}();", dest, g.name)
                 } else {
                     // Local global — use corrected index and backend
-                    let local_idx = index - info.imported_globals.len() as u32;
+                    let local_idx = index - info.imported_globals.len();
                     let is_mutable = info
                         .globals
-                        .get(local_idx as usize)
+                        .get(local_idx)
                         .map(|g| g.mutable)
                         .unwrap_or(true);
                     self.backend.emit_global_get(*dest, local_idx, is_mutable)
@@ -1000,13 +1000,13 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
             }
 
             IrInstr::GlobalSet { index, value } => {
-                if (*index as usize) < info.imported_globals.len() {
+                if *index < info.imported_globals.len() {
                     // Imported global — access via host trait setter
-                    let g = &info.imported_globals[*index as usize];
+                    let g = &info.imported_globals[*index];
                     format!("                host.set_{}({});", g.name, value)
                 } else {
                     // Local global — use corrected index and backend
-                    let local_idx = index - info.imported_globals.len() as u32;
+                    let local_idx = index - info.imported_globals.len();
                     self.backend.emit_global_set(local_idx, *value)
                 }
             }
@@ -1105,7 +1105,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
     fn generate_call_indirect(
         &self,
         dest: Option<VarId>,
-        type_idx: u32,
+        type_idx: usize,
         table_idx: VarId,
         args: &[VarId],
         info: &ModuleInfo,
@@ -1118,7 +1118,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
         // Two different type indices with identical (params, results) must match.
         let canon_idx = info
             .canonical_type
-            .get(type_idx as usize)
+            .get(type_idx)
             .copied()
             .unwrap_or(type_idx);
 
