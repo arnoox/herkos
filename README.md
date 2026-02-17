@@ -1,6 +1,6 @@
 # herkos
 
-> ⚠️ *** This project is work in progress! Not all wasm features nor corner cases were tested!***
+> ⚠️ ** This project is work in progress! Not all wasm features nor corner cases were tested!**
 
 A compilation pipeline that transpiles WebAssembly modules into memory-safe Rust code with compile-time isolation guarantees, replacing runtime hardware-based memory protection (MMU/MPU) with type-system-enforced safety.
 
