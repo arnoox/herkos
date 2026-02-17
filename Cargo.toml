@@ -9,6 +9,7 @@ members = [
 [workspace.dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+heck = "0.5"
 wasmparser = "0.227"
 wat = "1.220"
 kani-verifier = "0.57"

@@ -9,6 +9,7 @@
 use crate::backend::Backend;
 use crate::ir::*;
 use anyhow::{Context, Result};
+use heck::ToUpperCamelCase;
 
 // ─── Helper functions ───────────────────────────────────────────────────────
 
@@ -18,18 +19,7 @@ use anyhow::{Context, Result};
 /// - "env" → "EnvImports"
 /// - "wasi_snapshot_preview1" → "WasiSnapshotPreview1Imports"
 fn module_name_to_trait_name(module_name: &str) -> String {
-    // Convert to PascalCase and append "Imports"
-    let pascal = module_name
-        .split('_')
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => first.to_uppercase().chain(chars).collect(),
-            }
-        })
-        .collect::<String>();
-    format!("{pascal}Imports")
+    format!("{}Imports", module_name.to_upper_camel_case())
 }
 
 /// Group function imports by module name.

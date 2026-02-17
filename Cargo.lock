@@ -196,6 +196,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "heck",
  "wasmparser 0.227.1",
  "wat",
 ]
