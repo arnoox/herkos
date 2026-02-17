@@ -12,7 +12,7 @@ pub mod parser;
 pub use backend::{Backend, SafeBackend};
 pub use codegen::{
     CodeGenerator, DataSegmentDef, ElementSegmentDef, FuncExport, FuncImport, FuncSignature,
-    GlobalDef, GlobalInit, ModuleInfo,
+    GlobalDef, GlobalInit, ImportedGlobalDef, ModuleInfo,
 };
 pub use ir::{IrBuilder, IrFunction};
 pub use parser::{parse_wasm, ExportKind, ImportKind, ParsedModule};
@@ -64,6 +64,10 @@ pub fn transpile(wasm_bytes: &[u8], options: &TranspileOptions) -> Result<String
 
     // Extract memory information
     let has_memory = parsed.memory.is_some();
+    let has_memory_import = parsed
+        .imports
+        .iter()
+        .any(|imp| matches!(imp.kind, parser::ImportKind::Memory { .. }));
     let max_pages = if let Some(ref mem) = parsed.memory {
         mem.maximum_pages.unwrap_or(options.max_pages as u32)
     } else {
@@ -113,6 +117,25 @@ pub fn transpile(wasm_bytes: &[u8], options: &TranspileOptions) -> Result<String
         .collect();
 
     let num_imported_functions = parsed.num_imported_functions;
+
+    // Build imported_globals list early (Milestone 4)
+    let imported_globals: Vec<ImportedGlobalDef> = parsed
+        .imports
+        .iter()
+        .filter_map(|imp| {
+            if let parser::ImportKind::Global { val_type, mutable } = &imp.kind {
+                Some(ImportedGlobalDef {
+                    module_name: imp.module_name.clone(),
+                    name: imp.name.clone(),
+                    wasm_type: ir::WasmType::from_wasmparser(*val_type),
+                    mutable: *mutable,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+    let num_imported_globals = imported_globals.len();
 
     // Step 2: Build IR for each function
     let mut ir_builder = IrBuilder::new();
@@ -266,15 +289,21 @@ pub fn transpile(wasm_bytes: &[u8], options: &TranspileOptions) -> Result<String
                 .first()
                 .map(|vt| ir::WasmType::from_wasmparser(*vt));
 
-            // Check if this function calls imports (needs host parameter)
+            // Check if this function calls imports or accesses imported globals (needs host parameter)
             let needs_host = ir_functions
                 .get(func_idx)
                 .map(|ir_func| {
                     ir_func.blocks.iter().any(|block| {
-                        block
-                            .instructions
-                            .iter()
-                            .any(|instr| matches!(instr, ir::IrInstr::CallImport { .. }))
+                        block.instructions.iter().any(|instr| {
+                            matches!(instr, ir::IrInstr::CallImport { .. })
+                                || (num_imported_globals > 0
+                                    && matches!(
+                                        instr,
+                                        ir::IrInstr::GlobalGet { index, .. }
+                                            | ir::IrInstr::GlobalSet { index, .. }
+                                            if (*index as usize) < num_imported_globals
+                                    ))
+                        })
                     })
                 })
                 .unwrap_or(false);
@@ -339,6 +368,7 @@ pub fn transpile(wasm_bytes: &[u8], options: &TranspileOptions) -> Result<String
 
     let module_info = ModuleInfo {
         has_memory,
+        has_memory_import,
         max_pages,
         initial_pages,
         table_initial,
@@ -352,6 +382,7 @@ pub fn transpile(wasm_bytes: &[u8], options: &TranspileOptions) -> Result<String
         canonical_type,
         num_imported_functions,
         func_imports,
+        imported_globals,
     };
 
     // Step 4: Generate Rust code

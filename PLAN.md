@@ -110,9 +110,9 @@ index space. A module with 3 imported functions has its first local function at 
 - [x] All 260+ tests passing
 
 **Milestone 4: Memory and Global Imports**
-- [ ] Memory import → emit `LibraryModule<G, TABLE_SIZE>` instead of `Module<G, MAX_PAGES, TABLE_SIZE>`; export methods take `memory: &mut IsolatedMemory<MP>`
-- [ ] Global import → emit `host.get_name()` / `host.set_name(val)` via trait accessors
-- [ ] Detect memory import: no local MemorySection but `ImportKind::Memory` exists
+- [x] Memory import → emit `LibraryModule<G, TABLE_SIZE>` instead of `Module<G, MAX_PAGES, TABLE_SIZE>`; export methods take `memory: &mut IsolatedMemory<MP>`
+- [x] Global import → emit `host.get_name()` / `host.set_name(val)` via trait accessors
+- [x] Detect memory import: no local MemorySection but `ImportKind::Memory` exists
 
 **Milestone 5: End-to-End Integration and Inter-Module Lending**
 - [ ] WAT files: `import_basic.wat`, `import_memory.wat`, `import_multi.wat`
@@ -154,12 +154,6 @@ Dependency chain: M1 → M2 → M3 → M4 → M5 (each milestone strictly depend
 These items were identified during pre-open-source code review and deferred for future milestones:
 
 ### Phase 4: Important Features and Spec Compliance
-- [ ] **Local variable tracking**: Implement proper local variable handling in IR builder
-  - Currently stubbed at [builder.rs:209](crates/herkos/src/ir/builder.rs#L209) with TODO
-  - Parse local declarations from function bodies (available in wasmparser)
-  - Track locals in `IrFunction.locals: Vec<WasmType>`
-  - Map Wasm local indices to VarIds correctly (params first, then locals)
-  - Add E2E test for functions with explicit locals
 - [ ] **IR type system cleanup**: Remove Rust-specific Display implementations from IR types
   - Files: [types.rs:40-50, 274-284](crates/herkos/src/ir/types.rs)
   - Move formatting logic to backend-specific code (e.g., `backend/safe.rs`)

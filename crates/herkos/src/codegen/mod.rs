@@ -85,6 +85,19 @@ pub struct FuncImport {
     pub return_type: Option<WasmType>,
 }
 
+/// An imported global variable for code generation.
+#[derive(Debug, Clone)]
+pub struct ImportedGlobalDef {
+    /// Import module name.
+    pub module_name: String,
+    /// Import field name (used as method name in host trait).
+    pub name: String,
+    /// The Wasm value type.
+    pub wasm_type: WasmType,
+    /// Whether the global is mutable.
+    pub mutable: bool,
+}
+
 /// Module-level information for code generation.
 ///
 /// When `needs_wrapper()` returns true, the codegen emits a `Module` struct
@@ -123,6 +136,10 @@ pub struct ModuleInfo {
     pub num_imported_functions: u32,
     /// Imported functions for trait generation (Milestone 3).
     pub func_imports: Vec<FuncImport>,
+    /// Whether memory is imported rather than locally declared (Milestone 4).
+    pub has_memory_import: bool,
+    /// Imported global definitions (Milestone 4), in import declaration order.
+    pub imported_globals: Vec<ImportedGlobalDef>,
 }
 
 impl ModuleInfo {
@@ -134,6 +151,7 @@ impl ModuleInfo {
         self.globals.iter().any(|g| g.mutable)
             || !self.data_segments.is_empty()
             || !self.element_segments.is_empty()
+            || self.has_memory_import
     }
 
     /// Whether the module has any mutable globals.
@@ -222,6 +240,8 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
             canonical_type: Vec::new(),
             num_imported_functions: 0,
             func_imports: Vec::new(),
+            has_memory_import: false,
+            imported_globals: Vec::new(),
         };
         self.generate_module_with_info(ir_functions, &info)
     }
@@ -242,42 +262,86 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
         }
     }
 
-    /// Generate host trait definitions from imports (Milestone 3).
+    /// Generate host trait definitions from imports (Milestone 3/4).
+    /// Includes both function imports and global import accessors.
     fn generate_host_traits(&self, info: &ModuleInfo) -> String {
-        if info.func_imports.is_empty() {
+        if info.func_imports.is_empty() && info.imported_globals.is_empty() {
             return String::new();
         }
 
         let mut code = String::new();
-        let grouped = group_imports_by_module(&info.func_imports);
 
-        for (module_name, imports) in grouped {
-            let trait_name = module_name_to_trait_name(&module_name);
+        // Group function imports by module name
+        let func_grouped = group_imports_by_module(&info.func_imports);
+
+        // Group global imports by module name
+        let mut global_grouped: std::collections::BTreeMap<String, Vec<&ImportedGlobalDef>> =
+            std::collections::BTreeMap::new();
+        for g in &info.imported_globals {
+            global_grouped
+                .entry(g.module_name.clone())
+                .or_default()
+                .push(g);
+        }
+
+        // Collect all module names
+        let mut all_modules: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for name in func_grouped.keys() {
+            all_modules.insert(name.clone());
+        }
+        for name in global_grouped.keys() {
+            all_modules.insert(name.clone());
+        }
+
+        // Generate one trait per module
+        for module_name in &all_modules {
+            let trait_name = module_name_to_trait_name(module_name);
             code.push_str(&format!("pub trait {trait_name} {{\n"));
 
-            for imp in imports {
-                // Generate method signature
-                let mut params: Vec<String> = Vec::new();
-                params.push("&mut self".to_string());
-                for (i, ty) in imp.params.iter().enumerate() {
-                    let rust_ty = self.wasm_type_to_rust(ty);
-                    params.push(format!("arg{i}: {rust_ty}"));
-                }
-
-                let return_ty = match &imp.return_type {
-                    Some(ty) => {
+            // Function imports for this module
+            if let Some(imports) = func_grouped.get(module_name) {
+                for imp in imports {
+                    // Generate method signature
+                    let mut params: Vec<String> = Vec::new();
+                    params.push("&mut self".to_string());
+                    for (i, ty) in imp.params.iter().enumerate() {
                         let rust_ty = self.wasm_type_to_rust(ty);
-                        format!("WasmResult<{rust_ty}>")
+                        params.push(format!("arg{i}: {rust_ty}"));
                     }
-                    None => "WasmResult<()>".to_string(),
-                };
 
-                code.push_str(&format!(
-                    "    fn {}({}) -> {};\n",
-                    imp.func_name,
-                    params.join(", "),
-                    return_ty
-                ));
+                    let return_ty = match &imp.return_type {
+                        Some(ty) => {
+                            let rust_ty = self.wasm_type_to_rust(ty);
+                            format!("WasmResult<{rust_ty}>")
+                        }
+                        None => "WasmResult<()>".to_string(),
+                    };
+
+                    code.push_str(&format!(
+                        "    fn {}({}) -> {};\n",
+                        imp.func_name,
+                        params.join(", "),
+                        return_ty
+                    ));
+                }
+            }
+
+            // Global import accessors for this module (Milestone 4)
+            if let Some(globals) = global_grouped.get(module_name) {
+                for g in globals {
+                    let rust_ty = self.wasm_type_to_rust(&g.wasm_type);
+
+                    // Getter (always)
+                    code.push_str(&format!("    fn get_{}(&self) -> {rust_ty};\n", g.name));
+
+                    // Setter (only if mutable)
+                    if g.mutable {
+                        code.push_str(&format!(
+                            "    fn set_{}(&mut self, val: {rust_ty});\n",
+                            g.name
+                        ));
+                    }
+                }
             }
 
             code.push_str("}\n\n");
@@ -288,13 +352,23 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
 
     /// Build trait bounds string from imports (e.g., "EnvImports + WasiImports").
     fn build_trait_bounds(&self, info: &ModuleInfo) -> Option<String> {
-        if info.func_imports.is_empty() {
+        if info.func_imports.is_empty() && info.imported_globals.is_empty() {
             return None;
         }
 
-        let grouped = group_imports_by_module(&info.func_imports);
-        let trait_names: Vec<String> = grouped
-            .keys()
+        // Collect all module names from both function imports and global imports
+        let mut module_names: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
+
+        for imp in &info.func_imports {
+            module_names.insert(imp.module_name.clone());
+        }
+        for g in &info.imported_globals {
+            module_names.insert(g.module_name.clone());
+        }
+
+        let trait_names: Vec<String> = module_names
+            .iter()
             .map(|module_name| module_name_to_trait_name(module_name))
             .collect();
 
@@ -318,6 +392,8 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
         if info.has_memory {
             rust_code.push_str("use herkos_runtime::{WasmResult, WasmTrap, IsolatedMemory};\n\n");
             rust_code.push_str(&format!("const MAX_PAGES: usize = {};\n\n", info.max_pages));
+        } else if info.has_memory_import {
+            rust_code.push_str("use herkos_runtime::{WasmResult, WasmTrap, IsolatedMemory};\n\n");
         } else {
             rust_code.push_str("use herkos_runtime::{WasmResult, WasmTrap};\n\n");
         }
@@ -374,6 +450,11 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
                 "use herkos_runtime::{{WasmResult, WasmTrap, IsolatedMemory, Module, Table{funcref_import}}};\n\n",
             ));
             rust_code.push_str(&format!("const MAX_PAGES: usize = {};\n", info.max_pages));
+        } else if info.has_memory_import {
+            // Memory imported — use LibraryModule, include IsolatedMemory, no MAX_PAGES constant
+            rust_code.push_str(&format!(
+                "use herkos_runtime::{{WasmResult, WasmTrap, IsolatedMemory, LibraryModule, Table{funcref_import}}};\n\n",
+            ));
         } else {
             rust_code.push_str(&format!(
                 "use herkos_runtime::{{WasmResult, WasmTrap, LibraryModule, Table{funcref_import}}};\n\n",
@@ -590,6 +671,15 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
             };
             let has_multiple_bounds = trait_bounds_opt.as_ref().is_some_and(|b| b.contains(" + "));
 
+            // Build generics: handle both H (host) and MP (imported memory size)
+            let mut generics: Vec<String> = Vec::new();
+            if info.has_memory_import {
+                generics.push("const MP: usize".to_string());
+            }
+            if has_multiple_bounds {
+                generics.push(format!("H: {}", trait_bounds_opt.as_ref().unwrap()));
+            }
+
             // Method signature with optional generic parameter
             let mut param_parts: Vec<String> = Vec::new();
             param_parts.push("&mut self".to_string());
@@ -598,7 +688,12 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
                 param_parts.push(format!("v{i}: {rust_ty}"));
             }
 
-            // Add host parameter if function needs it (Milestone 2/3)
+            // Add memory parameter if imported (Milestone 4)
+            if info.has_memory_import {
+                param_parts.push("memory: &mut IsolatedMemory<MP>".to_string());
+            }
+
+            // Add host parameter if function needs it (Milestone 2/3/4)
             if sig.needs_host {
                 if let Some(trait_bounds) = &trait_bounds_opt {
                     if has_multiple_bounds {
@@ -622,23 +717,19 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
                 None => "WasmResult<()>".to_string(),
             };
 
-            // Generate method signature (with generic if needed)
-            if has_multiple_bounds {
-                code.push_str(&format!(
-                    "    pub fn {}<H: {}>({}) -> {} {{\n",
-                    export.name,
-                    trait_bounds_opt.as_ref().unwrap(),
-                    param_parts.join(", "),
-                    return_type
-                ));
+            // Generate method signature (with generics if needed)
+            let generic_part = if generics.is_empty() {
+                String::new()
             } else {
-                code.push_str(&format!(
-                    "    pub fn {}({}) -> {} {{\n",
-                    export.name,
-                    param_parts.join(", "),
-                    return_type
-                ));
-            }
+                format!("<{}>", generics.join(", "))
+            };
+
+            code.push_str(&format!(
+                "    pub fn {}{generic_part}({}) -> {} {{\n",
+                export.name,
+                param_parts.join(", "),
+                return_type
+            ));
 
             // Forward call to internal function
             let mut call_args: Vec<String> =
@@ -654,6 +745,8 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
             }
             if info.has_memory {
                 call_args.push("&mut self.0.memory".to_string());
+            } else if info.has_memory_import {
+                call_args.push("memory".to_string());
             }
             if info.has_table() {
                 call_args.push("&self.0.table".to_string());
@@ -693,6 +786,8 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
             canonical_type: Vec::new(),
             num_imported_functions: 0,
             func_imports: Vec::new(),
+            has_memory_import: false,
+            imported_globals: Vec::new(),
         };
         self.generate_function_with_info(ir_func, func_name, &info, true)
     }
@@ -704,6 +799,22 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
                 .instructions
                 .iter()
                 .any(|instr| matches!(instr, IrInstr::CallImport { .. }))
+        })
+    }
+
+    /// Check if an IR function accesses any imported globals.
+    fn has_global_import_access(ir_func: &IrFunction, num_imported_globals: usize) -> bool {
+        if num_imported_globals == 0 {
+            return false;
+        }
+        ir_func.blocks.iter().any(|block| {
+            block.instructions.iter().any(|instr| {
+                matches!(
+                    instr,
+                    IrInstr::GlobalGet { index, .. } | IrInstr::GlobalSet { index, .. }
+                    if (*index as usize) < num_imported_globals
+                )
+            })
         })
     }
 
@@ -738,6 +849,11 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
 
         // Seed with parameter types
         for (var, ty) in &ir_func.params {
+            var_types.insert(*var, *ty);
+        }
+
+        // Seed with declared local variable types
+        for (var, ty) in &ir_func.locals {
             var_types.insert(*var, *ty);
         }
 
@@ -799,11 +915,17 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
                         }
                     }
                     IrInstr::GlobalGet { dest, index } => {
-                        // Look up actual type from ModuleInfo
-                        let ty = if (*index as usize) < info.globals.len() {
-                            info.globals[*index as usize].wasm_type
+                        // Distinguish imported globals (lower indices) from local globals
+                        let ty = if (*index as usize) < info.imported_globals.len() {
+                            // Imported global
+                            info.imported_globals[*index as usize].wasm_type
                         } else {
-                            WasmType::I32 // fallback
+                            // Local global — adjust index by removing imported count
+                            let local_idx = (*index as usize) - info.imported_globals.len();
+                            info.globals
+                                .get(local_idx)
+                                .map(|g| g.wasm_type)
+                                .unwrap_or(WasmType::I32)
                         };
                         var_types.insert(*dest, ty);
                     }
@@ -937,8 +1059,9 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
     ) -> String {
         let visibility = if is_public { "pub " } else { "" };
 
-        // Add generic type parameter if function needs host with multiple trait bounds
-        let needs_host = Self::has_import_calls(ir_func);
+        // Check if function needs host parameter (imports or global imports)
+        let needs_host = Self::has_import_calls(ir_func)
+            || Self::has_global_import_access(ir_func, info.imported_globals.len());
         let trait_bounds_opt = if needs_host {
             self.build_trait_bounds(info)
         } else {
@@ -947,14 +1070,22 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
 
         let has_multiple_bounds = trait_bounds_opt.as_ref().is_some_and(|b| b.contains(" + "));
 
-        let mut sig = if has_multiple_bounds {
-            format!(
-                "{visibility}fn {func_name}<H: {}>(",
-                trait_bounds_opt.as_ref().unwrap()
-            )
+        // Build generics: handle both H (host) and MP (imported memory size)
+        let mut generics: Vec<String> = Vec::new();
+        if info.has_memory_import {
+            generics.push("const MP: usize".to_string());
+        }
+        if has_multiple_bounds {
+            generics.push(format!("H: {}", trait_bounds_opt.as_ref().unwrap()));
+        }
+
+        let generic_part = if generics.is_empty() {
+            String::new()
         } else {
-            format!("{visibility}fn {func_name}(")
+            format!("<{}>", generics.join(", "))
         };
+
+        let mut sig = format!("{visibility}fn {func_name}{generic_part}(");
 
         // Parameters (mutable, as in WebAssembly all locals are mutable)
         let mut param_parts: Vec<String> = ir_func
@@ -966,7 +1097,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
             })
             .collect();
 
-        // Add host parameter if function calls imports (Milestone 2/3)
+        // Add host parameter if function needs imports or global imports (Milestone 2/3/4)
         if needs_host {
             if let Some(trait_bounds) = trait_bounds_opt {
                 if has_multiple_bounds {
@@ -987,9 +1118,11 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
             param_parts.push("globals: &mut Globals".to_string());
         }
 
-        // Add memory parameter if module has memory
+        // Add memory parameter — either const MAX_PAGES or generic MP
         if info.has_memory {
             param_parts.push("memory: &mut IsolatedMemory<MAX_PAGES>".to_string());
+        } else if info.has_memory_import {
+            param_parts.push("memory: &mut IsolatedMemory<MP>".to_string());
         }
 
         // Add table parameter if module has a table
@@ -1077,15 +1210,33 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
             IrInstr::Assign { dest, src } => self.backend.emit_assign(*dest, *src),
 
             IrInstr::GlobalGet { dest, index } => {
-                let is_mutable = if (*index as usize) < info.globals.len() {
-                    info.globals[*index as usize].mutable
+                if (*index as usize) < info.imported_globals.len() {
+                    // Imported global — access via host trait getter
+                    let g = &info.imported_globals[*index as usize];
+                    format!("                {} = host.get_{}();", dest, g.name)
                 } else {
-                    true // fallback: assume mutable
-                };
-                self.backend.emit_global_get(*dest, *index, is_mutable)
+                    // Local global — use corrected index and backend
+                    let local_idx = index - info.imported_globals.len() as u32;
+                    let is_mutable = info
+                        .globals
+                        .get(local_idx as usize)
+                        .map(|g| g.mutable)
+                        .unwrap_or(true);
+                    self.backend.emit_global_get(*dest, local_idx, is_mutable)
+                }
             }
 
-            IrInstr::GlobalSet { index, value } => self.backend.emit_global_set(*index, *value),
+            IrInstr::GlobalSet { index, value } => {
+                if (*index as usize) < info.imported_globals.len() {
+                    // Imported global — access via host trait setter
+                    let g = &info.imported_globals[*index as usize];
+                    format!("                host.set_{}({});", g.name, value)
+                } else {
+                    // Local global — use corrected index and backend
+                    let local_idx = index - info.imported_globals.len() as u32;
+                    self.backend.emit_global_set(local_idx, *value)
+                }
+            }
 
             IrInstr::MemorySize { dest } => self.backend.emit_memory_size(*dest),
 
@@ -1475,6 +1626,7 @@ mod tests {
 
         let info = ModuleInfo {
             has_memory: false,
+            has_memory_import: false,
             max_pages: 0,
             initial_pages: 0,
             table_initial: 0,
@@ -1500,6 +1652,7 @@ mod tests {
             canonical_type: Vec::new(),
             num_imported_functions: 0,
             func_imports: Vec::new(),
+            imported_globals: Vec::new(),
         };
 
         let backend = SafeBackend::new();
@@ -1546,6 +1699,7 @@ mod tests {
 
         let info = ModuleInfo {
             has_memory: true,
+            has_memory_import: false,
             max_pages: 1,
             initial_pages: 1,
             table_initial: 0,
@@ -1570,6 +1724,7 @@ mod tests {
             canonical_type: Vec::new(),
             num_imported_functions: 0,
             func_imports: Vec::new(),
+            imported_globals: Vec::new(),
         };
 
         let backend = SafeBackend::new();
@@ -1616,6 +1771,7 @@ mod tests {
 
         let info = ModuleInfo {
             has_memory: false,
+            has_memory_import: false,
             max_pages: 0,
             initial_pages: 0,
             table_initial: 0,
@@ -1638,6 +1794,7 @@ mod tests {
             canonical_type: Vec::new(),
             num_imported_functions: 0,
             func_imports: Vec::new(),
+            imported_globals: Vec::new(),
         };
 
         let backend = SafeBackend::new();
@@ -1680,6 +1837,7 @@ mod tests {
 
         let info = ModuleInfo {
             has_memory: false,
+            has_memory_import: false,
             max_pages: 0,
             initial_pages: 0,
             table_initial: 0,
@@ -1701,6 +1859,7 @@ mod tests {
             canonical_type: Vec::new(),
             num_imported_functions: 0,
             func_imports: Vec::new(),
+            imported_globals: Vec::new(),
         };
 
         let backend = SafeBackend::new();

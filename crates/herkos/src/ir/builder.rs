@@ -80,6 +80,11 @@ pub struct IrBuilder {
     /// Control flow stack for nested blocks/loops/if
     control_stack: Vec<ControlFrame>,
 
+    /// Mapping from Wasm local index → VarId.
+    /// Populated at the start of each `translate_function` call.
+    /// Indices 0..param_count-1 are parameters; param_count.. are declared locals.
+    local_vars: Vec<VarId>,
+
     /// Callee function signatures: (param_count, return_type) per function index.
     /// Set at the start of each `translate_function` call.
     func_signatures: Vec<(usize, Option<WasmType>)>,
@@ -111,6 +116,7 @@ impl IrBuilder {
             next_block_id: 0, // First call to new_block() returns BlockId(0)
             value_stack: Vec::new(),
             control_stack: Vec::new(),
+            local_vars: Vec::new(),
             func_signatures: Vec::new(),
             type_signatures: Vec::new(),
             num_imported_functions: 0,
@@ -160,7 +166,7 @@ impl IrBuilder {
     pub fn translate_function(
         &mut self,
         params: &[(ValType, WasmType)],
-        _locals: &[ValType],
+        locals: &[ValType],
         return_type: Option<WasmType>,
         operators: &[Operator],
         module_ctx: &ModuleContext,
@@ -172,14 +178,36 @@ impl IrBuilder {
         self.next_var_id = 0;
         self.next_block_id = 0;
         self.current_block = BlockId(0);
+        self.local_vars.clear();
         self.func_signatures = module_ctx.func_signatures.clone();
         self.type_signatures = module_ctx.type_signatures.clone();
         self.num_imported_functions = module_ctx.num_imported_functions;
         self.func_imports = module_ctx.func_imports.clone();
 
+        // Allocate VarIds for all locals (params first, then declared locals).
+        // This ensures local_index maps directly to the correct VarId.
+        let mut local_index_to_var: Vec<VarId> = Vec::new();
+
         // Allocate variables for parameters
-        let param_vars: Vec<(VarId, WasmType)> =
-            params.iter().map(|(_, ty)| (self.new_var(), *ty)).collect();
+        let param_vars: Vec<(VarId, WasmType)> = params
+            .iter()
+            .map(|(_, ty)| {
+                let var = self.new_var();
+                local_index_to_var.push(var);
+                (var, *ty)
+            })
+            .collect();
+
+        // Allocate variables for declared locals (zero-initialized by Wasm spec)
+        let mut func_locals: Vec<(VarId, WasmType)> = Vec::new();
+        for vt in locals {
+            let ty = WasmType::from_wasmparser(*vt);
+            let var = self.new_var();
+            local_index_to_var.push(var);
+            func_locals.push((var, ty));
+        }
+
+        self.local_vars = local_index_to_var;
 
         // Create entry block
         // INVARIANT: This is the first call to new_block(), so entry == BlockId(0).
@@ -206,7 +234,7 @@ impl IrBuilder {
         // Build final function
         Ok(IrFunction {
             params: param_vars,
-            locals: Vec::new(), // TODO: handle locals in later milestone
+            locals: func_locals,
             blocks: self.blocks.clone(),
             entry_block: entry,
             return_type,
@@ -255,9 +283,13 @@ impl IrBuilder {
 
             // Local variable access
             Operator::LocalGet { local_index } => {
-                // For now, assume local_index maps directly to parameter variables
-                // In Milestone 1, we only have params (no locals)
-                let var = VarId(*local_index);
+                let var = self
+                    .local_vars
+                    .get(*local_index as usize)
+                    .copied()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("local.get: local index {} out of range", local_index)
+                    })?;
                 self.value_stack.push(var);
             }
 
@@ -268,7 +300,13 @@ impl IrBuilder {
                     .pop()
                     .ok_or_else(|| anyhow::anyhow!("Stack underflow for local.set"))?;
 
-                let dest = VarId(*local_index);
+                let dest = self
+                    .local_vars
+                    .get(*local_index as usize)
+                    .copied()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("local.set: local index {} out of range", local_index)
+                    })?;
                 self.emit(IrInstr::Assign { dest, src: value });
             }
 
@@ -279,7 +317,13 @@ impl IrBuilder {
                     .last()
                     .ok_or_else(|| anyhow::anyhow!("Stack underflow for local.tee"))?;
 
-                let dest = VarId(*local_index);
+                let dest = self
+                    .local_vars
+                    .get(*local_index as usize)
+                    .copied()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("local.tee: local index {} out of range", local_index)
+                    })?;
                 self.emit(IrInstr::Assign { dest, src: *value });
                 // Value stays on stack (we already have it via .last())
             }
@@ -1330,5 +1374,119 @@ mod tests {
             BlockId(0),
             "entry_block must be BlockId(0) regardless of locals"
         );
+    }
+
+    /// Test that local variables are properly tracked and distinguished from parameters
+    #[test]
+    fn local_variables_separate_from_params() {
+        let mut builder = IrBuilder::new();
+
+        // Function: (param i32) (result i32)
+        //   (local i32)
+        //   local.get 0      ;; param
+        //   local.set 1      ;; store to local (index 1)
+        //   local.get 1      ;; get local back
+        let params = vec![(wasmparser::ValType::I32, WasmType::I32)];
+        let locals = vec![wasmparser::ValType::I32];
+        let operators = vec![
+            wasmparser::Operator::LocalGet { local_index: 0 },
+            wasmparser::Operator::LocalSet { local_index: 1 },
+            wasmparser::Operator::LocalGet { local_index: 1 },
+            wasmparser::Operator::End,
+        ];
+
+        let module_ctx = ModuleContext {
+            func_signatures: vec![],
+            type_signatures: vec![],
+            num_imported_functions: 0,
+            func_imports: vec![],
+        };
+
+        let ir_func = builder
+            .translate_function(
+                &params,
+                &locals,
+                Some(WasmType::I32),
+                &operators,
+                &module_ctx,
+            )
+            .expect("translation should succeed");
+
+        // Parameter 0 and local 1 must be different VarIds
+        let param_var = ir_func.params[0].0;
+        let local_var = ir_func.locals[0].0;
+        assert_ne!(
+            param_var, local_var,
+            "param and local must have distinct VarIds"
+        );
+
+        // Verify local tracking
+        assert_eq!(
+            ir_func.locals.len(),
+            1,
+            "should have exactly 1 declared local"
+        );
+        assert_eq!(
+            ir_func.locals[0].1,
+            WasmType::I32,
+            "local should have type i32"
+        );
+
+        // Verify params are still tracked
+        assert_eq!(ir_func.params.len(), 1, "should have exactly 1 param");
+        assert_eq!(
+            ir_func.params[0].1,
+            WasmType::I32,
+            "param should have type i32"
+        );
+    }
+
+    /// Test with multiple locals of different types
+    #[test]
+    fn multiple_locals_different_types() {
+        let mut builder = IrBuilder::new();
+
+        // Function: (param i32) (result i32)
+        //   (local i32 i64 f32)
+        //   local.get 0
+        let params = vec![(wasmparser::ValType::I32, WasmType::I32)];
+        let locals = vec![
+            wasmparser::ValType::I32,
+            wasmparser::ValType::I64,
+            wasmparser::ValType::F32,
+        ];
+        let operators = vec![
+            wasmparser::Operator::LocalGet { local_index: 0 },
+            wasmparser::Operator::End,
+        ];
+
+        let module_ctx = ModuleContext {
+            func_signatures: vec![],
+            type_signatures: vec![],
+            num_imported_functions: 0,
+            func_imports: vec![],
+        };
+
+        let ir_func = builder
+            .translate_function(
+                &params,
+                &locals,
+                Some(WasmType::I32),
+                &operators,
+                &module_ctx,
+            )
+            .expect("translation should succeed");
+
+        // Verify all locals are tracked with correct types
+        assert_eq!(ir_func.locals.len(), 3);
+        assert_eq!(ir_func.locals[0].1, WasmType::I32);
+        assert_eq!(ir_func.locals[1].1, WasmType::I64);
+        assert_eq!(ir_func.locals[2].1, WasmType::F32);
+
+        // All locals should have different VarIds
+        let var_ids: Vec<VarId> = ir_func.locals.iter().map(|(v, _)| *v).collect();
+        assert_eq!(var_ids[0], var_ids[0]);
+        assert_ne!(var_ids[0], var_ids[1]);
+        assert_ne!(var_ids[1], var_ids[2]);
     }
 }
