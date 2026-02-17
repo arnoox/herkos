@@ -540,42 +540,6 @@ impl Backend for SafeBackend {
         }
     }
 
-    fn emit_jump(&self, target: BlockId) -> String {
-        format!(
-            "                __current_block = {};\n                continue;",
-            target.0
-        )
-    }
-
-    fn emit_branch_if(&self, condition: VarId, if_true: BlockId, if_false: BlockId) -> String {
-        format!(
-            "                if {condition} != 0 {{\n                    __current_block = {};\n                }} else {{\n                    __current_block = {};\n                }}\n                continue;",
-            if_true.0, if_false.0
-        )
-    }
-
-    fn emit_branch_table(&self, index: VarId, targets: &[BlockId], default: BlockId) -> String {
-        if targets.is_empty() {
-            // No targets, always jump to default
-            return format!(
-                "                __current_block = {};\n                continue;",
-                default.0
-            );
-        }
-
-        let mut code = format!("                __current_block = match {index} as usize {{\n");
-
-        for (i, target) in targets.iter().enumerate() {
-            code.push_str(&format!("                    {} => {},\n", i, target.0));
-        }
-
-        code.push_str(&format!("                    _ => {},\n", default.0));
-        code.push_str("                };\n");
-        code.push_str("                continue;");
-
-        code
-    }
-
     fn emit_memory_size(&self, dest: VarId) -> String {
         format!("                {dest} = memory.size();")
     }

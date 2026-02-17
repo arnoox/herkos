@@ -82,15 +82,6 @@ pub trait Backend {
     /// Emit Rust code for a return statement.
     fn emit_return(&self, value: Option<VarId>) -> String;
 
-    /// Emit Rust code for an unconditional jump.
-    fn emit_jump(&self, target: BlockId) -> String;
-
-    /// Emit Rust code for a conditional branch.
-    fn emit_branch_if(&self, condition: VarId, if_true: BlockId, if_false: BlockId) -> String;
-
-    /// Emit Rust code for multi-way branch (br_table).
-    fn emit_branch_table(&self, index: VarId, targets: &[BlockId], default: BlockId) -> String;
-
     /// Emit Rust code for memory.size (returns current page count as i32).
     fn emit_memory_size(&self, dest: VarId) -> String;
 
@@ -99,8 +90,6 @@ pub trait Backend {
 
     /// Emit Rust code for unreachable.
     fn emit_unreachable(&self) -> String;
-
-    // New methods that take block indices instead of BlockIds
 
     /// Emit Rust code for an unconditional jump using block index.
     fn emit_jump_to_index(&self, target_idx: usize) -> String;
