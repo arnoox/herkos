@@ -61,6 +61,20 @@ impl WasmType {
             _ => panic!("Unsupported value type: {:?}", vt),
         }
     }
+
+    /// Get the default/zero value literal string for this type (used in code generation).
+    ///
+    /// Examples:
+    /// - `I32` → `"0i32"`
+    /// - `F64` → `"0.0f64"`
+    pub fn default_value_literal(&self) -> &'static str {
+        match self {
+            WasmType::I32 => "0i32",
+            WasmType::I64 => "0i64",
+            WasmType::F32 => "0.0f32",
+            WasmType::F64 => "0.0f64",
+        }
+    }
 }
 
 /// IR representation of a complete function.
@@ -809,4 +823,55 @@ impl ModuleInfo {
             _ => MemoryMode::None,
         }
     }
+}
+
+/// Group items by module name using a key function.
+pub fn group_by_module<'a, T, F>(
+    items: &'a [T],
+    key: F,
+) -> std::collections::BTreeMap<String, Vec<&'a T>>
+where
+    F: Fn(&T) -> &str,
+{
+    let mut grouped: std::collections::BTreeMap<String, Vec<&'a T>> =
+        std::collections::BTreeMap::new();
+    for item in items {
+        grouped.entry(key(item).to_string()).or_default().push(item);
+    }
+    grouped
+}
+
+/// Collect all unique module names from function and global imports.
+pub fn all_import_module_names(info: &ModuleInfo) -> std::collections::BTreeSet<String> {
+    info.func_imports
+        .iter()
+        .map(|i| i.module_name.clone())
+        .chain(info.imported_globals.iter().map(|g| g.module_name.clone()))
+        .collect()
+}
+
+/// Check if an IR function contains any CallImport instructions.
+pub fn has_import_calls(ir_func: &IrFunction) -> bool {
+    ir_func.blocks.iter().any(|block| {
+        block
+            .instructions
+            .iter()
+            .any(|instr| matches!(instr, IrInstr::CallImport { .. }))
+    })
+}
+
+/// Check if an IR function accesses any imported globals.
+pub fn has_global_import_access(ir_func: &IrFunction, num_imported_globals: usize) -> bool {
+    if num_imported_globals == 0 {
+        return false;
+    }
+    ir_func.blocks.iter().any(|block| {
+        block.instructions.iter().any(|instr| {
+            matches!(
+                instr,
+                IrInstr::GlobalGet { index, .. } | IrInstr::GlobalSet { index, .. }
+                if *index < num_imported_globals
+            )
+        })
+    })
 }
