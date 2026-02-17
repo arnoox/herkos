@@ -1,0 +1,92 @@
+# Sphinx-Needs configuration in TOML format.
+# Announced to Sphinx-Needs via needs_from_toml in conf.py.
+# Schema: https://ubcode.useblocks.com/ubproject.schema.json
+
+"$schema" = "https://ubcode.useblocks.com/ubproject.schema.json"
+
+[project]
+name = "My Documentation Project"
+description = "Requirements management with Sphinx-Needs"
+srcdir = "."
+
+#--------------------------------------------------------------------------
+# Sphinx-Needs Configuration
+# All settings go under [needs] WITHOUT the needs_ prefix
+#--------------------------------------------------------------------------
+[needs]
+# Export needs to JSON for external tools and CI/CD integration
+build_json = true
+
+# Force authors to set IDs manually (recommended for stable links)
+# Without this, Sphinx-Needs auto-generates IDs from titles,
+# which break when titles change
+id_required = true
+
+# ID format validation using regex
+# This pattern requires: 2-10 uppercase letters/underscores,
+# optionally followed by _NNN (1-3 digits)
+# Examples: REQ_001, SPEC_42, TC_1
+id_regex = "[A-Z_]{2,10}(_[\\d]{1,3})*"
+
+# Additional options available for all need types
+# These become :option: fields in your RST directives
+extra_options = [
+  "priority",
+  "author",
+  "version",
+]
+
+#--------------------------------------------------------------------------
+# Need Types
+# Each [[needs.types]] entry defines a new directive you can use in RST
+#--------------------------------------------------------------------------
+[[needs.types]]
+directive = "req"           # Use as: .. req:: Title
+title = "Requirement"       # Display name in output
+prefix = "REQ_"             # Suggested ID prefix
+color = "#FFB300"           # Color in diagrams (amber)
+style = "node"              # PlantUML style: node, artifact, frame, etc.
+
+[[needs.types]]
+directive = "spec"
+title = "Specification"
+prefix = "SPEC_"
+color = "#ec6dd7"           # Pink/magenta
+style = "node"
+
+[[needs.types]]
+directive = "impl"
+title = "Implementation"
+prefix = "IMPL_"
+color = "#fa8638"           # Orange
+style = "node"
+
+[[needs.types]]
+directive = "test"
+title = "Test Case"
+prefix = "TC_"
+color = "#A6BDD7"           # Light blue
+style = "node"
+
+#--------------------------------------------------------------------------
+# Link Types
+# Define relationships between needs for traceability
+# Each link type creates bidirectional connections
+#--------------------------------------------------------------------------
+[[needs.extra_links]]
+option = "implements"         # Use as: :implements: REQ_001
+outgoing = "implements"       # Label on forward link
+incoming = "implemented by"   # Label on backward link (auto-generated)
+color = "#00AA00"             # Green in diagrams
+
+[[needs.extra_links]]
+option = "tests"
+outgoing = "tests"
+incoming = "tested by"
+color = "#0000AA"             # Blue
+
+[[needs.extra_links]]
+option = "derives"
+outgoing = "derives from"
+incoming = "derived by"
+color = "#AA0000"             # Red

@@ -1,9 +1,14 @@
-[package]
-name = "herkos"
-version = "0.1.0"
-edition = "2024"
-description = "Compile-Time Memory Isolation via WebAssembly and Rust Transpilation"
-license = "Apache-2.0"
-repository = "https://github.com/arnaudriess/herkos"
+[workspace]
+resolver = "2"
+members = [
+    "crates/herkos-runtime",
+    "crates/herkos",
+    "crates/herkos-tests",
+]
 
-[dependencies]
+[workspace.dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+wasmparser = "0.227"
+wat = "1.220"
+kani-verifier = "0.57"

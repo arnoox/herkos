@@ -1,0 +1,2 @@
+# All .wasm and .rs files are generated in OUT_DIR by build.rs
+# Nothing to exclude - all generated files go to cargo's build directory

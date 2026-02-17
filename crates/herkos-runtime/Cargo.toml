@@ -1,0 +1,21 @@
+[package]
+name = "herkos-runtime"
+version = "0.1.0"
+edition = "2021"
+description = "Runtime library for herkos transpiled output — IsolatedMemory, WasmTrap, capability traits"
+license = "Apache-2.0"
+repository = "https://github.com/YOUR_ORG/herkos"
+homepage = "https://github.com/YOUR_ORG/herkos"
+authors = ["herkos contributors"]
+keywords = ["webassembly", "wasm", "runtime", "no-std", "isolation"]
+categories = ["wasm", "no-std"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
+[features]
+default = []
+alloc = []
+
+[dev-dependencies]
+kani-verifier = { workspace = true }

@@ -1,1 +1,32 @@
-/target
+# Rust build artifacts
+target/
+
+# IDE and editor files
+.claude/
+**/*.swp
+**/*.swo
+**/*~
+.DS_Store
+*.iml
+.idea/
+.vscode/settings.json
+
+# Documentation builds
+docs/_build/
+docs/.ub_cache/
+.venv/
+
+# Compiled object files
+**/*.o
+**/*.a
+**/*.so
+**/*.dylib
+**/*.wasm
+
+# Test artifacts
+*.profraw
+*.profdata
+
+# Temporary files
+*.tmp
+*.bak

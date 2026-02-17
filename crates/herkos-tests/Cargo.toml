@@ -1,0 +1,20 @@
+[package]
+name = "herkos-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "End-to-end compilation tests for herkos transpiler"
+license = "Apache-2.0"
+authors = ["herkos contributors"]
+
+[dependencies]
+herkos-runtime = { path = "../herkos-runtime" }
+
+[build-dependencies]
+anyhow = { workspace = true }
+wat = { workspace = true }
+herkos = { path = "../herkos" }
+
+[dev-dependencies]
+# Future: property-based testing
+# proptest = "1.0"

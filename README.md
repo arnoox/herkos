@@ -1,2 +1,57 @@
 # herkos
-Compile-Time Memory Isolation via WebAssembly and Rust Transpilation
+
+> This project is work in progress! Not all wasm features nor corner cases were tested!
+
+A compilation pipeline that transpiles WebAssembly modules into memory-safe Rust code with compile-time isolation guarantees, replacing runtime hardware-based memory protection (MMU/MPU) with type-system-enforced safety.
+
+**WebAssembly → Rust source → Safe binary**
+
+## Motivation
+
+Safety-critical standards (ISO 26262, IEC 61508, DO-178C) require **freedom from interference** between software modules of different criticality levels. Today this is achieved via MMU/MPU or hypervisors — approaches that are expensive in performance (10-50% overhead), energy, and certification effort.
+
+herkos takes a different approach: if the Rust compiler accepts the transpiled code, isolation is guaranteed; no MMU, no context switches, no runtime overhead for proven accesses.
+
+## Architecture
+
+The project is a Rust workspace with three core crates:
+
+| Crate | Purpose |
+|---|---|
+| `herkos` | CLI transpiler: parses `.wasm` binaries, emits Rust source code |
+| `herkos-runtime` | `#![no_std]` runtime library shipped with transpiled output (`IsolatedMemory`, capability types, Wasm operations) |
+
+### Memory model
+
+WebAssembly linear memory maps to `IsolatedMemory<const MAX_PAGES: usize>`, a flat `[[u8; PAGE_SIZE]; MAX_PAGES]` array with page-level const generics. All accesses go through bounds-checked `load<T>`/`store<T>`. Fully `no_std` compatible with zero heap allocation.
+
+### Capability-based security
+
+Wasm imports become Rust trait bounds on a generic host parameter. If a module doesn't import a capability, the trait bound isn't present; no code path to call it. Zero-cost via monomorphization.
+
+## Build and test
+
+```bash
+cargo build                    # build all crates
+cargo test                     # run all tests
+cargo clippy --all-targets     # lint
+cargo fmt --check              # format check
+```
+
+Run a single crate's tests:
+
+```bash
+cargo test -p herkos
+cargo test -p herkos-runtime
+cargo test -p herkos-tests
+```
+
+## Usage
+
+```bash
+cargo run -p herkos -- input.wasm --output output.rs
+```
+
+## License
+
+Licensed under the Apache License, Version 2.0 ([LICENSE](LICENSE) or http://www.apache.org/licenses/LICENSE-2.0)
