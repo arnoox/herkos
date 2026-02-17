@@ -19,10 +19,6 @@ struct Cli {
     #[arg(long, short)]
     output: Option<PathBuf>,
 
-    /// Verification metadata file (TOML, from wasm-verify)
-    #[arg(long)]
-    metadata: Option<PathBuf>,
-
     /// Override maximum memory pages when the Wasm module declares no maximum
     #[arg(long, default_value = "256")]
     max_pages: usize,
@@ -46,7 +42,6 @@ fn main() -> Result<()> {
     let options = TranspileOptions {
         mode: cli.mode.clone(),
         max_pages: cli.max_pages,
-        metadata_path: cli.metadata.clone(),
     };
 
     // Transpile using library function
@@ -75,6 +70,5 @@ mod tests {
         let cli = Cli::parse_from(["herkos", "input.wasm"]);
         assert_eq!(cli.mode, "safe");
         assert_eq!(cli.max_pages, 256);
-        assert!(cli.metadata.is_none());
     }
 }

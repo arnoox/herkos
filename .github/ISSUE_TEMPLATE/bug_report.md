@@ -36,7 +36,7 @@ Paste error messages or unexpected output here
 - **herkos version**: (e.g., 0.1.0 or commit hash)
 - **Rust version**: `rustc --version`
 - **Operating System**: (e.g., Linux, macOS, Windows)
-- **Which crate**: (herkos, herkos-runtime, wasm-verify, or herkos-tests)
+- **Which crate**: (herkos, herkos-runtime, or herkos-tests)
 
 ## Generated Code (if applicable)
 

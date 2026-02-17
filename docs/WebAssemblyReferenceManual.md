@@ -1,5 +1,10 @@
-WebAssembly Reference Manual
-================================================================================
+WebAssembly Reference
+=====================
+
+> This document is derived from [WebAssembly Reference Manual]
+
+[WebAssembly Reference Manual]: https://github.com/sunfishcode/wasm-reference-manual/blob/master/WebAssembly.md
+
 
 0. [Introduction](#introduction)
 0. [Basics](#basics)

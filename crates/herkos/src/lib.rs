@@ -26,8 +26,6 @@ pub struct TranspileOptions {
     pub mode: String,
     /// Maximum memory pages (used when Wasm module declares no maximum)
     pub max_pages: usize,
-    /// Optional verification metadata file path (for verified/hybrid modes)
-    pub metadata_path: Option<std::path::PathBuf>,
 }
 
 impl Default for TranspileOptions {
@@ -35,7 +33,6 @@ impl Default for TranspileOptions {
         Self {
             mode: "safe".to_string(),
             max_pages: 256,
-            metadata_path: None,
         }
     }
 }

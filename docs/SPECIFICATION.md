@@ -192,7 +192,7 @@ impl<const MAX_PAGES: usize> IsolatedMemory<MAX_PAGES> {
 }
 ```
 
-**Read-only guarantees are not a Wasm primitive** — they are an analysis result. The `wasm-verify` tool can prove that certain regions (e.g., data segment areas corresponding to C `.rodata`) are never targeted by any store instruction. This proof can be used by the verified backend to eliminate unnecessary store checks, but it's not a type-level distinction in the memory API itself.
+**Read-only guarantees are not a Wasm primitive** — they are an analysis result. Static analysis can prove that certain regions (e.g., data segment areas corresponding to C `.rodata`) are never targeted by any store instruction. This proof can be used by the verified backend to eliminate unnecessary store checks, but it's not a type-level distinction in the memory API itself.
 
 ### 3.5 Linear Memory Layout and the Shadow Stack
 
@@ -228,7 +228,7 @@ Key points:
 The shadow stack pattern is important for verification because it enables **stack frame isolation proofs**:
 
 ```rust
-// wasm-verify can prove that a function only accesses its own stack frame:
+// Static analysis can prove that a function only accesses its own stack frame:
 //
 // 1. Identify __stack_pointer adjustments at function entry/exit
 // 2. Prove all memory accesses in the function are within
@@ -271,8 +271,8 @@ This analysis enables two optimizations:
 - **Spatial safety**: All memory accesses bounds-checked against `active_pages * PAGE_SIZE` at runtime (safe backend) or proven within `MAX_PAGES * PAGE_SIZE` at compile time (verified backend)
 - **Temporal safety**: Rust's lifetime system prevents use-after-free
 - **Isolation**: Each module has its own `IsolatedMemory` instance — distinct types, distinct backing arrays, no cross-module access possible
-- **Read-only regions**: Not a Wasm primitive, but provable via `wasm-verify` analysis (e.g., data segments never targeted by stores)
-- **Stack frame isolation**: Provable via `wasm-verify` analysis of the `__stack_pointer` pattern
+- **Read-only regions**: Not a Wasm primitive, but provable via static analysis (e.g., data segments never targeted by stores)
+- **Stack frame isolation**: Provable via static analysis of the `__stack_pointer` pattern
 
 ---
 
@@ -805,172 +805,6 @@ not the default integration mechanism.
 
 ---
 
-## 7. Verification Metadata Format
-
-The verification metadata is the bridge between the analysis tool (`wasm-verify`) and the transpiler (`herkos`). Understanding the data flow is essential:
-
-```
-┌──────────────┐          ┌──────────────┐          ┌──────────────┐
-│  .wasm file  │ ───────> │  wasm-verify │ ───────> │  metadata    │
-│  (input)     │          │  (analyzer)  │          │  (TOML file) │
-└──────────────┘          └──────────────┘          └──────┬───────┘
-                                                          │
-                                                          ▼
-┌──────────────┐          ┌──────────────┐          ┌──────────────┐
-│  .wasm file  │ ───────> │  herkos   │ <─────── │  metadata    │
-│  (input)     │          │  (transpiler)│          │  (TOML file) │
-└──────────────┘          └──────────────┘          └──────────────┘
-                                │
-                                ▼
-                          ┌──────────────┐
-                          │  .rs file    │
-                          │  (output)    │
-                          └──────────────┘
-```
-
-- **`wasm-verify` produces the metadata** (output). It statically analyzes the `.wasm` binary and generates proof artifacts: which memory accesses are provably in bounds, which regions are never written, which stack frames are isolated, etc.
-- **`herkos` consumes the metadata** (input). It reads the proof artifacts and uses them to decide, per memory access, whether to emit a safe bounds-checked call or an `unsafe` unchecked call justified by the proof.
-- **The safe backend does not require metadata at all** — it emits runtime checks everywhere.
-- **The verified backend requires complete metadata** — every access must have a proof, or transpilation fails.
-- **The hybrid backend accepts partial metadata** — proven accesses get `unsafe`, unproven accesses get runtime checks.
-
-### 7.1 Metadata Schema
-
-```toml
-[module]
-name = "example_module"
-source_hash = "sha256:abcdef..."  # hash of the .wasm binary this metadata was generated from
-
-[memory]
-initial_pages = 16
-maximum_pages = 256
-
-# Regions identified by analysis — NOT a Wasm primitive.
-# wasm-verify infers these from access pattern analysis.
-[[memory.regions]]
-offset = 0
-size = 1024
-access = "read-write"
-purpose = "stack"
-
-[[memory.regions]]
-offset = 1024
-size = 4096
-access = "read-only"           # proven: no store instruction targets this range
-purpose = "data_segment"
-
-# Per-access proof artifacts.
-# Each entry corresponds to a single memory operation in the Wasm bytecode.
-[[proofs]]
-instruction_offset = 0x1234
-kind = "bounds"                 # what is proven
-access = "load"                 # load or store
-type = "i32"                    # Wasm type
-proven_bounds = { min = 0, max = 65532 }  # address ∈ [min, max]
-proof_method = "smt"            # how it was proven (smt, abstract_interp, trivial)
-
-[[proofs]]
-instruction_offset = 0x1238
-kind = "bounds"
-access = "store"
-type = "i32"
-proven_bounds = { min = 1024, max = 2044 }
-proof_method = "abstract_interp"
-
-[[proofs]]
-instruction_offset = 0x1240
-kind = "arithmetic"             # integer overflow proof
-expression = "local.get 0 * 4"
-proven_range = { min = 0, max = 65532 }
-proof_method = "smt"
-
-# Stack frame isolation proofs (see §3.6).
-[[stack_frames]]
-function_index = 12
-function_name = "make_big"
-frame_size = 128
-stack_pointer_global = 0
-proven_isolated = true          # all accesses within [sp-frame_size, sp)
-proof_method = "abstract_interp"
-```
-
-### 7.2 What Gets Verified
-
-`wasm-verify` performs the following analyses and records proof artifacts for each:
-
-| Analysis | What it proves | Enables |
-|----------|---------------|---------|
-| **Memory bounds** | A load/store address is within `[0, active_pages * PAGE_SIZE)` | Replacing `memory.load()` with `memory.load_unchecked()` |
-| **Arithmetic overflow** | An integer operation cannot overflow for the proven value ranges | Replacing `checked_add` with `wrapping_add` or plain `+` |
-| **Read-only regions** | No store instruction targets a given address range (e.g., data segments) | Optimization: the transpiler can skip alias analysis for these regions |
-| **Stack frame isolation** | A function only accesses memory within its own stack frame (§3.6) | Batch-proving all accesses in a function instead of one-by-one |
-| **Stack bounds** | The stack pointer remains within the stack region across all paths | Eliminating per-access stack bounds checks |
-
-### 7.3 Metadata Integrity
-
-The metadata file includes a `source_hash` of the `.wasm` binary it was generated from. The transpiler **must** verify this hash matches the `.wasm` file it is transpiling — otherwise the proofs are meaningless (they were generated for a different binary).
-
-```
-herkos input.wasm --metadata verification.toml --mode verified
-# Step 1: check sha256(input.wasm) == verification.toml[module.source_hash]
-# Step 2: for each memory access in input.wasm, look up proof in verification.toml
-# Step 3: emit unsafe (if proof found) or reject (verified mode) / fallback (hybrid mode)
-```
-
-```{spec} External TOML Verification Metadata
-:id: SPEC_VERIFICATION_METADATA
-:status: open
-:tags: verification, metadata, proof-artifacts
-External TOML metadata bridges wasm-verify (analyzer) and herkos (transpiler).
-Contains proof artifacts (bounds, arithmetic, stack frame proofs) indexed by instruction
-offset. See §7 for complete schema. Enables three-stage pipeline.
-```
-
-```{spec} Metadata Integrity via Source Hash
-:id: SPEC_METADATA_INTEGRITY
-:status: open
-:tags: verification, metadata, hash, integrity
-Metadata file includes source_hash (SHA256) of the .wasm binary it was generated from.
-Transpiler must verify this hash matches the .wasm file being transpiled. Otherwise
-proofs are for a different binary and are meaningless.
-```
-
-```{spec} no_std Constraint for Generated Code
-:id: SPEC_NO_STD_CONSTRAINT
-:status: open
-:tags: no_std, embedded, safety
-All transpiled output and herkos-runtime must be #![no_std]. No heap allocation in
-default configuration. No panics, no format!, no String in generated code or runtime.
-Enables embedded and safety-critical targets.
-```
-
-```{spec} Result-Based Error Handling
-:id: SPEC_ERROR_HANDLING_RESULT
-:status: open
-:tags: error-handling, traps, result
-All error paths use Result<T, WasmTrap>. Wasm traps (OutOfBounds, IntegerOverflow,
-DivisionByZero, etc.) map to WasmTrap enum discriminants. No panics, no unwinding in
-transpiled output. Deterministic error handling.
-```
-
-```{spec} Proof References in Unsafe Blocks
-:id: SPEC_PROOF_REFERENCED
-:status: open
-:tags: unsafe, proofs, verification, comments
-In verified and hybrid backends, every unsafe block carries a // PROOF: comment
-referencing the verification metadata artifact. Proves why the unsafe is sound.
-Enables auditing and proof traceability.
-```
-
-```{spec} Safety Comments in Runtime Unsafe
-:id: SPEC_PROOF_SAFETY_COMMENT
-:status: open
-:tags: unsafe, safety, comments, runtime
-In the herkos-runtime crate, every unsafe block carries a // SAFETY: comment
-explaining the invariant being maintained. Documents why the unsafe code is correct.
-```
-
----
 
 ## 8. Transpilation Rules
 
@@ -1258,14 +1092,14 @@ Enables reproducible builds and auditable output.
 
 - Emits `unsafe` Rust for memory accesses and arithmetic where **formal proofs** guarantee safety
 - Requires **complete verification metadata** — every memory access and arithmetic operation must have an associated proof
-- Proofs are generated by `wasm-verify` (backed by SMT solvers) and recorded in the verification metadata
+- Proofs are generated by static analysis and recorded in the verification metadata
 - Each `unsafe` block carries a machine-checkable proof reference (e.g., `// PROOF: bounds_check_0x1234`)
 - **Compilation fails** if any operation lacks a proof — no silent fallback
 - Target overhead: **0–5%** (function call indirection only)
 
 ```rust
 // Verified backend: unchecked load justified by formal proof
-// PROOF: bounds_check_0x1234 — offset ∈ [0, MEM_SIZE - 4] proven by wasm-verify
+// PROOF: bounds_check_0x1234 — offset ∈ [0, MEM_SIZE - 4] proven by static analysis
 let value = unsafe { memory.load_i32_unchecked(offset as usize) };
 ```
 
@@ -1292,7 +1126,7 @@ let b = memory.load_i32(dynamic_offset as usize)?;
 
 ### 9.4 Contract-Based Verification (Alternative to External Metadata)
 
-Instead of — or in addition to — the external `wasm-verify` → TOML → `herkos` pipeline (§7), the verified and hybrid backends can emit Rust code annotated with **formal verification contracts** that are checked during Rust compilation. This eliminates the separate metadata file entirely: the proofs live in the generated code and are verified by the Rust toolchain itself.
+Instead of — or in addition to — the external analysis → TOML → `herkos` pipeline (§7), the verified and hybrid backends can emit Rust code annotated with **formal verification contracts** that are checked during Rust compilation. This eliminates the separate metadata file entirely: the proofs live in the generated code and are verified by the Rust toolchain itself.
 
 **Candidate tools for contract-based verification:**
 
@@ -1358,15 +1192,15 @@ The Flux type checker verifies at compile time that every caller of `load_i32_ve
 |--------|----------------------|---------------------------|
 | Proof location | Separate TOML file | Embedded in Rust source |
 | Synchronization | Requires hash check | Inherently in sync |
-| Toolchain | `wasm-verify` + SMT solver | `cargo kani` or Flux rustc plugin |
+| Toolchain | Analysis tool + optional SMT solver | `cargo kani` or Flux rustc plugin |
 | Auditability | TOML + `// PROOF:` comments | Proof harnesses are readable Rust |
 | `no_std` compat | N/A (metadata is offline) | Kani: yes; Flux: partial |
-| Maturity | Custom tool (must be built) | Kani: production; Flux: research |
+| Maturity | Custom tool (to be developed) | Kani: production; Flux: research |
 | Build time impact | None (offline analysis) | Kani: significant; Flux: moderate |
 
 **Recommended strategy**: use **both** approaches complementarily:
 1. **Kani** for verifying the `herkos-runtime` runtime crate itself (prove that `IsolatedMemory::load`, `memory.grow`, trap handling are correct)
-2. **External metadata** (§7) for the transpiled code in the initial implementation — it's simpler to build and doesn't add Kani's build time to every compilation
+2. **External metadata** (§7) for the transpiled code in the initial implementation — simpler to implement and doesn't add Kani's build time to every compilation
 3. **Contract-based** as a future evolution — when Flux-rs matures, the verified backend can emit refinement-typed code instead of `unsafe` + metadata references, achieving provable safety with zero `unsafe` and zero runtime overhead
 
 ### 9.5 Backend Selection Guidance
@@ -1447,8 +1281,6 @@ impl GpioOps for EmbeddedHost { /* ... */ }
 
 **Name**: `herkos` (tentative)
 
-**Architecture**: See [TRANSPILER_DESIGN.md](TRANSPILER_DESIGN.md) for complete design
-
 **High-Level Pipeline**:
 ```
 .wasm → Parser (wasmparser) → IR Builder → IR Optimizer → Backend Selection → Rust Codegen → rustfmt
@@ -1482,41 +1314,6 @@ herkos input.wasm \
 # Note: capabilities are inferred from Wasm imports — no --capabilities flag needed.
 # The transpiler generates trait bounds from the module's import section (see §5).
 ```
-
-### 11.2 Verification Tool
-
-**Name**: `wasm-verify` (tentative)
-
-**Features**:
-- Static analysis of Wasm modules
-- Bounds checking proof generation
-- Capability requirement extraction
-- Integration with SMT solvers for complex proofs
-
-**Analysis architecture**: two-phase approach:
-1. **Abstract interpretation** (fast, first pass) — tracks value ranges and memory access patterns through the control flow graph. Resolves the majority of proof obligations (constant offsets, loop induction variables, stack frame accesses) without invoking an external solver.
-2. **SMT solver** (precise, second pass) — unresolved obligations from phase 1 are encoded as bitvector constraints and dispatched to an SMT solver. The solver either produces a proof (the access is safe for all inputs) or a counterexample (a concrete input that violates the bound).
-
-**Candidate SMT solvers**:
-
-| Solver | License | Rust integration | Strengths |
-|--------|---------|------------------|-----------|
-| **Z3** (Microsoft Research) | MIT | `z3` crate (high-level bindings) | Industry standard; excellent bitvector and array theory support — directly models Wasm i32/i64 arithmetic and linear memory |
-| **Bitwuzla** (Stanford/TU Wien) | MIT | `bitwuzla-sys` (FFI bindings) | Purpose-built for bitvector/array reasoning; often faster than Z3 for bounded memory proofs |
-| **CVC5** (Stanford/Iowa) | BSD | `cvc5` crate | Strong quantifier support; useful for inter-procedural proofs involving universally quantified loop invariants |
-
-Z3 is the recommended starting point: it has the most mature Rust bindings, the largest community, and handles the bitvector arithmetic that dominates Wasm proof obligations. Bitwuzla is a compelling alternative when Z3 is too slow on specific memory-heavy obligations.
-
-**Implementation complexity by proof category**:
-
-| Proof category | Difficulty | Approach | Notes |
-|----------------|-----------|----------|-------|
-| Constant-offset bounds | Trivial | Abstract interpretation only | `i32.load offset=8` with known base → no solver needed |
-| Loop-induction bounds | Easy | Abstract interpretation + simple SMT | `arr[i]` where `i < len` — classic induction variable widening |
-| Stack frame isolation | Medium | Pattern matching + abstract interpretation | Recognize Clang's `__stack_pointer` idiom, track frame size |
-| Arithmetic overflow | Medium | SMT bitvector theory | Encode Wasm's wrapping semantics, prove no unintended overflow |
-| Inter-procedural aliasing | Hard | SMT + manual annotations | Requires call-graph analysis; may need user-provided invariants |
-| Indirect call targets (`call_indirect`) | Hard | Type-based analysis + SMT | Table contents are statically known in most Wasm modules, but dynamic dispatch complicates proofs |
 
 ### 11.3 Runtime Library
 
@@ -1624,7 +1421,7 @@ Note: this tool does not replace a formal safety case. It provides a compile-tim
 - Const propagation for bounds checking
 - LLVM LTO to eliminate abstraction layers between the transpiled code and `herkos-runtime`
 - Profile-guided optimization for hot paths
-- **Proof-guided optimization**: in hybrid mode, focus `wasm-verify` effort on hot paths first to maximize the performance benefit of moving accesses from checked to unchecked
+- **Proof-guided optimization**: in hybrid mode, focus verification effort on hot paths first to maximize the performance benefit of moving accesses from checked to unchecked
 
 ### 13.3 Monomorphization Bloat and Instruction Cache
 
@@ -1869,7 +1666,6 @@ Once basic parallelization is implemented:
 1. **Pipeline parallelism**: Parse next module while transpiling current one
 2. **Work stealing within functions**: For very large functions (>10KB), parallelize basic block code generation
 3. **Incremental transpilation**: Cache IR for unchanged functions (future optimization)
-4. **GPU acceleration**: Use GPU shaders for proof checking in `wasm-verify` (speculative)
 
 **Recommendation**: Implement Option 1 (heuristic-based) during Phase 9 (Hardening and Polish) of the development plan. Track transpilation time as a CI metric alongside correctness and output binary size.
 
@@ -1879,18 +1675,9 @@ Once basic parallelization is implemented:
 
 ### 14.1 Planned Features
 
-- Support for multi-threaded Wasm modules
 - Automated refactoring suggestions for better Rust idioms
 - DWARF debug info preservation for source-level debugging
 - Proof coverage reports: show per-function and per-module percentage of accesses that are formally proven vs. runtime-checked
-
-### 14.2 Research Directions
-
-- Integration with proof assistants (Coq, Lean) for proofs beyond SMT solver reach
-- Machine learning-assisted bounds proof generation
-- Hardware-assisted verification (ARM PAC, CHERI capabilities)
-- Integration with fuzzing tools for proof validation and counter-example discovery
-- Gradual proof refinement: automatically identify high-impact unproven accesses (hot paths) and prioritize proof generation
 
 ### 14.3 Temporal Isolation (Fuel-Based Execution)
 
@@ -1952,15 +1739,15 @@ fn sum_array(
 | Level | Mechanism | Overhead | What it guarantees |
 |-------|-----------|----------|-------------------|
 | **Fuel-checked** (safe) | Runtime fuel decrements at loop headers and calls | ~3–5% | Guaranteed termination within budget; no infinite loops |
-| **WCET-proven** (verified) | `wasm-verify` statically bounds loop iterations and call depth | 0% | Proven worst-case execution time; fuel checks eliminated |
+| **WCET-proven** (verified) | Static analysis bounds loop iterations and call depth | 0% | Proven worst-case execution time; fuel checks eliminated |
 | **Hybrid** | Proven loops skip fuel checks; unproven loops keep them | 1–3% | Static bounds where provable, runtime fuel elsewhere |
 
-#### WCET analysis via `wasm-verify`
+#### WCET analysis via static analysis
 
 Many loops in C-compiled Wasm have statically bounded iteration counts:
 
 ```rust
-// wasm-verify can prove: this loop executes exactly `len` times.
+// Static analysis can prove: this loop executes exactly `len` times.
 // If len ≤ MAX_LEN (from function precondition or call-site analysis),
 // then WCET = len * (cost_per_iteration) ≤ MAX_LEN * cost_per_iteration.
 
@@ -1986,7 +1773,7 @@ fn sum_array_verified(
 }
 ```
 
-What `wasm-verify` analyzes for WCET:
+What static analysis examines for WCET:
 - **Loop bounds**: identify induction variables, prove iteration counts are bounded
 - **Recursion depth**: prove call depth is bounded (or reject unbounded recursion)
 - **Call graph**: sum per-function WCET to get module-level WCET
@@ -2004,39 +1791,11 @@ The temporal isolation model is structurally identical to the spatial isolation 
 | Safe backend | Bounds check at every access | Fuel check at every back edge |
 | Verified backend | Proven in-bounds → unchecked | Proven bounded → no fuel check |
 | Hybrid | Mix of checked and proven | Mix of fuel-checked and proven |
-| Verification tool | `wasm-verify` bounds proofs | `wasm-verify` WCET proofs |
+| Verification tool | Bounds proofs | WCET proofs |
 | Metadata format | `[[proofs]]` with `kind = "bounds"` | `[[proofs]]` with `kind = "wcet"` |
 | Trap on violation | `WasmTrap::OutOfBounds` | `WasmTrap::FuelExhausted` |
 
-This means the same `wasm-verify` infrastructure, the same backend selection model, and the same incremental proof improvement strategy apply to both dimensions of freedom from interference.
-
-```{spec} Fuel-Based Temporal Isolation
-:id: SPEC_TEMPORAL_ISOLATION_FUEL
-:status: open
-:tags: temporal-isolation, fuel, future, wcet
-Future extension: fuel-based execution prevents modules from starving each other of CPU
-time. Each module call receives an instruction budget. Transpiler inserts fuel decrements
-at loop headers and function calls. Returns WasmTrap::FuelExhausted when budget exhausted.
-Cooperative, deterministic, no OS preemption needed.
-```
-
-```{spec} Three Fuel Guarantee Levels
-:id: SPEC_FUEL_THREE_LEVELS
-:status: open
-:tags: temporal-isolation, fuel, backends, wcet
-Three fuel levels mirror spatial isolation backends: Fuel-checked (safe, 3–5% overhead),
-WCET-proven (verified, 0% overhead), Hybrid (mix, 1–3% overhead). Enables gradual proof
-coverage improvement for execution time, same as memory bounds.
-```
-
-```{spec} WCET Analysis via wasm-verify
-:id: SPEC_WCET_ANALYSIS
-:status: open
-:tags: temporal-isolation, wcet, verification
-wasm-verify performs worst-case execution time (WCET) analysis: proves loop bounds,
-recursion depth, and termination. Enables verified backend to eliminate fuel checks on
-proven paths. Same two-phase approach as bounds checking (abstract interpretation + SMT).
-```
+This means the same verification infrastructure, the same backend selection model, and the same incremental proof improvement strategy apply to both dimensions of freedom from interference.
 
 ---
 
@@ -2084,101 +1843,6 @@ Isolate untrusted code without hardware overhead:
 
 ---
 
-## Appendix A: Example Transpilation
-
-### Input C Code
-```c
-int sum_array(int* arr, size_t len) {
-    int sum = 0;
-    for (size_t i = 0; i < len; i++) {
-        sum += arr[i];
-    }
-    return sum;
-}
-```
-
-### WebAssembly (WAT format)
-```wat
-(func $sum_array (param $arr i32) (param $len i32) (result i32)
-  (local $sum i32)
-  (local $i i32)
-  (local.set $sum (i32.const 0))
-  (local.set $i (i32.const 0))
-  (block $break
-    (loop $continue
-      (br_if $break (i32.ge_u (local.get $i) (local.get $len)))
-      (local.set $sum
-        (i32.add
-          (local.get $sum)
-          (i32.load (i32.add (local.get $arr) (i32.shl (local.get $i) (i32.const 2))))))
-      (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $continue)))
-  (local.get $sum))
-```
-
-### Transpiled Rust Code — Safe Backend
-```rust
-pub fn sum_array<'mem, const MAX_PAGES: usize>(
-    memory: &'mem IsolatedMemory<MAX_PAGES>,
-    globals: &mut Globals,
-    arr: u32,
-    len: u32,
-) -> WasmResult<i32> {
-    let mut sum: i32 = 0;
-    let mut i: u32 = 0;
-
-    'outer: loop {
-        if i >= len {
-            break 'outer;
-        }
-
-        let offset = arr.checked_add(i.checked_mul(4).ok_or(WasmTrap::IntegerOverflow)?)
-            .ok_or(WasmTrap::IntegerOverflow)?;
-
-        let value = memory.load::<i32>(offset as usize)?;
-        sum = sum.wrapping_add(value);
-
-        i = i.checked_add(1).ok_or(WasmTrap::IntegerOverflow)?;
-    }
-
-    Ok(sum)
-}
-```
-
-### Transpiled Rust Code — Verified Backend
-```rust
-/// All proofs reference verification metadata generated by `wasm-verify`.
-pub fn sum_array<'mem, const MAX_PAGES: usize>(
-    memory: &'mem IsolatedMemory<MAX_PAGES>,
-    globals: &mut Globals,
-    arr: u32,
-    len: u32,
-) -> i32 {
-    let mut sum: i32 = 0;
-    let mut i: u32 = 0;
-
-    'outer: loop {
-        if i >= len {
-            break 'outer;
-        }
-
-        // PROOF: arith_0x0010 — i * 4 cannot overflow when i < len and len ≤ MAX_PAGES * PAGE_SIZE / 4
-        let offset = arr + i * 4;
-
-        // PROOF: bounds_0x0012 — offset ∈ [arr, arr + len*4) ⊆ [0, MAX_PAGES * PAGE_SIZE - 4]
-        let value = unsafe { memory.load_unchecked::<i32>(offset as usize) };
-        sum = sum.wrapping_add(value);
-
-        i += 1;
-    }
-
-    sum
-}
-```
-
-Note: in the verified backend the function returns `i32` directly instead of `WasmResult<i32>` — the proofs guarantee no trap can occur, so the `Result` wrapper is eliminated entirely. Wasm integer arithmetic semantics are wrapping, so `wrapping_add` is used in both backends. The `globals` parameter is present in both signatures per §8.1, even though this particular function doesn't access globals — it's part of the standard transpiled function signature.
-
----
 
 **Document Status**: Draft for Review
 **Version**: 0.1

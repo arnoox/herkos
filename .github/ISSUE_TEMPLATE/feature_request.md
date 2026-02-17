@@ -32,7 +32,7 @@ Have you considered any alternative solutions or workarounds?
 ## Implementation Notes
 
 If you have thoughts on how this could be implemented:
-- Which crate(s) would be affected? (herkos, herkos-runtime, wasm-verify)
+- Which crate(s) would be affected? (herkos, herkos-runtime, herkos-tests)
 - Relevant sections of SPECIFICATION.md
 - Potential challenges or concerns
 

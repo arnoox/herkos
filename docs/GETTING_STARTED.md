@@ -38,11 +38,10 @@ This creates `output.rs` containing your transpiled code.
 | `input.wasm` | Path to WebAssembly module | Yes |
 | `--mode` | Code generation mode: `safe`, `hybrid`, or `verified` (default: `safe`) | No |
 | `--output` | Output Rust file path | No |
-| `--metadata` | Path to verification metadata (required for `hybrid`/`verified` modes) | Only for hybrid/verified |
 | `--max-pages` | Maximum memory pages when module declares no maximum | No |
 
 Current limitations:
-- The current state of herkos only supports `safe` mode, all other modes including the `--metadata` option have no effect and will behave like default. More on modes can be found here: TODO.
+- The current state of herkos only supports `safe` mode, all other modes have no effect and will behave like default. More on modes can be found here: TODO.
 - `--max-pages` has no effect.
 
 ### Example: Simple Translation

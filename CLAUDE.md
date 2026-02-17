@@ -39,32 +39,10 @@ cd docs && uv run make clean && uv run make html    # build Sphinx documentation
 
 CLI usage (once built):
 ```bash
-cargo run -p herkos -- input.wasm --mode hybrid --output output.rs --metadata verification.toml
+cargo run -p herkos -- input.wasm --output output.rs
 ```
 
 ## Key architectural concepts
-
-### Three code generation backends
-
-The transpiler can emit code in three distinct styles, trading off between auditability, performance, and proof requirements:
-
-1. **Safe** (default)
-   - **Overhead**: 15–30%
-   - **`unsafe` in output**: None
-   - **Proofs required**: None
-   - Runtime bounds checks on every memory and arithmetic operation. Suitable for initial migration, testing, and modules where performance is not critical.
-
-2. **Verified**
-   - **Overhead**: 0–5%
-   - **`unsafe` in output**: All memory accesses
-   - **Proofs required**: Complete (all operations must have formal proofs)
-   - `unsafe` operations justified by formal proofs from `wasm-verify`. Transpilation fails if any operation lacks a proof. Target for performance-critical modules.
-
-3. **Hybrid**
-   - **Overhead**: 5–15%
-   - **`unsafe` in output**: Proven accesses only
-   - **Proofs required**: Partial
-   - Mix of `unsafe` unchecked operations (where proofs exist) and safe runtime checks (where they don't). Practical choice for production — enables iterative proof improvement.
 
 ### Memory model
 
@@ -119,28 +97,9 @@ impl ImageLibExports for ImageModule<MAX_PAGES> { ... }
 
 WASI support is built-in via standard traits (`WasiFd`, `WasiPath`, `WasiClock`, `WasiRandom`, etc.) shipped with `herkos-runtime`. See SPECIFICATION.md §5 for complete details.
 
-### Verification metadata and `wasm-verify`
-
-The `wasm-verify` crate performs static analysis on `.wasm` binaries:
-
-**Analysis categories**:
-- **Memory bounds**: Prove a load/store address is within `[0, active_pages * PAGE_SIZE)`
-- **Arithmetic overflow**: Prove integer operations cannot overflow for proven value ranges
-- **Read-only regions**: Prove no store instruction targets a given address range (e.g., data segments)
-- **Stack frame isolation**: Prove a function only accesses its own stack frame
-- **Stack bounds**: Prove the stack pointer stays within the stack region
-
-**Verification approach** (two-phase):
-1. **Abstract interpretation** (fast): Tracks value ranges through control flow. Resolves most proof obligations without external solver.
-2. **SMT solver** (precise): Unresolved obligations encoded as bitvector constraints. Z3 or Bitwuzla produce formal proofs or counterexamples.
-
-**Output**: TOML metadata file with proof artifacts indexed by instruction offset. The transpiler verifies the metadata's source hash and uses proofs to decide per-access whether to emit safe or `unsafe` code.
-
-See SPECIFICATION.md §7 for the complete metadata schema and §11.2 for solver details.
-
 ## `no_std` constraint
 
-`herkos-runtime` and all transpiled output **must be `#![no_std]`**. No heap allocation without the optional `alloc` feature gate. No panics, no `format!`, no `String` in the runtime or generated code. Errors are `Result<T, WasmTrap>` only. The `herkos` CLI and `wasm-verify` crates are standard `std` binaries — this constraint applies only to the runtime and generated output.
+`herkos-runtime` and all transpiled output **must be `#![no_std]`**. No heap allocation without the optional `alloc` feature gate. No panics, no `format!`, no `String` in the runtime or generated code. Errors are `Result<T, WasmTrap>` only. The `herkos` CLI crate is standard `std` binary, this constraint applies only to the runtime and generated output.
 
 ## Coding conventions
 
@@ -236,18 +195,7 @@ Transpiled code should be:
 - Self-contained (only depends on `herkos-runtime`)
 - Formatted (run through `rustfmt`)
 - Readable and auditable — prefer clarity over compactness
-- Include `// PROOF:` comments referencing verification metadata (verified/hybrid backends)
 - No panics, no unwinding — use `Result<T, WasmTrap>` for error handling
-
-## Future extensions
-
-### Temporal isolation via fuel-based execution (§14.3 of SPECIFICATION.md)
-Prevent modules from starving each other of CPU time through instrumentation at loop headers and function calls. Three levels:
-- **Fuel-checked (safe)**: Runtime fuel decrements at loop back edges (~3–5% overhead)
-- **WCET-proven (verified)**: Static loop bounds eliminate fuel checks (0% overhead)
-- **Hybrid**: Mix of proven and checked loops (1–3% overhead)
-
-This mirrors the spatial isolation (memory bounds) model exactly and uses the same `wasm-verify` infrastructure.
 
 ## PR and commit guidelines
 

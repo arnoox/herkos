@@ -5,7 +5,7 @@ High-level roadmap. Each phase produces something testable. We go step by step.
 ---
 
 ## Phase 0: Workspace Scaffold ✅
-- [x] Cargo workspace with three crates: `herkos-runtime`, `herkos`, `wasm-verify`
+- [x] Cargo workspace with three crates: `herkos-runtime`, `herkos`
 - [x] `herkos-runtime` is `#![no_std]`, others are `std`
 - [x] CI basics: `cargo build`, `cargo test`, `cargo clippy`, `cargo fmt --check`
 - [x] Minimal types compile (`WasmTrap`, `WasmResult<T>`)
@@ -20,8 +20,6 @@ High-level roadmap. Each phase produces something testable. We go step by step.
 - [x] Kani proof harnesses for core invariants
 
 ## Phase 2: Minimal Transpiler (`herkos`) — Safe Backend Only ✅
-
-**Architecture**: See [TRANSPILER_DESIGN.md](TRANSPILER_DESIGN.md) for complete design
 
 **Milestone 1: Hello World (Pure Math)** ✅ **COMPLETE**
 - [x] Set up `herkos` crate structure (parser, ir, backend, codegen modules)

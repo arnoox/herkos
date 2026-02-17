@@ -176,7 +176,7 @@ impl<const MAX_PAGES: usize> IsolatedMemory<MAX_PAGES> {
     // ── Unchecked (verified) load/store ───────────────────────────────
     //
     // These skip bounds checking entirely. The caller MUST guarantee that
-    // the access is in-bounds, justified by a formal proof from wasm-verify.
+    // the access is in-bounds, justified by a formal proof.
 
     /// Load i32 without bounds checking.
     ///
@@ -390,7 +390,7 @@ fn store_f64_inner(
 // ── Unchecked inner functions ─────────────────────────────────────────
 //
 // SAFETY: the caller (verified backend) guarantees the offset is in-bounds,
-// justified by a formal proof from wasm-verify. These use get_unchecked
+// justified by a formal proof. These use get_unchecked
 // (no bounds check) and read_unaligned (no alignment requirement, matching
 // Wasm's unaligned memory semantics).
 

@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Pre-open-source code review and cleanup
 - Apache-2.0 license
-- Community files (CONTRIBUTING.md, SECURITY.md, CHANGELOG.md)
+- Community files (CONTRIBUTING.md, CHANGELOG.md)
 - Cargo.toml metadata for all crates
 - GitHub issue and PR templates
 
@@ -57,14 +57,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 100% test coverage for memory and table operations
 
 ### Added - Phase 0: Project Structure
-- Workspace with three crates: herkos, herkos-runtime, wasm-verify
+- Workspace with three crates: herkos, herkos-runtime
 - Parser module using wasmparser crate
 - IR module for intermediate representation
 - Backend trait and safe backend implementation
 - CI/CD with GitHub Actions (build, test, clippy, fmt)
-- Comprehensive documentation (SPECIFICATION.md, TRANSPILER_DESIGN.md, PLAN.md)
+- Comprehensive documentation (SPECIFICATION.md, PLAN.md)
 
 ## Project Status
+
+Many tests are missing!
 
 **Current Phase**: Milestone 3 complete (Import/Export System)
 
@@ -79,10 +81,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🔄 Pre-open-source code review and cleanup
 
 **Planned**:
-- ⏳ Phase 4: Backend selection (verified/hybrid modes)
-- ⏳ Phase 5: Local variable tracking
-- ⏳ Phase 6: Multi-value blocks
-- ⏳ Phase 7-9: WASI, optimization, documentation
+- ⏳ Backend selection (verified/hybrid modes)
+- ⏳ Local variable tracking
+- ⏳ Multi-value blocks
+- ⏳ WASI, optimization, documentation
 
 See [PLAN.md](PLAN.md) for the complete roadmap.
 

@@ -45,7 +45,6 @@ cargo test
 The project is organized as a Rust workspace with three core crates:
 
 - `crates/herkos/` — CLI transpiler
-- `crates/wasm-verify/` — Static analysis and proof generation
 - `crates/herkos-runtime/` — `#![no_std]` runtime library
 
 See [README.md](README.md) and [SPECIFICATION.md](SPECIFICATION.md) for architectural details.
@@ -76,7 +75,7 @@ cargo test
 # Run tests for a specific crate
 cargo test -p herkos
 cargo test -p herkos-runtime
-cargo test -p wasm-verify
+cargo test -p herkos-tests
 
 # Run Kani formal verification proofs
 cargo kani --tests -p herkos-runtime

@@ -12,7 +12,6 @@ Safety-critical standards (ISO 26262, IEC 61508, DO-178C) require **freedom from
 
 herkos takes a different approach: if the Rust compiler accepts the transpiled code, isolation is guaranteed: no MMU, no context switches, no runtime overhead for proven accesses.
 
-
 .. toctree::
    :maxdepth: 2
    :caption: Contents:
@@ -21,4 +20,3 @@ herkos takes a different approach: if the Rust compiler accepts the transpiled c
    REQUIREMENTS.md
    WebAssemblyReferenceManual.md
    SPECIFICATION.md
-   TRANSPILER_DESIGN.md
