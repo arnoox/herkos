@@ -628,3 +628,165 @@ impl fmt::Display for BinOp {
         write!(f, "{}", s)
     }
 }
+
+// ─── Module-level IR metadata ───────────────────────────────────────────────
+
+/// Definition of a Wasm global variable.
+#[derive(Debug, Clone)]
+pub struct GlobalDef {
+    /// The Wasm value type of the global.
+    pub wasm_type: WasmType,
+    /// Whether the global is mutable.
+    pub mutable: bool,
+    /// The constant initializer value.
+    pub init_value: GlobalInit,
+}
+
+/// Constant initializer value for a global.
+#[derive(Debug, Clone, Copy)]
+pub enum GlobalInit {
+    I32(i32),
+    I64(i64),
+    F32(f32),
+    F64(f64),
+}
+
+/// A data segment to initialize memory.
+#[derive(Debug, Clone)]
+pub struct DataSegmentDef {
+    /// Byte offset into memory.
+    pub offset: u32,
+    /// Raw bytes to write.
+    pub data: Vec<u8>,
+}
+
+/// An exported function mapping.
+#[derive(Debug, Clone)]
+pub struct FuncExport {
+    /// The exported name (becomes a Rust method name).
+    pub name: String,
+    /// Index into the function index space.
+    pub func_index: u32,
+}
+
+/// Signature of a function.
+#[derive(Debug, Clone)]
+pub struct FuncSignature {
+    /// Parameter types.
+    pub params: Vec<WasmType>,
+    /// Return type (None for void).
+    pub return_type: Option<WasmType>,
+    /// Index into the Wasm type section (needed for call_indirect dispatch).
+    pub type_idx: u32,
+    /// Whether this function calls imported functions (needs host parameter).
+    pub needs_host: bool,
+}
+
+/// An element segment to initialize a table.
+#[derive(Debug, Clone)]
+pub struct ElementSegmentDef {
+    /// Starting offset in the table.
+    pub offset: u32,
+    /// Function indices to place into the table starting at `offset`.
+    pub func_indices: Vec<u32>,
+}
+
+/// An imported function for trait generation.
+#[derive(Debug, Clone)]
+pub struct FuncImport {
+    /// Import module name (e.g., "env").
+    pub module_name: String,
+    /// Import function name (e.g., "log").
+    pub func_name: String,
+    /// Parameter types.
+    pub params: Vec<WasmType>,
+    /// Return type (None for void).
+    pub return_type: Option<WasmType>,
+}
+
+/// An imported global variable.
+#[derive(Debug, Clone)]
+pub struct ImportedGlobalDef {
+    /// Import module name.
+    pub module_name: String,
+    /// Import field name (used as method name in host trait).
+    pub name: String,
+    /// The Wasm value type.
+    pub wasm_type: WasmType,
+    /// Whether the global is mutable.
+    pub mutable: bool,
+}
+
+/// Module-level information describing a WebAssembly module.
+///
+/// This is the IR representation of a module's structure and metadata,
+/// independent of any specific code generation backend. It includes memory
+/// layout, table configuration, globals, imports, exports, and code segments.
+#[derive(Debug, Clone)]
+pub struct ModuleInfo {
+    /// Whether the module declares linear memory.
+    pub has_memory: bool,
+    /// Maximum memory pages (from Wasm memory section or default).
+    pub max_pages: u32,
+    /// Initial memory pages (from Wasm memory section).
+    pub initial_pages: u32,
+    /// Initial table size (number of entries).
+    pub table_initial: u32,
+    /// Maximum table size (for const generic TABLE_MAX).
+    pub table_max: u32,
+    /// Element segments for table initialization.
+    pub element_segments: Vec<ElementSegmentDef>,
+    /// Global variable definitions (mutable + immutable).
+    pub globals: Vec<GlobalDef>,
+    /// Data segments for memory initialization.
+    pub data_segments: Vec<DataSegmentDef>,
+    /// Exported functions.
+    pub func_exports: Vec<FuncExport>,
+    /// Signatures for all functions (index-aligned with IR functions).
+    pub func_signatures: Vec<FuncSignature>,
+    /// Type section signatures (for call_indirect dispatch).
+    pub type_signatures: Vec<FuncSignature>,
+    /// Canonical type index mapping: maps each Wasm type index to the
+    /// smallest index with the same structural signature.
+    /// Used for spec-compliant structural type equivalence in call_indirect.
+    pub canonical_type: Vec<u32>,
+    /// Imported functions for trait generation.
+    /// The number of imported functions is `func_imports.len()`.
+    pub func_imports: Vec<FuncImport>,
+    /// Whether memory is imported rather than locally declared.
+    pub has_memory_import: bool,
+    /// Imported global definitions, in import declaration order.
+    pub imported_globals: Vec<ImportedGlobalDef>,
+    /// All IR functions in the module.
+    pub ir_functions: Vec<IrFunction>,
+}
+
+impl ModuleInfo {
+    /// Get the number of imported functions.
+    ///
+    /// This is derived from `func_imports.len()` rather than storing it separately.
+    pub fn num_imported_functions(&self) -> u32 {
+        self.func_imports.len() as u32
+    }
+
+    /// Whether the module needs a wrapper struct (Module/LibraryModule).
+    ///
+    /// A wrapper is generated when there are mutable globals, data segments,
+    /// or a table (for indirect calls).
+    pub fn needs_wrapper(&self) -> bool {
+        self.globals.iter().any(|g| g.mutable)
+            || !self.data_segments.is_empty()
+            || !self.element_segments.is_empty()
+            || self.has_memory_import
+    }
+
+    /// Whether the module has any mutable globals.
+    pub fn has_mutable_globals(&self) -> bool {
+        self.globals.iter().any(|g| g.mutable)
+    }
+
+    /// Whether the module has a non-trivial table (for indirect calls).
+    pub fn has_table(&self) -> bool {
+        self.table_max > 0
+    }
+}

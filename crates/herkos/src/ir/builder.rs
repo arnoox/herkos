@@ -5,6 +5,8 @@
 //! stack becomes an SSA variable.
 
 use super::types::*;
+use crate::parser::{ExportKind, ImportKind, ParsedModule};
+use crate::TranspileOptions;
 use anyhow::{bail, Context, Result};
 use wasmparser::{Operator, ValType};
 
@@ -161,9 +163,7 @@ impl IrBuilder {
     }
 
     /// Translate a function from Wasm bytecode to IR.
-    ///
-    /// For Milestone 1, we only support simple arithmetic: local.get, i32.const, i32.add, return.
-    pub fn translate_function(
+    fn translate_function(
         &mut self,
         params: &[(ValType, WasmType)],
         locals: &[ValType],
@@ -1261,6 +1261,455 @@ impl Default for IrBuilder {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Build complete module metadata from a parsed WebAssembly module.
+///
+/// This is the main entry point for IR construction, coordinating all
+/// the intermediate steps needed to produce a fully-formed ModuleInfo.
+pub fn build_module_info(parsed: &ParsedModule, options: &TranspileOptions) -> Result<ModuleInfo> {
+    // Analyze module structure (memory, table, types)
+    let mem_info = extract_memory_info(parsed, options)?;
+    let table_info = extract_table_info(parsed);
+    let (canonical_type, type_sigs) = build_type_mappings(parsed);
+
+    // Analyze imports
+    let imported_globals = build_imported_globals(parsed);
+    let num_imported_functions = parsed.num_imported_functions;
+
+    // Translate WebAssembly to intermediate representation
+    let ir_functions = build_ir_functions(parsed, &type_sigs, num_imported_functions)?;
+
+    // Assemble module metadata for code generation
+    assemble_module_metadata(
+        parsed,
+        &mem_info,
+        &table_info,
+        &canonical_type,
+        ir_functions,
+        num_imported_functions,
+        &imported_globals,
+    )
+}
+
+/// Memory information extracted from the module.
+struct MemoryInfo {
+    has_memory: bool,
+    has_memory_import: bool,
+    max_pages: u32,
+    initial_pages: u32,
+}
+
+/// Table information extracted from the module.
+struct TableInfo {
+    initial: u32,
+    max: u32,
+}
+
+/// Extracts memory information from a parsed WASM module.
+fn extract_memory_info(parsed: &ParsedModule, options: &TranspileOptions) -> Result<MemoryInfo> {
+    let has_memory = parsed.memory.is_some();
+    let has_memory_import = parsed
+        .imports
+        .iter()
+        .any(|imp| matches!(imp.kind, ImportKind::Memory { .. }));
+    let max_pages = if let Some(ref mem) = parsed.memory {
+        mem.maximum_pages.unwrap_or(options.max_pages as u32)
+    } else {
+        options.max_pages as u32
+    };
+    let initial_pages = parsed.memory.as_ref().map(|m| m.initial_pages).unwrap_or(0);
+
+    Ok(MemoryInfo {
+        has_memory,
+        has_memory_import,
+        max_pages,
+        initial_pages,
+    })
+}
+
+/// Extracts table information from a parsed WASM module.
+fn extract_table_info(parsed: &ParsedModule) -> TableInfo {
+    if let Some(ref tbl) = parsed.table {
+        TableInfo {
+            initial: tbl.initial_size,
+            max: tbl.max_size.unwrap_or(tbl.initial_size),
+        }
+    } else {
+        TableInfo { initial: 0, max: 0 }
+    }
+}
+
+/// Builds canonical type index mapping and type signatures.
+///
+/// Canonical mapping ensures that call_indirect type checks follow the Wasm spec:
+/// two different type indices with identical (params, results) must match.
+/// We map each type_idx to the smallest index with the same structural signature.
+fn build_type_mappings(parsed: &ParsedModule) -> (Vec<u32>, Vec<(usize, Option<WasmType>)>) {
+    let canonical_type: Vec<u32> = {
+        let mut mapping = Vec::with_capacity(parsed.types.len());
+        for (i, ty) in parsed.types.iter().enumerate() {
+            let canon = parsed.types[..i]
+                .iter()
+                .position(|earlier| {
+                    earlier.params() == ty.params() && earlier.results() == ty.results()
+                })
+                .map(|pos| mapping[pos])
+                .unwrap_or(i as u32);
+            mapping.push(canon);
+        }
+        mapping
+    };
+
+    let type_sigs: Vec<(usize, Option<WasmType>)> = parsed
+        .types
+        .iter()
+        .map(|ty| {
+            let param_count = ty.params().len();
+            let ret = ty
+                .results()
+                .first()
+                .map(|vt| WasmType::from_wasmparser(*vt));
+            (param_count, ret)
+        })
+        .collect();
+
+    (canonical_type, type_sigs)
+}
+
+/// Extracts imported globals from a parsed WASM module.
+fn build_imported_globals(parsed: &ParsedModule) -> Vec<ImportedGlobalDef> {
+    parsed
+        .imports
+        .iter()
+        .filter_map(|imp| {
+            if let ImportKind::Global { val_type, mutable } = &imp.kind {
+                Some(ImportedGlobalDef {
+                    module_name: imp.module_name.clone(),
+                    name: imp.name.clone(),
+                    wasm_type: WasmType::from_wasmparser(*val_type),
+                    mutable: *mutable,
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Translates all functions in the module to intermediate representation.
+fn build_ir_functions(
+    parsed: &ParsedModule,
+    type_sigs: &[(usize, Option<WasmType>)],
+    num_imported_functions: u32,
+) -> Result<Vec<IrFunction>> {
+    let mut ir_builder = IrBuilder::new();
+    let mut ir_functions = Vec::new();
+
+    // Build function signature list (imported + local)
+    let func_sigs = build_function_signatures(parsed);
+
+    // Build function import list for IR builder
+    let func_imports: Vec<(String, String)> = parsed
+        .imports
+        .iter()
+        .filter_map(|imp| match &imp.kind {
+            ImportKind::Function(_) => Some((imp.module_name.clone(), imp.name.clone())),
+            _ => None,
+        })
+        .collect();
+
+    let module_ctx = ModuleContext {
+        func_signatures: func_sigs,
+        type_signatures: type_sigs.to_vec(),
+        num_imported_functions,
+        func_imports,
+    };
+
+    for (func_idx, func) in parsed.functions.iter().enumerate() {
+        let func_type = &parsed.types[func.type_idx as usize];
+
+        let params: Vec<_> = func_type
+            .params()
+            .iter()
+            .map(|vt| (*vt, WasmType::from_wasmparser(*vt)))
+            .collect();
+
+        let return_type = func_type
+            .results()
+            .first()
+            .map(|vt| WasmType::from_wasmparser(*vt));
+
+        let operators = parse_function_operators(&func.body)?;
+
+        let ir_func = ir_builder
+            .translate_function(&params, &func.locals, return_type, &operators, &module_ctx)
+            .with_context(|| format!("failed to build IR for function {}", func_idx))?;
+
+        ir_functions.push(ir_func);
+    }
+
+    Ok(ir_functions)
+}
+
+/// Builds the function signature list (imported functions followed by local functions).
+fn build_function_signatures(parsed: &ParsedModule) -> Vec<(usize, Option<WasmType>)> {
+    let mut func_sigs: Vec<(usize, Option<WasmType>)> = Vec::new();
+
+    // Imported function signatures
+    for import in &parsed.imports {
+        if let ImportKind::Function(type_idx) = &import.kind {
+            let func_type = &parsed.types[*type_idx as usize];
+            let param_count = func_type.params().len();
+            let ret = func_type
+                .results()
+                .first()
+                .map(|vt| WasmType::from_wasmparser(*vt));
+            func_sigs.push((param_count, ret));
+        }
+    }
+
+    // Local function signatures
+    for func in &parsed.functions {
+        let func_type = &parsed.types[func.type_idx as usize];
+        let param_count = func_type.params().len();
+        let ret = func_type
+            .results()
+            .first()
+            .map(|vt| WasmType::from_wasmparser(*vt));
+        func_sigs.push((param_count, ret));
+    }
+
+    func_sigs
+}
+
+/// Parses Wasm operators from a function body.
+fn parse_function_operators(body: &[u8]) -> Result<Vec<Operator<'_>>> {
+    let mut operators = Vec::new();
+    let mut binary_reader = wasmparser::BinaryReader::new(body, 0);
+
+    while !binary_reader.eof() {
+        let op = binary_reader
+            .read_operator()
+            .context("failed to read operator")?;
+        operators.push(op);
+    }
+
+    Ok(operators)
+}
+
+/// Assembles module metadata for code generation.
+#[allow(clippy::too_many_arguments)]
+fn assemble_module_metadata(
+    parsed: &ParsedModule,
+    mem_info: &MemoryInfo,
+    table_info: &TableInfo,
+    canonical_type: &[u32],
+    ir_functions: Vec<IrFunction>,
+    num_imported_functions: u32,
+    imported_globals: &[ImportedGlobalDef],
+) -> Result<ModuleInfo> {
+    let globals = build_globals(parsed);
+    let data_segments = build_data_segments(parsed);
+    let element_segments = build_element_segments(parsed);
+    let func_exports = build_function_exports(parsed, num_imported_functions);
+    let func_signatures =
+        build_function_type_signatures(parsed, canonical_type, &ir_functions, imported_globals);
+    let type_signatures = build_call_indirect_signatures(parsed);
+    let func_imports = build_function_imports(parsed);
+
+    Ok(ModuleInfo {
+        has_memory: mem_info.has_memory,
+        has_memory_import: mem_info.has_memory_import,
+        max_pages: mem_info.max_pages,
+        initial_pages: mem_info.initial_pages,
+        table_initial: table_info.initial,
+        table_max: table_info.max,
+        element_segments,
+        globals,
+        data_segments,
+        func_exports,
+        func_signatures,
+        type_signatures,
+        canonical_type: canonical_type.to_vec(),
+        func_imports,
+        imported_globals: imported_globals.to_vec(),
+        ir_functions,
+    })
+}
+
+/// Builds global variable definitions.
+fn build_globals(parsed: &ParsedModule) -> Vec<GlobalDef> {
+    parsed
+        .globals
+        .iter()
+        .map(|g| {
+            let wasm_type = WasmType::from_wasmparser(g.val_type);
+            let init_value = match g.init_value {
+                crate::parser::InitValue::I32(v) => GlobalInit::I32(v),
+                crate::parser::InitValue::I64(v) => GlobalInit::I64(v),
+                crate::parser::InitValue::F32(v) => GlobalInit::F32(v),
+                crate::parser::InitValue::F64(v) => GlobalInit::F64(v),
+            };
+            GlobalDef {
+                wasm_type,
+                mutable: g.mutable,
+                init_value,
+            }
+        })
+        .collect()
+}
+
+/// Builds data segment definitions.
+fn build_data_segments(parsed: &ParsedModule) -> Vec<DataSegmentDef> {
+    parsed
+        .data_segments
+        .iter()
+        .map(|ds| DataSegmentDef {
+            offset: ds.offset,
+            data: ds.data.clone(),
+        })
+        .collect()
+}
+
+/// Builds element segment (table initialization) definitions.
+fn build_element_segments(parsed: &ParsedModule) -> Vec<ElementSegmentDef> {
+    parsed
+        .element_segments
+        .iter()
+        .map(|es| ElementSegmentDef {
+            offset: es.offset,
+            func_indices: es.func_indices.clone(),
+        })
+        .collect()
+}
+
+/// Builds exported function definitions.
+///
+/// Export indices use global numbering (imports + locals). We filter to local
+/// functions and offset to local function index space for codegen (func_0, func_1, ...).
+fn build_function_exports(parsed: &ParsedModule, num_imported_functions: u32) -> Vec<FuncExport> {
+    parsed
+        .exports
+        .iter()
+        .filter(|e| e.kind == ExportKind::Func && e.index >= num_imported_functions)
+        .map(|e| FuncExport {
+            name: e.name.clone(),
+            func_index: e.index - num_imported_functions,
+        })
+        .collect()
+}
+
+/// Builds function type signatures for exported functions.
+///
+/// This is indexed by local function index (0-based, excluding imports) and includes
+/// the `needs_host` flag to indicate if a function requires a host parameter.
+fn build_function_type_signatures(
+    parsed: &ParsedModule,
+    canonical_type: &[u32],
+    ir_functions: &[IrFunction],
+    imported_globals: &[ImportedGlobalDef],
+) -> Vec<FuncSignature> {
+    let num_imported_globals_u32 = imported_globals.len() as u32;
+    parsed
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(func_idx, func)| {
+            let func_type = &parsed.types[func.type_idx as usize];
+            let params = func_type
+                .params()
+                .iter()
+                .map(|vt| WasmType::from_wasmparser(*vt))
+                .collect();
+            let return_type = func_type
+                .results()
+                .first()
+                .map(|vt| WasmType::from_wasmparser(*vt));
+
+            let needs_host = ir_functions
+                .get(func_idx)
+                .map(|ir_func| function_calls_imports(ir_func, num_imported_globals_u32))
+                .unwrap_or(false);
+
+            FuncSignature {
+                params,
+                return_type,
+                type_idx: canonical_type[func.type_idx as usize],
+                needs_host,
+            }
+        })
+        .collect()
+}
+
+/// Determines if a function calls imports or accesses imported globals.
+fn function_calls_imports(ir_func: &IrFunction, num_imported_globals: u32) -> bool {
+    ir_func.blocks.iter().any(|block| {
+        block.instructions.iter().any(|instr| {
+            matches!(instr, IrInstr::CallImport { .. })
+                || (num_imported_globals > 0
+                    && matches!(
+                        instr,
+                        IrInstr::GlobalGet { index, .. }
+                            | IrInstr::GlobalSet { index, .. }
+                            if *index < num_imported_globals
+                    ))
+        })
+    })
+}
+
+/// Builds type signatures for call_indirect type checking.
+fn build_call_indirect_signatures(parsed: &ParsedModule) -> Vec<FuncSignature> {
+    parsed
+        .types
+        .iter()
+        .map(|ty| {
+            let params = ty
+                .params()
+                .iter()
+                .map(|vt| WasmType::from_wasmparser(*vt))
+                .collect();
+            let return_type = ty
+                .results()
+                .first()
+                .map(|vt| WasmType::from_wasmparser(*vt));
+            FuncSignature {
+                params,
+                return_type,
+                type_idx: 0,
+                needs_host: false,
+            }
+        })
+        .collect()
+}
+
+/// Builds function import trait definitions.
+fn build_function_imports(parsed: &ParsedModule) -> Vec<FuncImport> {
+    parsed
+        .imports
+        .iter()
+        .filter_map(|imp| match &imp.kind {
+            ImportKind::Function(type_idx) => {
+                let func_type = &parsed.types[*type_idx as usize];
+                let params = func_type
+                    .params()
+                    .iter()
+                    .map(|vt| WasmType::from_wasmparser(*vt))
+                    .collect();
+                let return_type = func_type
+                    .results()
+                    .first()
+                    .map(|vt| WasmType::from_wasmparser(*vt));
+                Some(FuncImport {
+                    module_name: imp.module_name.clone(),
+                    func_name: imp.name.clone(),
+                    params,
+                    return_type,
+                })
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -10,161 +10,6 @@ use crate::backend::Backend;
 use crate::ir::*;
 use anyhow::{Context, Result};
 
-// ─── ModuleInfo types ───────────────────────────────────────────────────────
-
-/// Definition of a Wasm global variable for code generation.
-#[derive(Debug, Clone)]
-pub struct GlobalDef {
-    /// The Wasm value type of the global.
-    pub wasm_type: WasmType,
-    /// Whether the global is mutable.
-    pub mutable: bool,
-    /// The constant initializer value.
-    pub init_value: GlobalInit,
-}
-
-/// Constant initializer value for a global.
-#[derive(Debug, Clone, Copy)]
-pub enum GlobalInit {
-    I32(i32),
-    I64(i64),
-    F32(f32),
-    F64(f64),
-}
-
-/// A data segment to initialize memory.
-#[derive(Debug, Clone)]
-pub struct DataSegmentDef {
-    /// Byte offset into memory.
-    pub offset: u32,
-    /// Raw bytes to write.
-    pub data: Vec<u8>,
-}
-
-/// An exported function mapping.
-#[derive(Debug, Clone)]
-pub struct FuncExport {
-    /// The exported name (becomes a Rust method name).
-    pub name: String,
-    /// Index into the function index space.
-    pub func_index: u32,
-}
-
-/// Signature of a function (for export method generation).
-#[derive(Debug, Clone)]
-pub struct FuncSignature {
-    /// Parameter types.
-    pub params: Vec<WasmType>,
-    /// Return type (None for void).
-    pub return_type: Option<WasmType>,
-    /// Index into the Wasm type section (needed for call_indirect dispatch).
-    pub type_idx: u32,
-    /// Whether this function calls imported functions (needs host parameter).
-    pub needs_host: bool,
-}
-
-/// An element segment to initialize a table.
-#[derive(Debug, Clone)]
-pub struct ElementSegmentDef {
-    /// Starting offset in the table.
-    pub offset: u32,
-    /// Function indices to place into the table starting at `offset`.
-    pub func_indices: Vec<u32>,
-}
-
-/// An imported function for trait generation.
-#[derive(Debug, Clone)]
-pub struct FuncImport {
-    /// Import module name (e.g., "env").
-    pub module_name: String,
-    /// Import function name (e.g., "log").
-    pub func_name: String,
-    /// Parameter types.
-    pub params: Vec<WasmType>,
-    /// Return type (None for void).
-    pub return_type: Option<WasmType>,
-}
-
-/// An imported global variable for code generation.
-#[derive(Debug, Clone)]
-pub struct ImportedGlobalDef {
-    /// Import module name.
-    pub module_name: String,
-    /// Import field name (used as method name in host trait).
-    pub name: String,
-    /// The Wasm value type.
-    pub wasm_type: WasmType,
-    /// Whether the global is mutable.
-    pub mutable: bool,
-}
-
-/// Module-level information for code generation.
-///
-/// When `needs_wrapper()` returns true, the codegen emits a `Module` struct
-/// with constructor, globals, and export methods. Otherwise, it emits
-/// standalone `pub fn func_N(...)` functions.
-#[derive(Debug, Clone)]
-pub struct ModuleInfo {
-    /// Whether the module declares linear memory.
-    pub has_memory: bool,
-    /// Maximum memory pages (from Wasm memory section or default).
-    pub max_pages: u32,
-    /// Initial memory pages (from Wasm memory section).
-    pub initial_pages: u32,
-    /// Initial table size (number of entries).
-    pub table_initial: u32,
-    /// Maximum table size (for const generic TABLE_MAX).
-    pub table_max: u32,
-    /// Element segments for table initialization.
-    pub element_segments: Vec<ElementSegmentDef>,
-    /// Global variable definitions (mutable + immutable).
-    pub globals: Vec<GlobalDef>,
-    /// Data segments for memory initialization.
-    pub data_segments: Vec<DataSegmentDef>,
-    /// Exported functions.
-    pub func_exports: Vec<FuncExport>,
-    /// Signatures for all functions (index-aligned with IR functions).
-    pub func_signatures: Vec<FuncSignature>,
-    /// Type section signatures (for call_indirect dispatch).
-    pub type_signatures: Vec<FuncSignature>,
-    /// Canonical type index mapping: maps each Wasm type index to the
-    /// smallest index with the same structural signature.
-    /// Used for spec-compliant structural type equivalence in call_indirect.
-    pub canonical_type: Vec<u32>,
-    /// Number of imported functions (these occupy indices 0..N-1 in the
-    /// function index space, before local functions).
-    pub num_imported_functions: u32,
-    /// Imported functions for trait generation (Milestone 3).
-    pub func_imports: Vec<FuncImport>,
-    /// Whether memory is imported rather than locally declared (Milestone 4).
-    pub has_memory_import: bool,
-    /// Imported global definitions (Milestone 4), in import declaration order.
-    pub imported_globals: Vec<ImportedGlobalDef>,
-}
-
-impl ModuleInfo {
-    /// Whether the module needs a wrapper struct (Module/LibraryModule).
-    ///
-    /// A wrapper is generated when there are mutable globals, data segments,
-    /// or a table (for indirect calls).
-    pub fn needs_wrapper(&self) -> bool {
-        self.globals.iter().any(|g| g.mutable)
-            || !self.data_segments.is_empty()
-            || !self.element_segments.is_empty()
-            || self.has_memory_import
-    }
-
-    /// Whether the module has any mutable globals.
-    pub fn has_mutable_globals(&self) -> bool {
-        self.globals.iter().any(|g| g.mutable)
-    }
-
-    /// Whether the module has a non-trivial table (for indirect calls).
-    pub fn has_table(&self) -> bool {
-        self.table_max > 0
-    }
-}
-
 // ─── Helper functions ───────────────────────────────────────────────────────
 
 /// Convert a module name to a Rust trait name.
@@ -214,51 +59,15 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
         CodeGenerator { backend }
     }
 
-    /// Generate a complete Rust module from IR functions (legacy API).
-    ///
-    /// This is the backwards-compatible entry point. It generates standalone
-    /// `pub fn func_N(...)` functions without a module wrapper.
-    pub fn generate_module(
-        &self,
-        ir_functions: &[IrFunction],
-        has_memory: bool,
-        max_pages: u32,
-    ) -> Result<String> {
-        // Build a minimal ModuleInfo for backwards compatibility
-        let info = ModuleInfo {
-            has_memory,
-            max_pages,
-            initial_pages: 0,
-            table_initial: 0,
-            table_max: 0,
-            element_segments: Vec::new(),
-            globals: Vec::new(),
-            data_segments: Vec::new(),
-            func_exports: Vec::new(),
-            func_signatures: Vec::new(),
-            type_signatures: Vec::new(),
-            canonical_type: Vec::new(),
-            num_imported_functions: 0,
-            func_imports: Vec::new(),
-            has_memory_import: false,
-            imported_globals: Vec::new(),
-        };
-        self.generate_module_with_info(ir_functions, &info)
-    }
-
     /// Generate a complete Rust module from IR functions with full module info.
     ///
     /// This is the main entry point for Milestone 4+. It decides between
     /// standalone functions and a module wrapper based on `info.needs_wrapper()`.
-    pub fn generate_module_with_info(
-        &self,
-        ir_functions: &[IrFunction],
-        info: &ModuleInfo,
-    ) -> Result<String> {
+    pub fn generate_module_with_info(&self, info: &ModuleInfo) -> Result<String> {
         if info.needs_wrapper() {
-            self.generate_wrapper_module(ir_functions, info)
+            self.generate_wrapper_module(info)
         } else {
-            self.generate_standalone_module(ir_functions, info)
+            self.generate_standalone_module(info)
         }
     }
 
@@ -376,11 +185,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
     }
 
     /// Generate standalone functions (no module wrapper).
-    fn generate_standalone_module(
-        &self,
-        ir_functions: &[IrFunction],
-        info: &ModuleInfo,
-    ) -> Result<String> {
+    fn generate_standalone_module(&self, info: &ModuleInfo) -> Result<String> {
         let mut rust_code = String::new();
 
         // Preamble
@@ -413,7 +218,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
         }
 
         // Generate each function
-        for (idx, ir_func) in ir_functions.iter().enumerate() {
+        for (idx, ir_func) in info.ir_functions.iter().enumerate() {
             let func_name = format!("func_{}", idx);
             let code = self
                 .generate_function_with_info(ir_func, &func_name, info, true)
@@ -426,11 +231,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
     }
 
     /// Generate a module wrapper with Globals struct, constructor, and export methods.
-    fn generate_wrapper_module(
-        &self,
-        ir_functions: &[IrFunction],
-        info: &ModuleInfo,
-    ) -> Result<String> {
+    fn generate_wrapper_module(&self, info: &ModuleInfo) -> Result<String> {
         let mut rust_code = String::new();
         let has_mut_globals = info.has_mutable_globals();
 
@@ -509,7 +310,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
         rust_code.push('\n');
 
         // Internal functions (private)
-        for (idx, ir_func) in ir_functions.iter().enumerate() {
+        for (idx, ir_func) in info.ir_functions.iter().enumerate() {
             let func_name = format!("func_{}", idx);
             let code = self
                 .generate_function_with_info(ir_func, &func_name, info, false)
@@ -603,7 +404,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
                     let table_idx = seg.offset as usize + i;
                     // func_idx is in global space (imports + locals).
                     // Convert to local function index for lookup and storage.
-                    let local_func_idx = *func_idx - info.num_imported_functions;
+                    let local_func_idx = *func_idx - info.num_imported_functions();
                     let type_idx = info
                         .func_signatures
                         .get(local_func_idx as usize)
@@ -625,7 +426,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
                     let table_idx = seg.offset as usize + i;
                     // func_idx is in global space (imports + locals).
                     // Convert to local function index for lookup and storage.
-                    let local_func_idx = *func_idx - info.num_imported_functions;
+                    let local_func_idx = *func_idx - info.num_imported_functions();
                     let type_idx = info
                         .func_signatures
                         .get(local_func_idx as usize)
@@ -764,34 +565,6 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
         code
     }
 
-    /// Generate a complete Rust function from IR (legacy API).
-    pub fn generate_function(
-        &self,
-        ir_func: &IrFunction,
-        func_name: &str,
-        has_memory: bool,
-    ) -> Result<String> {
-        let info = ModuleInfo {
-            has_memory,
-            max_pages: 0,
-            initial_pages: 0,
-            table_initial: 0,
-            table_max: 0,
-            element_segments: Vec::new(),
-            globals: Vec::new(),
-            data_segments: Vec::new(),
-            func_exports: Vec::new(),
-            func_signatures: Vec::new(),
-            type_signatures: Vec::new(),
-            canonical_type: Vec::new(),
-            num_imported_functions: 0,
-            func_imports: Vec::new(),
-            has_memory_import: false,
-            imported_globals: Vec::new(),
-        };
-        self.generate_function_with_info(ir_func, func_name, &info, true)
-    }
-
     /// Check if an IR function contains any CallImport instructions.
     fn has_import_calls(ir_func: &IrFunction) -> bool {
         ir_func.blocks.iter().any(|block| {
@@ -881,8 +654,8 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
                         // func_idx is in global space (imports + locals).
                         // For Milestone 1, we error on imported functions during codegen,
                         // so just use a fallback type here if it's an import.
-                        let ty = if *func_idx >= info.num_imported_functions {
-                            let local_idx = func_idx - info.num_imported_functions;
+                        let ty = if *func_idx >= info.num_imported_functions() {
+                            let local_idx = func_idx - info.num_imported_functions();
                             info.func_signatures
                                 .get(local_idx as usize)
                                 .and_then(|s| s.return_type)
@@ -1432,7 +1205,27 @@ mod tests {
 
         let backend = SafeBackend::new();
         let codegen = CodeGenerator::new(&backend);
-        let code = codegen.generate_function(&ir_func, "add", false).unwrap();
+        let info = ModuleInfo {
+            has_memory: false,
+            has_memory_import: false,
+            max_pages: 0,
+            initial_pages: 0,
+            table_initial: 0,
+            table_max: 0,
+            element_segments: Vec::new(),
+            globals: Vec::new(),
+            data_segments: Vec::new(),
+            func_exports: Vec::new(),
+            func_signatures: Vec::new(),
+            type_signatures: Vec::new(),
+            canonical_type: Vec::new(),
+            func_imports: Vec::new(),
+            imported_globals: Vec::new(),
+            ir_functions: Vec::new(),
+        };
+        let code = codegen
+            .generate_function_with_info(&ir_func, "add", &info, true)
+            .unwrap();
 
         println!("Generated code:\n{}", code);
 
@@ -1463,7 +1256,27 @@ mod tests {
 
         let backend = SafeBackend::new();
         let codegen = CodeGenerator::new(&backend);
-        let code = codegen.generate_function(&ir_func, "noop", false).unwrap();
+        let info = ModuleInfo {
+            has_memory: false,
+            has_memory_import: false,
+            max_pages: 0,
+            initial_pages: 0,
+            table_initial: 0,
+            table_max: 0,
+            element_segments: Vec::new(),
+            globals: Vec::new(),
+            data_segments: Vec::new(),
+            func_exports: Vec::new(),
+            func_signatures: Vec::new(),
+            type_signatures: Vec::new(),
+            canonical_type: Vec::new(),
+            func_imports: Vec::new(),
+            imported_globals: Vec::new(),
+            ir_functions: Vec::new(),
+        };
+        let code = codegen
+            .generate_function_with_info(&ir_func, "noop", &info, true)
+            .unwrap();
 
         assert!(code.contains("pub fn noop()"));
         assert!(code.contains("-> WasmResult<()>"));
@@ -1549,7 +1362,27 @@ mod tests {
 
         let backend = SafeBackend::new();
         let codegen = CodeGenerator::new(&backend);
-        let code = codegen.generate_function(&ir_func, "add64", false).unwrap();
+        let info = ModuleInfo {
+            has_memory: false,
+            has_memory_import: false,
+            max_pages: 0,
+            initial_pages: 0,
+            table_initial: 0,
+            table_max: 0,
+            element_segments: Vec::new(),
+            globals: Vec::new(),
+            data_segments: Vec::new(),
+            func_exports: Vec::new(),
+            func_signatures: Vec::new(),
+            type_signatures: Vec::new(),
+            canonical_type: Vec::new(),
+            func_imports: Vec::new(),
+            imported_globals: Vec::new(),
+            ir_functions: Vec::new(),
+        };
+        let code = codegen
+            .generate_function_with_info(&ir_func, "add64", &info, true)
+            .unwrap();
 
         println!("Generated code:\n{}", code);
 
@@ -1593,7 +1426,27 @@ mod tests {
 
         let backend = SafeBackend::new();
         let codegen = CodeGenerator::new(&backend);
-        let code = codegen.generate_function(&ir_func, "eq64", false).unwrap();
+        let info = ModuleInfo {
+            has_memory: false,
+            has_memory_import: false,
+            max_pages: 0,
+            initial_pages: 0,
+            table_initial: 0,
+            table_max: 0,
+            element_segments: Vec::new(),
+            globals: Vec::new(),
+            data_segments: Vec::new(),
+            func_exports: Vec::new(),
+            func_signatures: Vec::new(),
+            type_signatures: Vec::new(),
+            canonical_type: Vec::new(),
+            func_imports: Vec::new(),
+            imported_globals: Vec::new(),
+            ir_functions: Vec::new(),
+        };
+        let code = codegen
+            .generate_function_with_info(&ir_func, "eq64", &info, true)
+            .unwrap();
 
         println!("Generated code:\n{}", code);
 
@@ -1650,16 +1503,14 @@ mod tests {
             }],
             type_signatures: Vec::new(),
             canonical_type: Vec::new(),
-            num_imported_functions: 0,
             func_imports: Vec::new(),
             imported_globals: Vec::new(),
+            ir_functions: vec![ir_func],
         };
 
         let backend = SafeBackend::new();
         let codegen = CodeGenerator::new(&backend);
-        let code = codegen
-            .generate_module_with_info(&[ir_func], &info)
-            .unwrap();
+        let code = codegen.generate_module_with_info(&info).unwrap();
 
         println!("Generated wrapper code:\n{}", code);
 
@@ -1722,16 +1573,14 @@ mod tests {
             }],
             type_signatures: Vec::new(),
             canonical_type: Vec::new(),
-            num_imported_functions: 0,
             func_imports: Vec::new(),
             imported_globals: Vec::new(),
+            ir_functions: vec![ir_func],
         };
 
         let backend = SafeBackend::new();
         let codegen = CodeGenerator::new(&backend);
-        let code = codegen
-            .generate_module_with_info(&[ir_func], &info)
-            .unwrap();
+        let code = codegen.generate_module_with_info(&info).unwrap();
 
         println!("Generated wrapper code:\n{}", code);
 
@@ -1792,16 +1641,14 @@ mod tests {
             }],
             type_signatures: Vec::new(),
             canonical_type: Vec::new(),
-            num_imported_functions: 0,
             func_imports: Vec::new(),
             imported_globals: Vec::new(),
+            ir_functions: vec![ir_func],
         };
 
         let backend = SafeBackend::new();
         let codegen = CodeGenerator::new(&backend);
-        let code = codegen
-            .generate_module_with_info(&[ir_func], &info)
-            .unwrap();
+        let code = codegen.generate_module_with_info(&info).unwrap();
 
         println!("Generated standalone code:\n{}", code);
 
@@ -1857,16 +1704,14 @@ mod tests {
             }],
             type_signatures: Vec::new(),
             canonical_type: Vec::new(),
-            num_imported_functions: 0,
             func_imports: Vec::new(),
             imported_globals: Vec::new(),
+            ir_functions: vec![ir_func],
         };
 
         let backend = SafeBackend::new();
         let codegen = CodeGenerator::new(&backend);
-        let code = codegen
-            .generate_module_with_info(&[ir_func], &info)
-            .unwrap();
+        let code = codegen.generate_module_with_info(&info).unwrap();
 
         println!("Generated backwards compat code:\n{}", code);
 
