@@ -22,19 +22,52 @@ fn module_name_to_trait_name(module_name: &str) -> String {
     format!("{}Imports", module_name.to_upper_camel_case())
 }
 
-/// Group function imports by module name.
-fn group_imports_by_module(
-    imports: &[FuncImport],
-) -> std::collections::BTreeMap<String, Vec<&FuncImport>> {
-    let mut grouped: std::collections::BTreeMap<String, Vec<&FuncImport>> =
+/// Group items by module name using a key function.
+fn group_by_module<'a, T, F>(
+    items: &'a [T],
+    key: F,
+) -> std::collections::BTreeMap<String, Vec<&'a T>>
+where
+    F: Fn(&T) -> &str,
+{
+    let mut grouped: std::collections::BTreeMap<String, Vec<&'a T>> =
         std::collections::BTreeMap::new();
-    for imp in imports {
-        grouped
-            .entry(imp.module_name.clone())
-            .or_default()
-            .push(imp);
+    for item in items {
+        grouped.entry(key(item).to_string()).or_default().push(item);
     }
     grouped
+}
+
+/// Collect all unique module names from function and global imports.
+fn all_import_module_names(info: &ModuleInfo) -> std::collections::BTreeSet<String> {
+    info.func_imports
+        .iter()
+        .map(|i| i.module_name.clone())
+        .chain(info.imported_globals.iter().map(|g| g.module_name.clone()))
+        .collect()
+}
+
+/// Build a call args vector by conditionally adding globals/memory/table/host.
+fn build_inner_call_args(
+    base_args: &[String],
+    has_globals: bool,
+    globals_expr: &str,
+    has_memory: bool,
+    memory_expr: &str,
+    has_table: bool,
+    table_expr: &str,
+) -> Vec<String> {
+    let mut call_args = base_args.to_vec();
+    if has_globals {
+        call_args.push(globals_expr.to_string());
+    }
+    if has_memory {
+        call_args.push(memory_expr.to_string());
+    }
+    if has_table {
+        call_args.push(table_expr.to_string());
+    }
+    call_args
 }
 
 // ─── CodeGenerator ──────────────────────────────────────────────────────────
@@ -71,26 +104,13 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
         let mut code = String::new();
 
         // Group function imports by module name
-        let func_grouped = group_imports_by_module(&info.func_imports);
+        let func_grouped = group_by_module(&info.func_imports, |i| &i.module_name);
 
         // Group global imports by module name
-        let mut global_grouped: std::collections::BTreeMap<String, Vec<&ImportedGlobalDef>> =
-            std::collections::BTreeMap::new();
-        for g in &info.imported_globals {
-            global_grouped
-                .entry(g.module_name.clone())
-                .or_default()
-                .push(g);
-        }
+        let global_grouped = group_by_module(&info.imported_globals, |g| &g.module_name);
 
         // Collect all module names
-        let mut all_modules: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for name in func_grouped.keys() {
-            all_modules.insert(name.clone());
-        }
-        for name in global_grouped.keys() {
-            all_modules.insert(name.clone());
-        }
+        let all_modules = all_import_module_names(info);
 
         // Generate one trait per module
         for module_name in &all_modules {
@@ -108,13 +128,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
                         params.push(format!("arg{i}: {rust_ty}"));
                     }
 
-                    let return_ty = match &imp.return_type {
-                        Some(ty) => {
-                            let rust_ty = self.wasm_type_to_rust(ty);
-                            format!("WasmResult<{rust_ty}>")
-                        }
-                        None => "WasmResult<()>".to_string(),
-                    };
+                    let return_ty = self.format_return_type(imp.return_type.as_ref());
 
                     code.push_str(&format!(
                         "    fn {}({}) -> {};\n",
@@ -155,17 +169,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
             return None;
         }
 
-        // Collect all module names from both function imports and global imports
-        let mut module_names: std::collections::BTreeSet<String> =
-            std::collections::BTreeSet::new();
-
-        for imp in &info.func_imports {
-            module_names.insert(imp.module_name.clone());
-        }
-        for g in &info.imported_globals {
-            module_names.insert(g.module_name.clone());
-        }
-
+        let module_names = all_import_module_names(info);
         let trait_names: Vec<String> = module_names
             .iter()
             .map(|module_name| module_name_to_trait_name(module_name))
@@ -174,13 +178,31 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
         Some(trait_names.join(" + "))
     }
 
+    /// Generate const items for immutable globals.
+    fn emit_const_globals(&self, info: &ModuleInfo) -> String {
+        let mut code = String::new();
+        for (idx, g) in info.globals.iter().enumerate() {
+            if !g.mutable {
+                let (rust_ty, value_str) = self.global_init_to_rust(&g.init_value, &g.wasm_type);
+                code.push_str(&format!("pub const G{idx}: {rust_ty} = {value_str};\n"));
+            }
+        }
+        if info.globals.iter().any(|g| !g.mutable) {
+            code.push('\n');
+        }
+        code
+    }
+
+    fn rust_code_preamble() -> String {
+        let mut code = String::new();
+        code.push_str("// Generated by herkos\n");
+        code.push_str("// DO NOT EDIT\n\n");
+        code
+    }
+
     /// Generate standalone functions (no module wrapper).
     fn generate_standalone_module(&self, info: &ModuleInfo) -> Result<String> {
-        let mut rust_code = String::new();
-
-        // Preamble
-        rust_code.push_str("// Generated by herkos\n");
-        rust_code.push_str("// DO NOT EDIT\n\n");
+        let mut rust_code = Self::rust_code_preamble();
 
         // Imports
         rust_code.push_str("#[allow(unused_imports)]\n");
@@ -193,19 +215,11 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
             rust_code.push_str("use herkos_runtime::{WasmResult, WasmTrap};\n\n");
         }
 
-        // Host trait definitions (Milestone 3)
+        // Host trait definitions
         rust_code.push_str(&self.generate_host_traits(info));
 
-        // Const items for immutable globals (even in standalone mode)
-        for (idx, g) in info.globals.iter().enumerate() {
-            if !g.mutable {
-                let (rust_ty, value_str) = self.global_init_to_rust(&g.init_value, &g.wasm_type);
-                rust_code.push_str(&format!("pub const G{idx}: {rust_ty} = {value_str};\n"));
-            }
-        }
-        if info.globals.iter().any(|g| !g.mutable) {
-            rust_code.push('\n');
-        }
+        // Const items for immutable globals
+        rust_code.push_str(&self.emit_const_globals(info));
 
         // Generate each function
         for (idx, ir_func) in info.ir_functions.iter().enumerate() {
@@ -222,12 +236,8 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
 
     /// Generate a module wrapper with Globals struct, constructor, and export methods.
     fn generate_wrapper_module(&self, info: &ModuleInfo) -> Result<String> {
-        let mut rust_code = String::new();
+        let mut rust_code = Self::rust_code_preamble();
         let has_mut_globals = info.has_mutable_globals();
-
-        // Preamble
-        rust_code.push_str("// Generated by herkos\n");
-        rust_code.push_str("// DO NOT EDIT\n\n");
 
         // Imports
         rust_code.push_str("#[allow(unused_imports)]\n");
@@ -256,7 +266,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
         }
         rust_code.push('\n');
 
-        // Host trait definitions (Milestone 3)
+        // Host trait definitions
         rust_code.push_str(&self.generate_host_traits(info));
 
         // Globals struct (mutable globals only)
@@ -272,15 +282,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
         }
 
         // Const items for immutable globals
-        for (idx, g) in info.globals.iter().enumerate() {
-            if !g.mutable {
-                let (rust_ty, value_str) = self.global_init_to_rust(&g.init_value, &g.wasm_type);
-                rust_code.push_str(&format!("pub const G{idx}: {rust_ty} = {value_str};\n"));
-            }
-        }
-        if info.globals.iter().any(|g| !g.mutable) {
-            rust_code.push('\n');
-        }
+        rust_code.push_str(&self.emit_const_globals(info));
 
         // Newtype wrapper struct (required to allow `impl WasmModule` on a foreign type)
         let globals_type = if has_mut_globals { "Globals" } else { "()" };
@@ -316,6 +318,29 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
         }
 
         Ok(rust_code)
+    }
+
+    /// Generate element segment initialization code for a table.
+    ///
+    /// `table_receiver` is the expression to access the table (e.g., "module.table" or "table").
+    fn emit_element_segments(&self, info: &ModuleInfo, table_receiver: &str) -> String {
+        let mut code = String::new();
+        for seg in &info.element_segments {
+            for (i, func_idx) in seg.func_indices.iter().enumerate() {
+                let table_idx = seg.offset + i;
+                let local_func_idx = *func_idx - info.num_imported_functions();
+                let type_idx = info
+                    .func_signatures
+                    .get(local_func_idx)
+                    .map(|s| s.type_idx)
+                    .unwrap_or(0);
+                code.push_str(&format!(
+                    "    {}.set({}, Some(FuncRef {{ type_index: {}, func_index: {} }})).unwrap();\n",
+                    table_receiver, table_idx, type_idx, local_func_idx
+                ));
+            }
+        }
+        code
     }
 
     /// Generate the `pub fn new() -> WasmModule` or `pub fn new() -> WasmResult<WasmModule>` constructor.
@@ -389,45 +414,13 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
             }
 
             // Element segment initialization
-            for seg in &info.element_segments {
-                for (i, func_idx) in seg.func_indices.iter().enumerate() {
-                    let table_idx = seg.offset + i;
-                    // func_idx is in global space (imports + locals).
-                    // Convert to local function index for lookup and storage.
-                    let local_func_idx = *func_idx - info.num_imported_functions();
-                    let type_idx = info
-                        .func_signatures
-                        .get(local_func_idx)
-                        .map(|s| s.type_idx)
-                        .unwrap_or(0);
-                    code.push_str(&format!(
-                        "    module.table.set({}, Some(FuncRef {{ type_index: {}, func_index: {} }})).unwrap();\n",
-                        table_idx, type_idx, local_func_idx
-                    ));
-                }
-            }
+            code.push_str(&self.emit_element_segments(info, "module.table"));
 
             code.push_str("    Ok(WasmModule(module))\n");
         } else if !info.element_segments.is_empty() {
             // Need mutable table for element initialization
             code.push_str(&format!("    let mut table = {};\n", table_init));
-            for seg in &info.element_segments {
-                for (i, func_idx) in seg.func_indices.iter().enumerate() {
-                    let table_idx = seg.offset + i;
-                    // func_idx is in global space (imports + locals).
-                    // Convert to local function index for lookup and storage.
-                    let local_func_idx = *func_idx - info.num_imported_functions();
-                    let type_idx = info
-                        .func_signatures
-                        .get(local_func_idx)
-                        .map(|s| s.type_idx)
-                        .unwrap_or(0);
-                    code.push_str(&format!(
-                        "    table.set({}, Some(FuncRef {{ type_index: {}, func_index: {} }})).unwrap();\n",
-                        table_idx, type_idx, local_func_idx
-                    ));
-                }
-            }
+            code.push_str(&self.emit_element_segments(info, "table"));
             code.push_str(&format!(
                 "    Ok(WasmModule(LibraryModule::new({}, table)))\n",
                 globals_init
@@ -500,13 +493,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
                 }
             }
 
-            let return_type = match &sig.return_type {
-                Some(ty) => {
-                    let rust_ty = self.wasm_type_to_rust(ty);
-                    format!("WasmResult<{rust_ty}>")
-                }
-                None => "WasmResult<()>".to_string(),
-            };
+            let return_type = self.format_return_type(sig.return_type.as_ref());
 
             // Generate method signature (with generics if needed)
             let generic_part = if generics.is_empty() {
@@ -897,15 +884,10 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
         sig.push(')');
 
         // Return type
-        match &ir_func.return_type {
-            Some(ty) => {
-                let rust_ty = self.wasm_type_to_rust(ty);
-                sig.push_str(&format!(" -> WasmResult<{rust_ty}>"));
-            }
-            None => {
-                sig.push_str(" -> WasmResult<()>");
-            }
-        }
+        sig.push_str(&format!(
+            " -> {}",
+            self.format_return_type(ir_func.return_type.as_ref())
+        ));
 
         sig
     }
@@ -1074,6 +1056,18 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
         }
     }
 
+    /// Format a Wasm return type as a Rust WasmResult type.
+    ///
+    /// Examples:
+    /// - `Some(I32)` → `"WasmResult<i32>"`
+    /// - `None` → `"WasmResult<()>"`
+    fn format_return_type(&self, ty: Option<&WasmType>) -> String {
+        match ty {
+            Some(t) => format!("WasmResult<{}>", self.wasm_type_to_rust(t)),
+            None => "WasmResult<()>".to_string(),
+        }
+    }
+
     /// Convert a GlobalInit to (Rust type string, value literal string).
     fn global_init_to_rust(&self, init: &GlobalInit, ty: &WasmType) -> (&'static str, String) {
         let rust_ty = self.wasm_type_to_rust(ty);
@@ -1126,16 +1120,16 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
         ));
 
         // Build the common args string for dispatch calls
-        let mut call_args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-        if has_globals {
-            call_args.push("globals".to_string());
-        }
-        if has_memory {
-            call_args.push("memory".to_string());
-        }
-        if has_table {
-            call_args.push("table".to_string());
-        }
+        let base_args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        let call_args = build_inner_call_args(
+            &base_args,
+            has_globals,
+            "globals",
+            has_memory,
+            "memory",
+            has_table,
+            "table",
+        );
         let args_str = call_args.join(", ");
 
         // Build dispatch match — only dispatch to functions with matching

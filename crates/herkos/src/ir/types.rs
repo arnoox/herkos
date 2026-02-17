@@ -718,11 +718,22 @@ pub struct ImportedGlobalDef {
 }
 
 /// Module-level information describing a WebAssembly module.
+/// Memory ownership model for a WebAssembly module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryMode {
+    /// Module owns its memory (declares the memory section).
+    Owned,
+    /// Module imports memory from the host.
+    Imported,
+    /// Module does not use memory.
+    None,
+}
+
 ///
 /// This is the IR representation of a module's structure and metadata,
 /// independent of any specific code generation backend. It includes memory
 /// layout, table configuration, globals, imports, exports, and code segments.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ModuleInfo {
     /// Whether the module declares linear memory.
     pub has_memory: bool,
@@ -788,5 +799,14 @@ impl ModuleInfo {
     /// Whether the module has a non-trivial table (for indirect calls).
     pub fn has_table(&self) -> bool {
         self.table_max > 0
+    }
+
+    /// Determine the memory ownership model.
+    pub fn memory_mode(&self) -> MemoryMode {
+        match (self.has_memory, self.has_memory_import) {
+            (true, false) => MemoryMode::Owned,
+            (false, true) => MemoryMode::Imported,
+            _ => MemoryMode::None,
+        }
     }
 }

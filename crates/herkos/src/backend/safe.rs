@@ -6,6 +6,46 @@
 use crate::backend::Backend;
 use crate::ir::*;
 
+const INDENT: &str = "                ";
+
+/// Format a function call result assignment.
+fn emit_call_result(dest: Option<VarId>, call_expr: &str) -> String {
+    match dest {
+        Some(d) => format!("{}{} = {};", INDENT, d, call_expr),
+        None => format!("{}{};", INDENT, call_expr),
+    }
+}
+
+/// Emit a f32 const, handling NaN and infinity special values.
+fn emit_f32_const(dest: VarId, value: f32) -> String {
+    if value.is_nan() {
+        format!("{}{dest} = f32::NAN;", INDENT)
+    } else if value.is_infinite() {
+        if value.is_sign_positive() {
+            format!("{}{dest} = f32::INFINITY;", INDENT)
+        } else {
+            format!("{}{dest} = f32::NEG_INFINITY;", INDENT)
+        }
+    } else {
+        format!("{}{dest} = {value}f32;", INDENT)
+    }
+}
+
+/// Emit a f64 const, handling NaN and infinity special values.
+fn emit_f64_const(dest: VarId, value: f64) -> String {
+    if value.is_nan() {
+        format!("{}{dest} = f64::NAN;", INDENT)
+    } else if value.is_infinite() {
+        if value.is_sign_positive() {
+            format!("{}{dest} = f64::INFINITY;", INDENT)
+        } else {
+            format!("{}{dest} = f64::NEG_INFINITY;", INDENT)
+        }
+    } else {
+        format!("{}{dest} = {value}f64;", INDENT)
+    }
+}
+
 /// Safe code generation backend.
 pub struct SafeBackend;
 
@@ -26,33 +66,8 @@ impl Backend for SafeBackend {
         match value {
             IrValue::I32(v) => format!("                {dest} = {v}i32;"),
             IrValue::I64(v) => format!("                {dest} = {v}i64;"),
-            IrValue::F32(v) => {
-                // Handle special float values
-                if v.is_nan() {
-                    format!("                {dest} = f32::NAN;")
-                } else if v.is_infinite() {
-                    if v.is_sign_positive() {
-                        format!("                {dest} = f32::INFINITY;")
-                    } else {
-                        format!("                {dest} = f32::NEG_INFINITY;")
-                    }
-                } else {
-                    format!("                {dest} = {v}f32;")
-                }
-            }
-            IrValue::F64(v) => {
-                if v.is_nan() {
-                    format!("                {dest} = f64::NAN;")
-                } else if v.is_infinite() {
-                    if v.is_sign_positive() {
-                        format!("                {dest} = f64::INFINITY;")
-                    } else {
-                        format!("                {dest} = f64::NEG_INFINITY;")
-                    }
-                } else {
-                    format!("                {dest} = {v}f64;")
-                }
-            }
+            IrValue::F32(v) => emit_f32_const(dest, *v),
+            IrValue::F64(v) => emit_f64_const(dest, *v),
         }
     }
 
@@ -490,10 +505,7 @@ impl Backend for SafeBackend {
             call_args.push("table".to_string());
         }
         let call_expr = format!("func_{}({})?", func_idx, call_args.join(", "));
-        match dest {
-            Some(d) => format!("                {} = {};", d, call_expr),
-            None => format!("                {};", call_expr),
-        }
+        emit_call_result(dest, &call_expr)
     }
 
     fn emit_call_import(
@@ -507,10 +519,7 @@ impl Backend for SafeBackend {
         // Note: module_name is ignored for now (Milestone 3 will use it for trait names)
         let args_str: Vec<String> = args.iter().map(|a| a.to_string()).collect();
         let call_expr = format!("host.{}({})?", func_name, args_str.join(", "));
-        match dest {
-            Some(d) => format!("                {} = {};", d, call_expr),
-            None => format!("                {};", call_expr),
-        }
+        emit_call_result(dest, &call_expr)
     }
 
     fn emit_global_get(&self, dest: VarId, index: usize, is_mutable: bool) -> String {
