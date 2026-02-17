@@ -17,7 +17,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies
+        run: sudo apt-get install -y clang lld
+
+      - name: Install kani-verifier
+        run: cargo install --locked kani-verifier && cargo kani setup
 
       - name: Build
         run: cargo build --all-targets
