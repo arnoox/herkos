@@ -1,6 +1,6 @@
 # herkos
 
-> This project is work in progress! Not all wasm features nor corner cases were tested!
+> ⚠️ *** This project is work in progress! Not all wasm features nor corner cases were tested!***
 
 A compilation pipeline that transpiles WebAssembly modules into memory-safe Rust code with compile-time isolation guarantees, replacing runtime hardware-based memory protection (MMU/MPU) with type-system-enforced safety.
 
@@ -21,13 +21,9 @@ The project is a Rust workspace with three core crates:
 | `herkos` | CLI transpiler: parses `.wasm` binaries, emits Rust source code |
 | `herkos-runtime` | `#![no_std]` runtime library shipped with transpiled output (`IsolatedMemory`, capability types, Wasm operations) |
 
-### Memory model
-
-WebAssembly linear memory maps to `IsolatedMemory<const MAX_PAGES: usize>`, a flat `[[u8; PAGE_SIZE]; MAX_PAGES]` array with page-level const generics. All accesses go through bounds-checked `load<T>`/`store<T>`. Fully `no_std` compatible with zero heap allocation.
-
-### Capability-based security
-
-Wasm imports become Rust trait bounds on a generic host parameter. If a module doesn't import a capability, the trait bound isn't present; no code path to call it. Zero-cost via monomorphization.
+Features:
+- compile time isolation
+- compile time capability based security access via traits
 
 ## Build and test
 
