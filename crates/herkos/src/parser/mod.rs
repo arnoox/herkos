@@ -185,6 +185,111 @@ fn eval_const_expr(const_expr: wasmparser::ConstExpr) -> Result<InitValue> {
     }
 }
 
+/// Parse an active element segment, or return None for passive/declared segments.
+fn parse_element_segment(element: wasmparser::Element) -> Result<Option<ElementSegment>> {
+    match element.kind {
+        wasmparser::ElementKind::Active {
+            table_index,
+            offset_expr,
+        } => {
+            // table_index is Option<u32>; None means table 0 (MVP default)
+            let tidx = table_index.unwrap_or(0);
+            if tidx != 0 {
+                anyhow::bail!(
+                    "Multi-table element segments not supported (table_index={})",
+                    tidx
+                );
+            }
+
+            let offset = match eval_const_expr(offset_expr)? {
+                InitValue::I32(v) => v as u32,
+                _ => anyhow::bail!("Element segment offset must be i32"),
+            };
+
+            // Collect function indices from element items
+            let mut func_indices = Vec::new();
+            match element.items {
+                wasmparser::ElementItems::Functions(funcs) => {
+                    for func_idx in funcs {
+                        let idx = func_idx.context("reading element func index")?;
+                        func_indices.push(idx);
+                    }
+                }
+                wasmparser::ElementItems::Expressions(..) => {
+                    anyhow::bail!("Expression-based element segments not supported");
+                }
+            }
+
+            Ok(Some(ElementSegment {
+                offset,
+                func_indices,
+            }))
+        }
+        wasmparser::ElementKind::Passive | wasmparser::ElementKind::Declared => {
+            // Skip passive/declared element segments
+            Ok(None)
+        }
+    }
+}
+
+/// Parse an active data segment, or return None for passive segments.
+fn parse_data_segment(data: wasmparser::Data) -> Result<Option<DataSegment>> {
+    match data.kind {
+        wasmparser::DataKind::Active {
+            memory_index: 0,
+            offset_expr,
+        } => {
+            let offset = match eval_const_expr(offset_expr)? {
+                InitValue::I32(v) => v as u32,
+                _ => anyhow::bail!("Data segment offset must be i32"),
+            };
+            Ok(Some(DataSegment {
+                offset,
+                data: data.data.to_vec(),
+            }))
+        }
+        wasmparser::DataKind::Passive => {
+            // Skip passive data segments (used with memory.init)
+            Ok(None)
+        }
+        wasmparser::DataKind::Active { memory_index, .. } => {
+            anyhow::bail!(
+                "Multi-memory data segments not supported (memory_index={})",
+                memory_index
+            );
+        }
+    }
+}
+
+/// Parse a function code section entry, extracting locals and bytecode.
+fn parse_code_entry(body: wasmparser::FunctionBody, type_idx: u32) -> Result<ParsedFunction> {
+    // Extract locals
+    let mut locals = Vec::new();
+    let locals_reader = body.get_locals_reader().context("getting locals reader")?;
+    for local in locals_reader {
+        let (count, val_type) = local.context("reading local")?;
+        for _ in 0..count {
+            locals.push(val_type);
+        }
+    }
+
+    // Extract operators as raw bytes (parsed later in the IR builder)
+    let operators_reader = body
+        .get_operators_reader()
+        .context("getting operators reader")?;
+    let mut binary_reader = operators_reader.get_binary_reader();
+    let remaining = binary_reader.bytes_remaining();
+    let body_bytes = binary_reader
+        .read_bytes(remaining)
+        .context("reading body bytes")?;
+
+    Ok(ParsedFunction {
+        type_idx,
+        locals,
+        body: body_bytes.to_vec(),
+    })
+}
+
 /// Parse a WebAssembly binary into a structured module.
 pub fn parse_wasm(wasm_bytes: &[u8]) -> Result<ParsedModule> {
     let parser = Parser::new(0);
@@ -268,32 +373,9 @@ pub fn parse_wasm(wasm_bytes: &[u8]) -> Result<ParsedModule> {
             }
 
             Payload::CodeSectionEntry(body) => {
-                // Extract locals
-                let mut locals = Vec::new();
-                let locals_reader = body.get_locals_reader().context("getting locals reader")?;
-                for local in locals_reader {
-                    let (count, val_type) = local.context("reading local")?;
-                    for _ in 0..count {
-                        locals.push(val_type);
-                    }
-                }
-
-                // Extract operators as raw bytes
-                // (We'll parse them later in the IR builder)
-                let operators_reader = body
-                    .get_operators_reader()
-                    .context("getting operators reader")?;
-                let mut binary_reader = operators_reader.get_binary_reader();
-                let remaining = binary_reader.bytes_remaining();
-                let body_bytes = binary_reader
-                    .read_bytes(remaining)
-                    .context("reading body bytes")?;
-
-                functions.push(ParsedFunction {
-                    type_idx: function_types[functions.len()], // Match with function section
-                    locals,
-                    body: body_bytes.to_vec(),
-                });
+                let type_idx = function_types[functions.len()]; // Match with function section
+                let parsed_func = parse_code_entry(body, type_idx)?;
+                functions.push(parsed_func);
             }
 
             Payload::MemorySection(reader) => {
@@ -321,46 +403,8 @@ pub fn parse_wasm(wasm_bytes: &[u8]) -> Result<ParsedModule> {
             Payload::ElementSection(reader) => {
                 for element in reader {
                     let element = element.context("reading element segment")?;
-                    match element.kind {
-                        wasmparser::ElementKind::Active {
-                            table_index,
-                            offset_expr,
-                        } => {
-                            // table_index is Option<u32>; None means table 0 (MVP default)
-                            let tidx = table_index.unwrap_or(0);
-                            if tidx != 0 {
-                                anyhow::bail!(
-                                    "Multi-table element segments not supported (table_index={})",
-                                    tidx
-                                );
-                            }
-                            let offset = match eval_const_expr(offset_expr)? {
-                                InitValue::I32(v) => v as u32,
-                                _ => anyhow::bail!("Element segment offset must be i32"),
-                            };
-                            // Collect function indices from element items
-                            let mut func_indices = Vec::new();
-                            match element.items {
-                                wasmparser::ElementItems::Functions(funcs) => {
-                                    for func_idx in funcs {
-                                        let idx = func_idx.context("reading element func index")?;
-                                        func_indices.push(idx);
-                                    }
-                                }
-                                wasmparser::ElementItems::Expressions(..) => {
-                                    anyhow::bail!(
-                                        "Expression-based element segments not supported"
-                                    );
-                                }
-                            }
-                            element_segments.push(ElementSegment {
-                                offset,
-                                func_indices,
-                            });
-                        }
-                        wasmparser::ElementKind::Passive | wasmparser::ElementKind::Declared => {
-                            // Skip passive/declared element segments
-                        }
+                    if let Some(segment) = parse_element_segment(element)? {
+                        element_segments.push(segment);
                     }
                 }
             }
@@ -398,29 +442,8 @@ pub fn parse_wasm(wasm_bytes: &[u8]) -> Result<ParsedModule> {
             Payload::DataSection(reader) => {
                 for data in reader {
                     let data = data.context("reading data segment")?;
-                    match data.kind {
-                        wasmparser::DataKind::Active {
-                            memory_index: 0,
-                            offset_expr,
-                        } => {
-                            let offset = match eval_const_expr(offset_expr)? {
-                                InitValue::I32(v) => v as u32,
-                                _ => anyhow::bail!("Data segment offset must be i32"),
-                            };
-                            data_segments.push(DataSegment {
-                                offset,
-                                data: data.data.to_vec(),
-                            });
-                        }
-                        wasmparser::DataKind::Passive => {
-                            // Skip passive data segments (used with memory.init)
-                        }
-                        wasmparser::DataKind::Active { memory_index, .. } => {
-                            anyhow::bail!(
-                                "Multi-memory data segments not supported (memory_index={})",
-                                memory_index
-                            );
-                        }
+                    if let Some(segment) = parse_data_segment(data)? {
+                        data_segments.push(segment);
                     }
                 }
             }

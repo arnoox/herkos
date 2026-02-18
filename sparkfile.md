@@ -1,0 +1,16 @@
+- benchmark embedded (code size + runtime performance)
+- benchmark transpiler (runtime performance)
+- for testing: wat generator, for transpiler testing purpose, deterministic, input: function size, # of function, # of imports, # of globals, memory size, ...
+- transpiler can generate mocks for making 1st time integration easier.
+- code coverage tooling + runtime.
+- test on hardware.
+- import embedded hal.
+- host side helpers for manipulating memory, taking endianess into account.
+- determinism
+- provide simpl example project
+- think of a more complex project with embedded. E.g. embedded, i2c, accelration sensor, send data over mqtt.
+- verifier in a seprated repo
+- make all crate names consistent
+- make the transpiler's lib side work like the cc crate in a build.rs
+- --max-pages has no effect!
+- Getting started section is too big.
