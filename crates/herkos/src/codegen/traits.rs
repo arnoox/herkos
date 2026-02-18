@@ -27,7 +27,7 @@ where
     for imp in imports {
         grouped
             .entry(get_module(imp).to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(imp);
     }
     grouped

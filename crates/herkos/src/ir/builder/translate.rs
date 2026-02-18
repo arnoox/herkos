@@ -1,248 +1,16 @@
-//! IR builder — translates WebAssembly bytecode to SSA-form IR.
+//! Operator translation - converts WebAssembly bytecode to SSA IR instructions.
 //!
-//! This module implements a modified stack machine interpreter that generates
-//! IR instructions instead of executing them. Each value on the Wasm evaluation
-//! stack becomes an SSA variable.
+//! This module contains the `translate_operator` method and related emit helpers
+//! that form the core of the Wasm-to-IR conversion logic.
 
-use super::types::*;
-use crate::parser::{ExportKind, ImportKind, ParsedModule};
-use crate::TranspileOptions;
+use super::super::types::*;
+use super::core::IrBuilder;
 use anyhow::{bail, Context, Result};
-use wasmparser::{Operator, ValType};
-
-/// Control flow frame for tracking nested blocks/loops/if.
-#[derive(Debug, Clone)]
-struct ControlFrame {
-    /// Kind of control structure
-    kind: ControlKind,
-
-    /// Start block (where loop branches return to)
-    start_block: BlockId,
-
-    /// End block (where forward branches go to)
-    end_block: BlockId,
-
-    /// Else block (for If constructs - where the false branch goes)
-    else_block: Option<BlockId>,
-
-    /// Result type (None for void)
-    result_type: Option<WasmType>,
-
-    /// Result variable (for blocks with result type - PHI node)
-    result_var: Option<VarId>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ControlKind {
-    Block, // Forward branches only
-    Loop,  // Backward branch to start
-    If,    // Conditional with possible else
-    Else,  // Else branch of if
-}
-
-/// Module-level context for function translation.
-///
-/// Contains information about the module's functions, types, and imports that
-/// is needed during translation of individual functions.
-#[derive(Debug, Clone)]
-pub struct ModuleContext {
-    /// Callee function signatures: (param_count, return_type) per function index.
-    pub func_signatures: Vec<(usize, Option<WasmType>)>,
-
-    /// Type section signatures: (param_count, return_type) per type index.
-    /// Used for call_indirect to resolve the expected type signature.
-    pub type_signatures: Vec<(usize, Option<WasmType>)>,
-
-    /// Number of imported functions (these occupy indices 0..N-1 in the
-    /// function index space, before local functions).
-    pub num_imported_functions: usize,
-
-    /// Function import details: (module_name, func_name) for each imported function.
-    /// Indexed by import_idx (0..num_imported_functions-1).
-    pub func_imports: Vec<(String, String)>,
-}
-
-/// IR builder state.
-pub struct IrBuilder {
-    /// All blocks created so far
-    blocks: Vec<IrBlock>,
-
-    /// Current block being built
-    current_block: BlockId,
-
-    /// Next variable ID to allocate
-    next_var_id: u32,
-
-    /// Next block ID to allocate
-    next_block_id: u32,
-
-    /// Wasm value stack (now SSA variables instead of actual values)
-    value_stack: Vec<VarId>,
-
-    /// Control flow stack for nested blocks/loops/if
-    control_stack: Vec<ControlFrame>,
-
-    /// Mapping from Wasm local index → VarId.
-    /// Populated at the start of each `translate_function` call.
-    /// Indices 0..param_count-1 are parameters; param_count.. are declared locals.
-    local_vars: Vec<VarId>,
-
-    /// Callee function signatures: (param_count, return_type) per function index.
-    /// Set at the start of each `translate_function` call.
-    func_signatures: Vec<(usize, Option<WasmType>)>,
-
-    /// Type section signatures: (param_count, return_type) per type index.
-    /// Used for call_indirect to resolve the expected type signature.
-    type_signatures: Vec<(usize, Option<WasmType>)>,
-
-    /// Number of imported functions (these occupy indices 0..N-1 in the
-    /// function index space, before local functions).
-    num_imported_functions: usize,
-
-    /// Function import details: (module_name, func_name) for each imported function.
-    /// Indexed by import_idx (0..num_imported_functions-1).
-    func_imports: Vec<(String, String)>,
-}
+use wasmparser::Operator;
 
 impl IrBuilder {
-    /// Create a new IR builder.
-    ///
-    /// INVARIANT: The first block created (via `new_block()`) will always be `BlockId(0)`,
-    /// which serves as the entry block for the function. This matches WebAssembly semantics
-    /// where execution always starts at the first instruction (byte offset 0).
-    pub fn new() -> Self {
-        Self {
-            blocks: Vec::new(),
-            current_block: BlockId(0), // Entry block (will be created first)
-            next_var_id: 0,
-            next_block_id: 0, // First call to new_block() returns BlockId(0)
-            value_stack: Vec::new(),
-            control_stack: Vec::new(),
-            local_vars: Vec::new(),
-            func_signatures: Vec::new(),
-            type_signatures: Vec::new(),
-            num_imported_functions: 0,
-            func_imports: Vec::new(),
-        }
-    }
-
-    /// Allocate a new SSA variable.
-    fn new_var(&mut self) -> VarId {
-        let id = VarId(self.next_var_id);
-        self.next_var_id += 1;
-        id
-    }
-
-    /// Allocate a new basic block.
-    fn new_block(&mut self) -> BlockId {
-        let id = BlockId(self.next_block_id);
-        self.next_block_id += 1;
-        id
-    }
-
-    /// Emit an instruction to the current block.
-    fn emit(&mut self, instr: IrInstr) {
-        if let Some(block) = self.blocks.iter_mut().find(|b| b.id == self.current_block) {
-            block.instructions.push(instr);
-        } else {
-            // Current block doesn't exist yet, create it
-            self.blocks.push(IrBlock {
-                id: self.current_block,
-                label: format!("block_{}", self.current_block.0),
-                instructions: vec![instr],
-                terminator: IrTerminator::Unreachable, // Will be set later
-            });
-        }
-    }
-
-    /// Set the terminator for the current block.
-    fn terminate(&mut self, term: IrTerminator) {
-        if let Some(block) = self.blocks.iter_mut().find(|b| b.id == self.current_block) {
-            block.terminator = term;
-        }
-    }
-
-    /// Translate a function from Wasm bytecode to IR.
-    fn translate_function(
-        &mut self,
-        params: &[(ValType, WasmType)],
-        locals: &[ValType],
-        return_type: Option<WasmType>,
-        operators: &[Operator],
-        module_ctx: &ModuleContext,
-    ) -> Result<IrFunction> {
-        // Reset per-function state so each function starts fresh
-        self.blocks.clear();
-        self.value_stack.clear();
-        self.control_stack.clear();
-        self.next_var_id = 0;
-        self.next_block_id = 0;
-        self.current_block = BlockId(0);
-        self.local_vars.clear();
-        self.func_signatures = module_ctx.func_signatures.clone();
-        self.type_signatures = module_ctx.type_signatures.clone();
-        self.num_imported_functions = module_ctx.num_imported_functions;
-        self.func_imports = module_ctx.func_imports.clone();
-
-        // Allocate VarIds for all locals (params first, then declared locals).
-        // This ensures local_index maps directly to the correct VarId.
-        let mut local_index_to_var: Vec<VarId> = Vec::new();
-
-        // Allocate variables for parameters
-        let param_vars: Vec<(VarId, WasmType)> = params
-            .iter()
-            .map(|(_, ty)| {
-                let var = self.new_var();
-                local_index_to_var.push(var);
-                (var, *ty)
-            })
-            .collect();
-
-        // Allocate variables for declared locals (zero-initialized by Wasm spec)
-        let mut func_locals: Vec<(VarId, WasmType)> = Vec::new();
-        for vt in locals {
-            let ty = WasmType::from_wasmparser(*vt);
-            let var = self.new_var();
-            local_index_to_var.push(var);
-            func_locals.push((var, ty));
-        }
-
-        self.local_vars = local_index_to_var;
-
-        // Create entry block
-        // INVARIANT: This is the first call to new_block(), so entry == BlockId(0).
-        // All WebAssembly functions start execution at the first instruction,
-        // so we always begin with block 0 as the entry point.
-        let entry = self.new_block(); // Returns BlockId(0)
-        self.current_block = entry;
-        self.blocks.push(IrBlock {
-            id: entry,
-            label: format!("block_{}", entry.0), // "block_0"
-            instructions: Vec::new(),
-            terminator: IrTerminator::Unreachable,
-        });
-
-        // Push function-level control frame
-        self.push_control(ControlKind::Block, entry, entry, None, return_type);
-
-        // Translate each Wasm operator to IR
-        for op in operators {
-            self.translate_operator(op)
-                .with_context(|| format!("translating operator {:?}", op))?;
-        }
-
-        // Build final function
-        Ok(IrFunction {
-            params: param_vars,
-            locals: func_locals,
-            blocks: self.blocks.clone(),
-            entry_block: entry,
-            return_type,
-        })
-    }
-
     /// Translate a single Wasm operator to IR instructions.
-    fn translate_operator(&mut self, op: &Operator) -> Result<()> {
+    pub(super) fn translate_operator(&mut self, op: &Operator) -> Result<()> {
         match op {
             // Constants
             Operator::I32Const { value } => {
@@ -533,8 +301,8 @@ impl IrBuilder {
                     // End of block/loop/if/else
                     let frame = self.pop_control()?;
 
-                    // If this is an If without Else, we need to create the else block
-                    if frame.kind == ControlKind::If {
+                    // Check if this is an If frame
+                    if frame.kind == super::core::ControlKind::If {
                         if let Some(else_block) = frame.else_block {
                             // Then branch: assign result if needed (only if value is on stack)
                             if let Some(result_var) = frame.result_var {
@@ -767,7 +535,7 @@ impl IrBuilder {
                 let start_block = self.current_block;
 
                 self.push_control(
-                    ControlKind::Block,
+                    super::core::ControlKind::Block,
                     start_block,
                     end_block,
                     None,
@@ -793,7 +561,13 @@ impl IrBuilder {
 
                 // Start building loop body
                 self.start_block(loop_header);
-                self.push_control(ControlKind::Loop, loop_header, end_block, None, result_type);
+                self.push_control(
+                    super::core::ControlKind::Loop,
+                    loop_header,
+                    end_block,
+                    None,
+                    result_type,
+                );
             }
 
             Operator::If { blockty } => {
@@ -823,7 +597,7 @@ impl IrBuilder {
                 // Start then block
                 self.start_block(then_block);
                 self.push_control(
-                    ControlKind::If,
+                    super::core::ControlKind::If,
                     then_block,
                     end_block,
                     Some(else_block),
@@ -837,7 +611,7 @@ impl IrBuilder {
                 // Pop if frame
                 let if_frame = self.pop_control().context("else without matching if")?;
 
-                if if_frame.kind != ControlKind::If {
+                if if_frame.kind != super::core::ControlKind::If {
                     bail!("else without matching if");
                 }
 
@@ -866,8 +640,8 @@ impl IrBuilder {
 
                 // Push else frame (same end block, same result_var, no else_block needed)
                 // We manually create the frame to preserve result_var
-                self.control_stack.push(ControlFrame {
-                    kind: ControlKind::Else,
+                self.control_stack.push(super::core::ControlFrame {
+                    kind: super::core::ControlKind::Else,
                     start_block: else_block,
                     end_block: if_frame.end_block,
                     else_block: None,
@@ -1067,7 +841,7 @@ impl IrBuilder {
     }
 
     /// Emit a binary operation.
-    fn emit_binop(&mut self, op: BinOp) -> Result<()> {
+    pub(super) fn emit_binop(&mut self, op: BinOp) -> Result<()> {
         if self.value_stack.len() < 2 {
             bail!("Stack underflow for binary operation {:?}", op);
         }
@@ -1089,7 +863,7 @@ impl IrBuilder {
     }
 
     /// Emit a unary operation.
-    fn emit_unop(&mut self, op: UnOp) -> Result<()> {
+    pub(super) fn emit_unop(&mut self, op: UnOp) -> Result<()> {
         if self.value_stack.is_empty() {
             bail!("Stack underflow for unary operation {:?}", op);
         }
@@ -1108,13 +882,13 @@ impl IrBuilder {
 
     /// Emit a full-width memory load instruction.
     /// Stack: [addr] -> [value]
-    fn emit_load(&mut self, ty: WasmType, offset: u64) -> Result<()> {
+    pub(super) fn emit_load(&mut self, ty: WasmType, offset: u64) -> Result<()> {
         self.emit_load_ext(ty, offset, MemoryAccessWidth::Full, None)
     }
 
     /// Emit a sub-width memory load instruction with extension.
     /// Stack: [addr] -> [value]
-    fn emit_load_ext(
+    pub(super) fn emit_load_ext(
         &mut self,
         ty: WasmType,
         offset: u64,
@@ -1146,13 +920,13 @@ impl IrBuilder {
 
     /// Emit a full-width memory store instruction.
     /// Stack: [addr, value] -> []
-    fn emit_store(&mut self, ty: WasmType, offset: u64) -> Result<()> {
+    pub(super) fn emit_store(&mut self, ty: WasmType, offset: u64) -> Result<()> {
         self.emit_store_narrow(ty, offset, MemoryAccessWidth::Full)
     }
 
     /// Emit a sub-width memory store instruction.
     /// Stack: [addr, value] -> []
-    fn emit_store_narrow(
+    pub(super) fn emit_store_narrow(
         &mut self,
         ty: WasmType,
         offset: u64,
@@ -1181,767 +955,5 @@ impl IrBuilder {
 
         // Store has no result
         Ok(())
-    }
-
-    /// Push a control frame onto the control stack.
-    fn push_control(
-        &mut self,
-        kind: ControlKind,
-        start_block: BlockId,
-        end_block: BlockId,
-        else_block: Option<BlockId>,
-        result_type: Option<WasmType>,
-    ) {
-        // Allocate a result variable if block has result type
-        let result_var = if result_type.is_some() {
-            Some(self.new_var())
-        } else {
-            None
-        };
-
-        self.control_stack.push(ControlFrame {
-            kind,
-            start_block,
-            end_block,
-            else_block,
-            result_type,
-            result_var,
-        });
-    }
-
-    /// Pop a control frame from the control stack.
-    fn pop_control(&mut self) -> Result<ControlFrame> {
-        self.control_stack
-            .pop()
-            .ok_or_else(|| anyhow::anyhow!("Control stack underflow"))
-    }
-
-    /// Get branch target for relative depth N.
-    ///
-    /// Depth 0 = innermost frame, depth 1 = next outer, etc.
-    /// For loops: branch to start_block
-    /// For blocks/if: branch to end_block
-    fn get_branch_target(&self, depth: u32) -> Result<BlockId> {
-        let frame_idx = self
-            .control_stack
-            .len()
-            .checked_sub(depth as usize + 1)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Branch depth {} exceeds control stack depth {}",
-                    depth,
-                    self.control_stack.len()
-                )
-            })?;
-
-        let frame = &self.control_stack[frame_idx];
-
-        // Loops branch back to start, others branch forward to end
-        let target = match frame.kind {
-            ControlKind::Loop => frame.start_block,
-            _ => frame.end_block,
-        };
-
-        Ok(target)
-    }
-
-    /// Start a new block (create and switch to it).
-    fn start_block(&mut self, block_id: BlockId) {
-        self.current_block = block_id;
-        self.blocks.push(IrBlock {
-            id: block_id,
-            label: format!("block_{}", block_id.0),
-            instructions: Vec::new(),
-            terminator: IrTerminator::Unreachable,
-        });
-    }
-}
-
-impl Default for IrBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Build complete module metadata from a parsed WebAssembly module.
-///
-/// This is the main entry point for IR construction, coordinating all
-/// the intermediate steps needed to produce a fully-formed ModuleInfo.
-pub fn build_module_info(parsed: &ParsedModule, options: &TranspileOptions) -> Result<ModuleInfo> {
-    // Analyze module structure (memory, table, types)
-    let mem_info = extract_memory_info(parsed, options)?;
-    let table_info = extract_table_info(parsed);
-    let (canonical_type, type_sigs) = build_type_mappings(parsed);
-
-    // Analyze imports
-    let imported_globals = build_imported_globals(parsed);
-    let num_imported_functions = parsed.num_imported_functions;
-
-    // Translate WebAssembly to intermediate representation
-    let ir_functions = build_ir_functions(parsed, &type_sigs, num_imported_functions)?;
-
-    // Assemble module metadata for code generation
-    assemble_module_metadata(
-        parsed,
-        &mem_info,
-        &table_info,
-        &canonical_type,
-        ir_functions,
-        num_imported_functions as usize,
-        &imported_globals,
-    )
-}
-
-/// Memory information extracted from the module.
-struct MemoryInfo {
-    has_memory: bool,
-    has_memory_import: bool,
-    max_pages: usize,
-    initial_pages: usize,
-}
-
-/// Table information extracted from the module.
-struct TableInfo {
-    initial: usize,
-    max: usize,
-}
-
-/// Extracts memory information from a parsed WASM module.
-fn extract_memory_info(parsed: &ParsedModule, options: &TranspileOptions) -> Result<MemoryInfo> {
-    let has_memory = parsed.memory.is_some();
-    let has_memory_import = parsed
-        .imports
-        .iter()
-        .any(|imp| matches!(imp.kind, ImportKind::Memory { .. }));
-    let max_pages = if let Some(ref mem) = parsed.memory {
-        mem.maximum_pages
-            .map(|p| p as usize)
-            .unwrap_or(options.max_pages)
-    } else {
-        options.max_pages
-    };
-    let initial_pages = parsed
-        .memory
-        .as_ref()
-        .map(|m| m.initial_pages as usize)
-        .unwrap_or(0);
-
-    Ok(MemoryInfo {
-        has_memory,
-        has_memory_import,
-        max_pages,
-        initial_pages,
-    })
-}
-
-/// Extracts table information from a parsed WASM module.
-fn extract_table_info(parsed: &ParsedModule) -> TableInfo {
-    if let Some(ref tbl) = parsed.table {
-        TableInfo {
-            initial: tbl.initial_size as usize,
-            max: (tbl.max_size.unwrap_or(tbl.initial_size) as usize),
-        }
-    } else {
-        TableInfo { initial: 0, max: 0 }
-    }
-}
-
-/// Builds canonical type index mapping and type signatures.
-///
-/// Canonical mapping ensures that call_indirect type checks follow the Wasm spec:
-/// two different type indices with identical (params, results) must match.
-/// We map each type_idx to the smallest index with the same structural signature.
-fn build_type_mappings(parsed: &ParsedModule) -> (Vec<usize>, Vec<(usize, Option<WasmType>)>) {
-    let canonical_type: Vec<usize> = {
-        let mut mapping = Vec::with_capacity(parsed.types.len());
-        for (i, ty) in parsed.types.iter().enumerate() {
-            let canon = parsed.types[..i]
-                .iter()
-                .position(|earlier| {
-                    earlier.params() == ty.params() && earlier.results() == ty.results()
-                })
-                .map(|pos| mapping[pos])
-                .unwrap_or(i);
-            mapping.push(canon);
-        }
-        mapping
-    };
-
-    let type_sigs: Vec<(usize, Option<WasmType>)> = parsed
-        .types
-        .iter()
-        .map(|ty| {
-            let param_count = ty.params().len();
-            let ret = ty
-                .results()
-                .first()
-                .map(|vt| WasmType::from_wasmparser(*vt));
-            (param_count, ret)
-        })
-        .collect();
-
-    (canonical_type, type_sigs)
-}
-
-/// Extracts imported globals from a parsed WASM module.
-fn build_imported_globals(parsed: &ParsedModule) -> Vec<ImportedGlobalDef> {
-    parsed
-        .imports
-        .iter()
-        .filter_map(|imp| {
-            if let ImportKind::Global { val_type, mutable } = &imp.kind {
-                Some(ImportedGlobalDef {
-                    module_name: imp.module_name.clone(),
-                    name: imp.name.clone(),
-                    wasm_type: WasmType::from_wasmparser(*val_type),
-                    mutable: *mutable,
-                })
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-/// Translates all functions in the module to intermediate representation.
-fn build_ir_functions(
-    parsed: &ParsedModule,
-    type_sigs: &[(usize, Option<WasmType>)],
-    num_imported_functions: u32,
-) -> Result<Vec<IrFunction>> {
-    let mut ir_builder = IrBuilder::new();
-    let mut ir_functions = Vec::new();
-
-    // Build function signature list (imported + local)
-    let func_sigs = build_function_signatures(parsed);
-
-    // Build function import list for IR builder
-    let func_imports: Vec<(String, String)> = parsed
-        .imports
-        .iter()
-        .filter_map(|imp| match &imp.kind {
-            ImportKind::Function(_) => Some((imp.module_name.clone(), imp.name.clone())),
-            _ => None,
-        })
-        .collect();
-
-    let module_ctx = ModuleContext {
-        func_signatures: func_sigs,
-        type_signatures: type_sigs.to_vec(),
-        num_imported_functions: num_imported_functions as usize,
-        func_imports,
-    };
-
-    for (func_idx, func) in parsed.functions.iter().enumerate() {
-        let func_type = &parsed.types[func.type_idx as usize];
-
-        let params: Vec<_> = func_type
-            .params()
-            .iter()
-            .map(|vt| (*vt, WasmType::from_wasmparser(*vt)))
-            .collect();
-
-        let return_type = func_type
-            .results()
-            .first()
-            .map(|vt| WasmType::from_wasmparser(*vt));
-
-        let operators = parse_function_operators(&func.body)?;
-
-        let ir_func = ir_builder
-            .translate_function(&params, &func.locals, return_type, &operators, &module_ctx)
-            .with_context(|| format!("failed to build IR for function {}", func_idx))?;
-
-        ir_functions.push(ir_func);
-    }
-
-    Ok(ir_functions)
-}
-
-/// Builds the function signature list (imported functions followed by local functions).
-fn build_function_signatures(parsed: &ParsedModule) -> Vec<(usize, Option<WasmType>)> {
-    let mut func_sigs: Vec<(usize, Option<WasmType>)> = Vec::new();
-
-    // Imported function signatures
-    for import in &parsed.imports {
-        if let ImportKind::Function(type_idx) = &import.kind {
-            let func_type = &parsed.types[*type_idx as usize];
-            let param_count = func_type.params().len();
-            let ret = func_type
-                .results()
-                .first()
-                .map(|vt| WasmType::from_wasmparser(*vt));
-            func_sigs.push((param_count, ret));
-        }
-    }
-
-    // Local function signatures
-    for func in &parsed.functions {
-        let func_type = &parsed.types[func.type_idx as usize];
-        let param_count = func_type.params().len();
-        let ret = func_type
-            .results()
-            .first()
-            .map(|vt| WasmType::from_wasmparser(*vt));
-        func_sigs.push((param_count, ret));
-    }
-
-    func_sigs
-}
-
-/// Parses Wasm operators from a function body.
-fn parse_function_operators(body: &[u8]) -> Result<Vec<Operator<'_>>> {
-    let mut operators = Vec::new();
-    let mut binary_reader = wasmparser::BinaryReader::new(body, 0);
-
-    while !binary_reader.eof() {
-        let op = binary_reader
-            .read_operator()
-            .context("failed to read operator")?;
-        operators.push(op);
-    }
-
-    Ok(operators)
-}
-
-/// Assembles module metadata for code generation.
-#[allow(clippy::too_many_arguments)]
-fn assemble_module_metadata(
-    parsed: &ParsedModule,
-    mem_info: &MemoryInfo,
-    table_info: &TableInfo,
-    canonical_type: &[usize],
-    ir_functions: Vec<IrFunction>,
-    num_imported_functions: usize,
-    imported_globals: &[ImportedGlobalDef],
-) -> Result<ModuleInfo> {
-    let globals = build_globals(parsed);
-    let data_segments = build_data_segments(parsed);
-    let element_segments = build_element_segments(parsed);
-    let func_exports = build_function_exports(parsed, num_imported_functions);
-    let func_signatures =
-        build_function_type_signatures(parsed, canonical_type, &ir_functions, imported_globals);
-    let type_signatures = build_call_indirect_signatures(parsed);
-    let func_imports = build_function_imports(parsed);
-
-    Ok(ModuleInfo {
-        has_memory: mem_info.has_memory,
-        has_memory_import: mem_info.has_memory_import,
-        max_pages: mem_info.max_pages,
-        initial_pages: mem_info.initial_pages,
-        table_initial: table_info.initial,
-        table_max: table_info.max,
-        element_segments,
-        globals,
-        data_segments,
-        func_exports,
-        func_signatures,
-        type_signatures,
-        canonical_type: canonical_type.to_vec(),
-        func_imports,
-        imported_globals: imported_globals.to_vec(),
-        ir_functions,
-    })
-}
-
-/// Builds global variable definitions.
-fn build_globals(parsed: &ParsedModule) -> Vec<GlobalDef> {
-    parsed
-        .globals
-        .iter()
-        .map(|g| {
-            let wasm_type = WasmType::from_wasmparser(g.val_type);
-            let init_value = match g.init_value {
-                crate::parser::InitValue::I32(v) => GlobalInit::I32(v),
-                crate::parser::InitValue::I64(v) => GlobalInit::I64(v),
-                crate::parser::InitValue::F32(v) => GlobalInit::F32(v),
-                crate::parser::InitValue::F64(v) => GlobalInit::F64(v),
-            };
-            GlobalDef {
-                wasm_type,
-                mutable: g.mutable,
-                init_value,
-            }
-        })
-        .collect()
-}
-
-/// Builds data segment definitions.
-fn build_data_segments(parsed: &ParsedModule) -> Vec<DataSegmentDef> {
-    parsed
-        .data_segments
-        .iter()
-        .map(|ds| DataSegmentDef {
-            offset: ds.offset,
-            data: ds.data.clone(),
-        })
-        .collect()
-}
-
-/// Builds element segment (table initialization) definitions.
-fn build_element_segments(parsed: &ParsedModule) -> Vec<ElementSegmentDef> {
-    parsed
-        .element_segments
-        .iter()
-        .map(|es| ElementSegmentDef {
-            offset: es.offset as usize,
-            func_indices: es.func_indices.iter().map(|idx| *idx as usize).collect(),
-        })
-        .collect()
-}
-
-/// Builds exported function definitions.
-///
-/// Export indices use global numbering (imports + locals). We filter to local
-/// functions and offset to local function index space for codegen (func_0, func_1, ...).
-fn build_function_exports(parsed: &ParsedModule, num_imported_functions: usize) -> Vec<FuncExport> {
-    parsed
-        .exports
-        .iter()
-        .filter(|e| e.kind == ExportKind::Func && (e.index as usize) >= num_imported_functions)
-        .map(|e| FuncExport {
-            name: e.name.clone(),
-            func_index: (e.index as usize) - num_imported_functions,
-        })
-        .collect()
-}
-
-/// Builds function type signatures for exported functions.
-///
-/// This is indexed by local function index (0-based, excluding imports) and includes
-/// the `needs_host` flag to indicate if a function requires a host parameter.
-fn build_function_type_signatures(
-    parsed: &ParsedModule,
-    canonical_type: &[usize],
-    ir_functions: &[IrFunction],
-    imported_globals: &[ImportedGlobalDef],
-) -> Vec<FuncSignature> {
-    let num_imported_globals = imported_globals.len();
-    parsed
-        .functions
-        .iter()
-        .enumerate()
-        .map(|(func_idx, func)| {
-            let func_type = &parsed.types[func.type_idx as usize];
-            let params = func_type
-                .params()
-                .iter()
-                .map(|vt| WasmType::from_wasmparser(*vt))
-                .collect();
-            let return_type = func_type
-                .results()
-                .first()
-                .map(|vt| WasmType::from_wasmparser(*vt));
-
-            let needs_host = ir_functions
-                .get(func_idx)
-                .map(|ir_func| function_calls_imports(ir_func, num_imported_globals))
-                .unwrap_or(false);
-
-            FuncSignature {
-                params,
-                return_type,
-                type_idx: canonical_type[func.type_idx as usize],
-                needs_host,
-            }
-        })
-        .collect()
-}
-
-/// Determines if a function calls imports or accesses imported globals.
-fn function_calls_imports(ir_func: &IrFunction, num_imported_globals: usize) -> bool {
-    ir_func.blocks.iter().any(|block| {
-        block.instructions.iter().any(|instr| {
-            matches!(instr, IrInstr::CallImport { .. })
-                || (num_imported_globals > 0
-                    && matches!(
-                        instr,
-                        IrInstr::GlobalGet { index, .. }
-                            | IrInstr::GlobalSet { index, .. }
-                            if *index < num_imported_globals
-                    ))
-        })
-    })
-}
-
-/// Builds type signatures for call_indirect type checking.
-fn build_call_indirect_signatures(parsed: &ParsedModule) -> Vec<FuncSignature> {
-    parsed
-        .types
-        .iter()
-        .map(|ty| {
-            let params = ty
-                .params()
-                .iter()
-                .map(|vt| WasmType::from_wasmparser(*vt))
-                .collect();
-            let return_type = ty
-                .results()
-                .first()
-                .map(|vt| WasmType::from_wasmparser(*vt));
-            FuncSignature {
-                params,
-                return_type,
-                type_idx: 0,
-                needs_host: false,
-            }
-        })
-        .collect()
-}
-
-/// Builds function import trait definitions.
-fn build_function_imports(parsed: &ParsedModule) -> Vec<FuncImport> {
-    parsed
-        .imports
-        .iter()
-        .filter_map(|imp| match &imp.kind {
-            ImportKind::Function(type_idx) => {
-                let func_type = &parsed.types[*type_idx as usize];
-                let params = func_type
-                    .params()
-                    .iter()
-                    .map(|vt| WasmType::from_wasmparser(*vt))
-                    .collect();
-                let return_type = func_type
-                    .results()
-                    .first()
-                    .map(|vt| WasmType::from_wasmparser(*vt));
-                Some(FuncImport {
-                    module_name: imp.module_name.clone(),
-                    func_name: imp.name.clone(),
-                    params,
-                    return_type,
-                })
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Test the invariant: entry_block is always BlockId(0)
-    #[test]
-    fn entry_block_is_always_block_zero() {
-        let mut builder = IrBuilder::new();
-
-        // Simple function: fn add(a: i32, b: i32) -> i32 { a + b }
-        let params = vec![
-            (wasmparser::ValType::I32, WasmType::I32),
-            (wasmparser::ValType::I32, WasmType::I32),
-        ];
-        let operators = vec![
-            wasmparser::Operator::LocalGet { local_index: 0 },
-            wasmparser::Operator::LocalGet { local_index: 1 },
-            wasmparser::Operator::I32Add,
-            wasmparser::Operator::End,
-        ];
-
-        let module_ctx = ModuleContext {
-            func_signatures: vec![],
-            type_signatures: vec![],
-            num_imported_functions: 0,
-            func_imports: vec![],
-        };
-
-        let ir_func = builder
-            .translate_function(&params, &[], Some(WasmType::I32), &operators, &module_ctx)
-            .expect("translation should succeed");
-
-        // INVARIANT CHECK: entry_block must be BlockId(0)
-        assert_eq!(
-            ir_func.entry_block,
-            BlockId(0),
-            "entry_block must always be BlockId(0)"
-        );
-
-        // Additional sanity checks
-        assert!(
-            !ir_func.blocks.is_empty(),
-            "function must have at least one block"
-        );
-        assert_eq!(
-            ir_func.blocks[0].id,
-            BlockId(0),
-            "first block in the blocks vector must be BlockId(0)"
-        );
-    }
-
-    /// Test that entry_block == BlockId(0) even for void functions
-    #[test]
-    fn entry_block_is_zero_for_void_function() {
-        let mut builder = IrBuilder::new();
-
-        // Void function: fn noop() { }
-        let operators = vec![wasmparser::Operator::Nop, wasmparser::Operator::End];
-
-        let module_ctx = ModuleContext {
-            func_signatures: vec![],
-            type_signatures: vec![],
-            num_imported_functions: 0,
-            func_imports: vec![],
-        };
-
-        let ir_func = builder
-            .translate_function(&[], &[], None, &operators, &module_ctx)
-            .expect("translation should succeed");
-
-        assert_eq!(
-            ir_func.entry_block,
-            BlockId(0),
-            "entry_block must be BlockId(0) even for void functions"
-        );
-    }
-
-    /// Test that entry_block == BlockId(0) for functions with locals
-    #[test]
-    fn entry_block_is_zero_with_locals() {
-        let mut builder = IrBuilder::new();
-
-        let params = vec![(wasmparser::ValType::I32, WasmType::I32)];
-        let locals = vec![wasmparser::ValType::I32, wasmparser::ValType::I32];
-        let operators = vec![
-            wasmparser::Operator::I32Const { value: 42 },
-            wasmparser::Operator::End,
-        ];
-
-        let module_ctx = ModuleContext {
-            func_signatures: vec![],
-            type_signatures: vec![],
-            num_imported_functions: 0,
-            func_imports: vec![],
-        };
-
-        let ir_func = builder
-            .translate_function(
-                &params,
-                &locals,
-                Some(WasmType::I32),
-                &operators,
-                &module_ctx,
-            )
-            .expect("translation should succeed");
-
-        assert_eq!(
-            ir_func.entry_block,
-            BlockId(0),
-            "entry_block must be BlockId(0) regardless of locals"
-        );
-    }
-
-    /// Test that local variables are properly tracked and distinguished from parameters
-    #[test]
-    fn local_variables_separate_from_params() {
-        let mut builder = IrBuilder::new();
-
-        // Function: (param i32) (result i32)
-        //   (local i32)
-        //   local.get 0      ;; param
-        //   local.set 1      ;; store to local (index 1)
-        //   local.get 1      ;; get local back
-        let params = vec![(wasmparser::ValType::I32, WasmType::I32)];
-        let locals = vec![wasmparser::ValType::I32];
-        let operators = vec![
-            wasmparser::Operator::LocalGet { local_index: 0 },
-            wasmparser::Operator::LocalSet { local_index: 1 },
-            wasmparser::Operator::LocalGet { local_index: 1 },
-            wasmparser::Operator::End,
-        ];
-
-        let module_ctx = ModuleContext {
-            func_signatures: vec![],
-            type_signatures: vec![],
-            num_imported_functions: 0,
-            func_imports: vec![],
-        };
-
-        let ir_func = builder
-            .translate_function(
-                &params,
-                &locals,
-                Some(WasmType::I32),
-                &operators,
-                &module_ctx,
-            )
-            .expect("translation should succeed");
-
-        // Parameter 0 and local 1 must be different VarIds
-        let param_var = ir_func.params[0].0;
-        let local_var = ir_func.locals[0].0;
-        assert_ne!(
-            param_var, local_var,
-            "param and local must have distinct VarIds"
-        );
-
-        // Verify local tracking
-        assert_eq!(
-            ir_func.locals.len(),
-            1,
-            "should have exactly 1 declared local"
-        );
-        assert_eq!(
-            ir_func.locals[0].1,
-            WasmType::I32,
-            "local should have type i32"
-        );
-
-        // Verify params are still tracked
-        assert_eq!(ir_func.params.len(), 1, "should have exactly 1 param");
-        assert_eq!(
-            ir_func.params[0].1,
-            WasmType::I32,
-            "param should have type i32"
-        );
-    }
-
-    /// Test with multiple locals of different types
-    #[test]
-    fn multiple_locals_different_types() {
-        let mut builder = IrBuilder::new();
-
-        // Function: (param i32) (result i32)
-        //   (local i32 i64 f32)
-        //   local.get 0
-        let params = vec![(wasmparser::ValType::I32, WasmType::I32)];
-        let locals = vec![
-            wasmparser::ValType::I32,
-            wasmparser::ValType::I64,
-            wasmparser::ValType::F32,
-        ];
-        let operators = vec![
-            wasmparser::Operator::LocalGet { local_index: 0 },
-            wasmparser::Operator::End,
-        ];
-
-        let module_ctx = ModuleContext {
-            func_signatures: vec![],
-            type_signatures: vec![],
-            num_imported_functions: 0,
-            func_imports: vec![],
-        };
-
-        let ir_func = builder
-            .translate_function(
-                &params,
-                &locals,
-                Some(WasmType::I32),
-                &operators,
-                &module_ctx,
-            )
-            .expect("translation should succeed");
-
-        // Verify all locals are tracked with correct types
-        assert_eq!(ir_func.locals.len(), 3);
-        assert_eq!(ir_func.locals[0].1, WasmType::I32);
-        assert_eq!(ir_func.locals[1].1, WasmType::I64);
-        assert_eq!(ir_func.locals[2].1, WasmType::F32);
-
-        // All locals should have different VarIds
-        let var_ids: Vec<VarId> = ir_func.locals.iter().map(|(v, _)| *v).collect();
-        assert_eq!(var_ids[0], var_ids[0]);
-        assert_ne!(var_ids[0], var_ids[1]);
-        assert_ne!(var_ids[1], var_ids[2]);
     }
 }
