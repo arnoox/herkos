@@ -875,3 +875,537 @@ pub fn has_global_import_access(ir_func: &IrFunction, num_imported_globals: usiz
         })
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_var_id_display() {
+        assert_eq!(VarId(0).to_string(), "v0");
+        assert_eq!(VarId(42).to_string(), "v42");
+        assert_eq!(VarId(1000).to_string(), "v1000");
+    }
+
+    #[test]
+    fn test_var_id_equality() {
+        assert_eq!(VarId(5), VarId(5));
+        assert_ne!(VarId(5), VarId(6));
+    }
+
+    #[test]
+    fn test_block_id_display() {
+        assert_eq!(BlockId(0).to_string(), "block_0");
+        assert_eq!(BlockId(42).to_string(), "block_42");
+        assert_eq!(BlockId(1000).to_string(), "block_1000");
+    }
+
+    #[test]
+    fn test_block_id_equality() {
+        assert_eq!(BlockId(5), BlockId(5));
+        assert_ne!(BlockId(5), BlockId(6));
+    }
+
+    #[test]
+    fn test_wasm_type_display() {
+        assert_eq!(WasmType::I32.to_string(), "i32");
+        assert_eq!(WasmType::I64.to_string(), "i64");
+        assert_eq!(WasmType::F32.to_string(), "f32");
+        assert_eq!(WasmType::F64.to_string(), "f64");
+    }
+
+    #[test]
+    fn test_wasm_type_default_value_literal() {
+        assert_eq!(WasmType::I32.default_value_literal(), "0i32");
+        assert_eq!(WasmType::I64.default_value_literal(), "0i64");
+        assert_eq!(WasmType::F32.default_value_literal(), "0.0f32");
+        assert_eq!(WasmType::F64.default_value_literal(), "0.0f64");
+    }
+
+    #[test]
+    fn test_wasm_type_equality() {
+        assert_eq!(WasmType::I32, WasmType::I32);
+        assert_ne!(WasmType::I32, WasmType::I64);
+        assert_ne!(WasmType::F32, WasmType::F64);
+    }
+
+    #[test]
+    fn test_ir_value_wasm_type() {
+        assert_eq!(IrValue::I32(42).wasm_type(), WasmType::I32);
+        assert_eq!(IrValue::I64(100).wasm_type(), WasmType::I64);
+        assert_eq!(IrValue::F32(1.5).wasm_type(), WasmType::F32);
+        assert_eq!(IrValue::F64(2.7).wasm_type(), WasmType::F64);
+    }
+
+    #[test]
+    fn test_ir_value_display() {
+        assert_eq!(IrValue::I32(42).to_string(), "42i32");
+        assert_eq!(IrValue::I64(-100).to_string(), "-100i64");
+        assert_eq!(IrValue::F32(1.5).to_string(), "1.5f32");
+        assert_eq!(IrValue::F64(2.7).to_string(), "2.7f64");
+    }
+
+    #[test]
+    fn test_binop_result_type_i32_arithmetic() {
+        assert_eq!(BinOp::I32Add.result_type(), WasmType::I32);
+        assert_eq!(BinOp::I32Sub.result_type(), WasmType::I32);
+        assert_eq!(BinOp::I32Mul.result_type(), WasmType::I32);
+        assert_eq!(BinOp::I32DivS.result_type(), WasmType::I32);
+        assert_eq!(BinOp::I32DivU.result_type(), WasmType::I32);
+        assert_eq!(BinOp::I32And.result_type(), WasmType::I32);
+        assert_eq!(BinOp::I32Or.result_type(), WasmType::I32);
+        assert_eq!(BinOp::I32Xor.result_type(), WasmType::I32);
+    }
+
+    #[test]
+    fn test_binop_result_type_i32_comparisons() {
+        assert_eq!(BinOp::I32Eq.result_type(), WasmType::I32);
+        assert_eq!(BinOp::I32Ne.result_type(), WasmType::I32);
+        assert_eq!(BinOp::I32LtS.result_type(), WasmType::I32);
+        assert_eq!(BinOp::I32LtU.result_type(), WasmType::I32);
+        assert_eq!(BinOp::I32GtS.result_type(), WasmType::I32);
+        assert_eq!(BinOp::I32GeU.result_type(), WasmType::I32);
+    }
+
+    #[test]
+    fn test_binop_result_type_i64_arithmetic() {
+        assert_eq!(BinOp::I64Add.result_type(), WasmType::I64);
+        assert_eq!(BinOp::I64Sub.result_type(), WasmType::I64);
+        assert_eq!(BinOp::I64Mul.result_type(), WasmType::I64);
+        assert_eq!(BinOp::I64DivS.result_type(), WasmType::I64);
+    }
+
+    #[test]
+    fn test_binop_result_type_i64_comparisons() {
+        // i64 comparisons return i32
+        assert_eq!(BinOp::I64Eq.result_type(), WasmType::I32);
+        assert_eq!(BinOp::I64Ne.result_type(), WasmType::I32);
+        assert_eq!(BinOp::I64LtS.result_type(), WasmType::I32);
+        assert_eq!(BinOp::I64LtU.result_type(), WasmType::I32);
+    }
+
+    #[test]
+    fn test_binop_result_type_f32_arithmetic() {
+        assert_eq!(BinOp::F32Add.result_type(), WasmType::F32);
+        assert_eq!(BinOp::F32Sub.result_type(), WasmType::F32);
+        assert_eq!(BinOp::F32Mul.result_type(), WasmType::F32);
+        assert_eq!(BinOp::F32Div.result_type(), WasmType::F32);
+        assert_eq!(BinOp::F32Min.result_type(), WasmType::F32);
+        assert_eq!(BinOp::F32Max.result_type(), WasmType::F32);
+    }
+
+    #[test]
+    fn test_binop_result_type_f32_comparisons() {
+        // f32 comparisons return i32
+        assert_eq!(BinOp::F32Eq.result_type(), WasmType::I32);
+        assert_eq!(BinOp::F32Ne.result_type(), WasmType::I32);
+        assert_eq!(BinOp::F32Lt.result_type(), WasmType::I32);
+        assert_eq!(BinOp::F32Gt.result_type(), WasmType::I32);
+    }
+
+    #[test]
+    fn test_binop_result_type_f64_arithmetic() {
+        assert_eq!(BinOp::F64Add.result_type(), WasmType::F64);
+        assert_eq!(BinOp::F64Sub.result_type(), WasmType::F64);
+        assert_eq!(BinOp::F64Mul.result_type(), WasmType::F64);
+        assert_eq!(BinOp::F64Div.result_type(), WasmType::F64);
+    }
+
+    #[test]
+    fn test_binop_result_type_f64_comparisons() {
+        // f64 comparisons return i32
+        assert_eq!(BinOp::F64Eq.result_type(), WasmType::I32);
+        assert_eq!(BinOp::F64Ne.result_type(), WasmType::I32);
+        assert_eq!(BinOp::F64Lt.result_type(), WasmType::I32);
+        assert_eq!(BinOp::F64Le.result_type(), WasmType::I32);
+    }
+
+    #[test]
+    fn test_unop_result_type_i32() {
+        assert_eq!(UnOp::I32Clz.result_type(), WasmType::I32);
+        assert_eq!(UnOp::I32Ctz.result_type(), WasmType::I32);
+        assert_eq!(UnOp::I32Popcnt.result_type(), WasmType::I32);
+        assert_eq!(UnOp::I32Eqz.result_type(), WasmType::I32);
+    }
+
+    #[test]
+    fn test_unop_result_type_i64() {
+        assert_eq!(UnOp::I64Clz.result_type(), WasmType::I64);
+        assert_eq!(UnOp::I64Ctz.result_type(), WasmType::I64);
+        assert_eq!(UnOp::I64Popcnt.result_type(), WasmType::I64);
+        // i64.eqz returns i32
+        assert_eq!(UnOp::I64Eqz.result_type(), WasmType::I32);
+    }
+
+    #[test]
+    fn test_unop_result_type_f32() {
+        assert_eq!(UnOp::F32Abs.result_type(), WasmType::F32);
+        assert_eq!(UnOp::F32Neg.result_type(), WasmType::F32);
+        assert_eq!(UnOp::F32Ceil.result_type(), WasmType::F32);
+        assert_eq!(UnOp::F32Floor.result_type(), WasmType::F32);
+        assert_eq!(UnOp::F32Sqrt.result_type(), WasmType::F32);
+    }
+
+    #[test]
+    fn test_unop_result_type_f64() {
+        assert_eq!(UnOp::F64Abs.result_type(), WasmType::F64);
+        assert_eq!(UnOp::F64Neg.result_type(), WasmType::F64);
+        assert_eq!(UnOp::F64Ceil.result_type(), WasmType::F64);
+        assert_eq!(UnOp::F64Floor.result_type(), WasmType::F64);
+        assert_eq!(UnOp::F64Sqrt.result_type(), WasmType::F64);
+    }
+
+    #[test]
+    fn test_unop_result_type_conversions_to_i32() {
+        assert_eq!(UnOp::I32WrapI64.result_type(), WasmType::I32);
+        assert_eq!(UnOp::I32TruncF32S.result_type(), WasmType::I32);
+        assert_eq!(UnOp::I32TruncF32U.result_type(), WasmType::I32);
+        assert_eq!(UnOp::I32TruncF64S.result_type(), WasmType::I32);
+        assert_eq!(UnOp::I32TruncF64U.result_type(), WasmType::I32);
+        assert_eq!(UnOp::I32ReinterpretF32.result_type(), WasmType::I32);
+    }
+
+    #[test]
+    fn test_unop_result_type_conversions_to_i64() {
+        assert_eq!(UnOp::I64ExtendI32S.result_type(), WasmType::I64);
+        assert_eq!(UnOp::I64ExtendI32U.result_type(), WasmType::I64);
+        assert_eq!(UnOp::I64TruncF32S.result_type(), WasmType::I64);
+        assert_eq!(UnOp::I64TruncF64S.result_type(), WasmType::I64);
+        assert_eq!(UnOp::I64ReinterpretF64.result_type(), WasmType::I64);
+    }
+
+    #[test]
+    fn test_unop_result_type_conversions_to_f32() {
+        assert_eq!(UnOp::F32ConvertI32S.result_type(), WasmType::F32);
+        assert_eq!(UnOp::F32ConvertI32U.result_type(), WasmType::F32);
+        assert_eq!(UnOp::F32ConvertI64S.result_type(), WasmType::F32);
+        assert_eq!(UnOp::F32DemoteF64.result_type(), WasmType::F32);
+        assert_eq!(UnOp::F32ReinterpretI32.result_type(), WasmType::F32);
+    }
+
+    #[test]
+    fn test_unop_result_type_conversions_to_f64() {
+        assert_eq!(UnOp::F64ConvertI32S.result_type(), WasmType::F64);
+        assert_eq!(UnOp::F64ConvertI32U.result_type(), WasmType::F64);
+        assert_eq!(UnOp::F64ConvertI64S.result_type(), WasmType::F64);
+        assert_eq!(UnOp::F64PromoteF32.result_type(), WasmType::F64);
+        assert_eq!(UnOp::F64ReinterpretI64.result_type(), WasmType::F64);
+    }
+
+    #[test]
+    fn test_memory_mode_owned() {
+        let info = ModuleInfo {
+            has_memory: true,
+            has_memory_import: false,
+            ..Default::default()
+        };
+        assert_eq!(info.memory_mode(), MemoryMode::Owned);
+    }
+
+    #[test]
+    fn test_memory_mode_imported() {
+        let info = ModuleInfo {
+            has_memory: false,
+            has_memory_import: true,
+            ..Default::default()
+        };
+        assert_eq!(info.memory_mode(), MemoryMode::Imported);
+    }
+
+    #[test]
+    fn test_memory_mode_none() {
+        let info = ModuleInfo::default();
+        assert_eq!(info.memory_mode(), MemoryMode::None);
+    }
+
+    #[test]
+    fn test_module_info_num_imported_functions() {
+        let info = ModuleInfo {
+            func_imports: vec![
+                FuncImport {
+                    module_name: "env".to_string(),
+                    func_name: "log".to_string(),
+                    params: vec![WasmType::I32],
+                    return_type: None,
+                },
+                FuncImport {
+                    module_name: "env".to_string(),
+                    func_name: "read".to_string(),
+                    params: vec![],
+                    return_type: Some(WasmType::I32),
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(info.num_imported_functions(), 2);
+    }
+
+    #[test]
+    fn test_module_info_has_mutable_globals() {
+        let mut info = ModuleInfo::default();
+        assert!(!info.has_mutable_globals());
+
+        info.globals.push(GlobalDef {
+            wasm_type: WasmType::I32,
+            mutable: false,
+            init_value: GlobalInit::I32(0),
+        });
+        assert!(!info.has_mutable_globals());
+
+        info.globals.push(GlobalDef {
+            wasm_type: WasmType::I32,
+            mutable: true,
+            init_value: GlobalInit::I32(0),
+        });
+        assert!(info.has_mutable_globals());
+    }
+
+    #[test]
+    fn test_module_info_has_table() {
+        let mut info = ModuleInfo::default();
+        assert!(!info.has_table());
+
+        info.table_max = 10;
+        assert!(info.has_table());
+    }
+
+    #[test]
+    fn test_module_info_needs_wrapper() {
+        let mut info = ModuleInfo::default();
+        assert!(!info.needs_wrapper());
+
+        // Add mutable global
+        info.globals.push(GlobalDef {
+            wasm_type: WasmType::I32,
+            mutable: true,
+            init_value: GlobalInit::I32(0),
+        });
+        assert!(info.needs_wrapper());
+
+        // Remove mutable global, add data segment
+        info.globals.clear();
+        info.data_segments.push(DataSegmentDef {
+            offset: 0,
+            data: vec![1, 2, 3],
+        });
+        assert!(info.needs_wrapper());
+
+        // Remove data segment, add element segment
+        info.data_segments.clear();
+        info.element_segments.push(ElementSegmentDef {
+            offset: 0,
+            func_indices: vec![0],
+        });
+        assert!(info.needs_wrapper());
+
+        // Remove element segment, set has_memory_import
+        info.element_segments.clear();
+        info.has_memory_import = true;
+        assert!(info.needs_wrapper());
+    }
+
+    #[test]
+    fn test_group_by_module() {
+        let imports = vec![
+            FuncImport {
+                module_name: "env".to_string(),
+                func_name: "log".to_string(),
+                params: vec![],
+                return_type: None,
+            },
+            FuncImport {
+                module_name: "wasi".to_string(),
+                func_name: "read".to_string(),
+                params: vec![],
+                return_type: Some(WasmType::I32),
+            },
+            FuncImport {
+                module_name: "env".to_string(),
+                func_name: "debug".to_string(),
+                params: vec![],
+                return_type: None,
+            },
+        ];
+
+        let grouped = group_by_module(&imports, |i| &i.module_name);
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(grouped["env"].len(), 2);
+        assert_eq!(grouped["wasi"].len(), 1);
+        assert_eq!(grouped["env"][0].func_name, "log");
+        assert_eq!(grouped["env"][1].func_name, "debug");
+    }
+
+    #[test]
+    fn test_all_import_module_names() {
+        let info = ModuleInfo {
+            func_imports: vec![
+                FuncImport {
+                    module_name: "env".to_string(),
+                    func_name: "log".to_string(),
+                    params: vec![],
+                    return_type: None,
+                },
+                FuncImport {
+                    module_name: "wasi".to_string(),
+                    func_name: "read".to_string(),
+                    params: vec![],
+                    return_type: Some(WasmType::I32),
+                },
+            ],
+            imported_globals: vec![
+                ImportedGlobalDef {
+                    module_name: "env".to_string(),
+                    name: "mem_ptr".to_string(),
+                    wasm_type: WasmType::I32,
+                    mutable: false,
+                },
+                ImportedGlobalDef {
+                    module_name: "sys".to_string(),
+                    name: "errno".to_string(),
+                    wasm_type: WasmType::I32,
+                    mutable: true,
+                },
+            ],
+            ..Default::default()
+        };
+
+        let module_names = all_import_module_names(&info);
+        assert_eq!(module_names.len(), 3);
+        assert!(module_names.contains("env"));
+        assert!(module_names.contains("wasi"));
+        assert!(module_names.contains("sys"));
+    }
+
+    #[test]
+    fn test_has_import_calls() {
+        // Test without import calls
+        let ir_func_no_imports = IrFunction {
+            params: vec![],
+            locals: vec![],
+            blocks: vec![IrBlock {
+                id: BlockId(0),
+                label: "block_0".to_string(),
+                instructions: vec![IrInstr::Const {
+                    dest: VarId(0),
+                    value: IrValue::I32(42),
+                }],
+                terminator: IrTerminator::Return { value: None },
+            }],
+            entry_block: BlockId(0),
+            return_type: None,
+        };
+        assert!(!has_import_calls(&ir_func_no_imports));
+
+        // Test with import calls
+        let ir_func_with_imports = IrFunction {
+            params: vec![],
+            locals: vec![],
+            blocks: vec![IrBlock {
+                id: BlockId(0),
+                label: "block_0".to_string(),
+                instructions: vec![
+                    IrInstr::Const {
+                        dest: VarId(0),
+                        value: IrValue::I32(42),
+                    },
+                    IrInstr::CallImport {
+                        dest: None,
+                        import_idx: 0,
+                        module_name: "env".to_string(),
+                        func_name: "log".to_string(),
+                        args: vec![VarId(0)],
+                    },
+                ],
+                terminator: IrTerminator::Return { value: None },
+            }],
+            entry_block: BlockId(0),
+            return_type: None,
+        };
+        assert!(has_import_calls(&ir_func_with_imports));
+    }
+
+    #[test]
+    fn test_has_global_import_access() {
+        let ir_func = IrFunction {
+            params: vec![],
+            locals: vec![],
+            blocks: vec![IrBlock {
+                id: BlockId(0),
+                label: "block_0".to_string(),
+                instructions: vec![IrInstr::Const {
+                    dest: VarId(0),
+                    value: IrValue::I32(42),
+                }],
+                terminator: IrTerminator::Return { value: None },
+            }],
+            entry_block: BlockId(0),
+            return_type: None,
+        };
+
+        // No imported globals
+        assert!(!has_global_import_access(&ir_func, 0));
+
+        // Has imported globals but function doesn't access them
+        assert!(!has_global_import_access(&ir_func, 2));
+
+        // Test with GlobalGet accessing imported global
+        let ir_func_with_global_get = IrFunction {
+            params: vec![],
+            locals: vec![],
+            blocks: vec![IrBlock {
+                id: BlockId(0),
+                label: "block_0".to_string(),
+                instructions: vec![
+                    IrInstr::Const {
+                        dest: VarId(0),
+                        value: IrValue::I32(42),
+                    },
+                    IrInstr::GlobalGet {
+                        dest: VarId(1),
+                        index: 0, // First imported global
+                    },
+                ],
+                terminator: IrTerminator::Return { value: None },
+            }],
+            entry_block: BlockId(0),
+            return_type: None,
+        };
+        assert!(has_global_import_access(&ir_func_with_global_get, 2));
+    }
+
+    #[test]
+    fn test_has_global_import_access_set() {
+        let ir_func = IrFunction {
+            params: vec![],
+            locals: vec![],
+            blocks: vec![IrBlock {
+                id: BlockId(0),
+                label: "block_0".to_string(),
+                instructions: vec![IrInstr::GlobalSet {
+                    index: 1, // Second imported global
+                    value: VarId(0),
+                }],
+                terminator: IrTerminator::Return { value: None },
+            }],
+            entry_block: BlockId(0),
+            return_type: None,
+        };
+
+        assert!(has_global_import_access(&ir_func, 2));
+        assert!(!has_global_import_access(&ir_func, 1)); // Only 1 imported global, index 1 is out of range
+    }
+
+    #[test]
+    fn test_memory_access_width_equality() {
+        assert_eq!(MemoryAccessWidth::Full, MemoryAccessWidth::Full);
+        assert_eq!(MemoryAccessWidth::I8, MemoryAccessWidth::I8);
+        assert_ne!(MemoryAccessWidth::I8, MemoryAccessWidth::I16);
+    }
+
+    #[test]
+    fn test_sign_extension_equality() {
+        assert_eq!(SignExtension::Signed, SignExtension::Signed);
+        assert_eq!(SignExtension::Unsigned, SignExtension::Unsigned);
+        assert_ne!(SignExtension::Signed, SignExtension::Unsigned);
+    }
+}
