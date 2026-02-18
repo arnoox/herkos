@@ -6,6 +6,7 @@
 pub mod backend;
 pub mod codegen;
 pub mod ir;
+pub mod optimizer;
 pub mod parser;
 
 // Re-export key types for convenience
@@ -14,6 +15,7 @@ use backend::SafeBackend;
 use codegen::CodeGenerator;
 use ir::builder::build_module_info;
 use ir::ModuleInfo;
+use optimizer::optimize_ir;
 use parser::parse_wasm;
 
 /// Configuration options for transpilation
@@ -62,6 +64,9 @@ pub fn transpile(wasm_bytes: &[u8], options: &TranspileOptions) -> Result<String
     // Build complete module metadata from parsed module
     let module_info =
         build_module_info(&parsed, options).context("failed to build module metadata")?;
+
+    // Optimize the IR
+    let module_info = optimize_ir(module_info)?;
 
     // Generate Rust source code
     let rust_code = generate_rust_code(&module_info)?;
