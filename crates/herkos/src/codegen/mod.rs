@@ -1,1081 +1,182 @@
 //! Code generation — emits Rust source code from IR.
 //!
-//! This module walks the IR and uses a Backend to emit complete Rust functions.
-//! It supports two modes:
-//! - **Standalone**: generates `pub fn func_N(...)` functions (backwards compatible)
+//! # Overview
+//!
+//! This module walks the IR and uses a Backend to emit complete Rust functions and module
+//! structures. It supports two generation modes:
+//! - **Standalone** (backwards compatible): generates `pub fn func_N(...)` functions
 //! - **Module wrapper**: generates a `Module<Globals, MAX_PAGES, 0>` struct with
 //!   constructor, internal functions, and exported methods
+//!
+//! # Architecture
+//!
+//! The code generation pipeline is organized into focused sub-modules:
+//!
+//! ```text
+//!                          ┌─────────────────────────────────────┐
+//!                          │      ModuleInfo (IR input)          │
+//!                          │  ┌─ IR functions                    │
+//!                          │  ├─ Imports/Exports                 │
+//!                          │  ├─ Globals, Memory, Table          │
+//!                          │  └─ Data/Element segments           │
+//!                          └─────────────────────────────────────┘
+//!                                            │
+//!                                            ▼
+//!                          ┌─────────────────────────────────────┐
+//!                          │   generate_module_with_info()       │
+//!                          │   (Main entry point)                │
+//!                          └─────────────────────────────────────┘
+//!                           │
+//!           ┌───────────────┴───────────────┐
+//!           │                               │
+//!           ▼                               ▼
+//!    ┌─────────────────┐          ┌─────────────────────┐
+//!    │   STANDALONE    │          │   MODULE WRAPPER    │
+//!    │    (no-op mode) │          │   (recommended)     │
+//!    └─────────────────┘          └─────────────────────┘
+//!           │                              │
+//!           ├─ Preamble                   ├─ Preamble
+//!           ├─ Host traits                ├─ Host traits
+//!           ├─ Const globals              ├─ Const globals
+//!           ├─ Pub functions              ├─ Globals struct
+//!           │                             ├─ WasmModule newtype
+//!           │                             ├─ Constructor (new())
+//!           │                             ├─ Private functions
+//!           │                             ├─ Export impl block
+//!           │                             │
+//!           └──────────────┬──────────────┘
+//!                          │
+//!                          ▼
+//!                ┌──────────────────────┐
+//!                │   Rust Source Code   │
+//!                │   (ready to compile) │
+//!                └──────────────────────┘
+//!
+//!
+//! # Sub-modules
+//!
+//! Each sub-module handles a specific aspect of code generation:
+//!
+//! - **`module`**: Main generation orchestration (`generate_module_with_info`, standalone vs wrapper)
+//! - **`traits`**: Host trait definitions from imports (`EnvImports`, `WasiImports`, etc.)
+//! - **`constructor`**: Module initialization (`new()`, data/element segments, const globals)
+//! - **`function`**: IR function translation (signatures, blocks, variables, SSA)
+//! - **`instruction`**: Individual instruction code generation and terminators
+//! - **`export`**: Export method generation (forwarding to internal functions)
+//! - **`types`**: Type conversions (Wasm→Rust, WasmResult formatting)
+//! - **`utils`**: Utility functions (call arg building, grouping)
+//!
+//! # Control Flow Example
+//!
+//! When transpiling a module with a memory and an export:
+//!
+//! ```text
+//! ModuleInfo {
+//!   has_memory: true,
+//!   max_pages: 16,
+//!   func_exports: [FuncExport { name: "process", func_index: 0 }],
+//!   ...
+//! }
+//!    │
+//!    ├─→ generate_module_with_info()
+//!    │     └─→ needs_wrapper() → true (has_memory + exports)
+//!    │         └─→ generate_wrapper_module()
+//!    │
+//!    ├─→ [Constructor generation]
+//!    │   └─ emit_element_segments() (if table)
+//!    │   └─ Data segment init (byte-by-byte)
+//!    │
+//!    ├─→ [Function generation per func in IR]
+//!    │   └─→ generate_function_with_info("func_0", ...)
+//!    │       ├─→ generate_signature_with_info()
+//!    │       │   ├─ Collect trait bounds if needs_host
+//!    │       │   ├─ Add globals/memory/table/host parameters
+//!    │       │   └─ Build generic param H (if multiple trait bounds)
+//!    │       │
+//!    │       ├─→ [Variable type inference from instructions]
+//!    │       │
+//!    │       └─→ [Block translation]
+//!    │           ├─ Single-block: flat code emission
+//!    │           └─ Multi-block: state machine with Block enum + loop/match
+//!    │
+//!    ├─→ [Per instruction]
+//!    │   └─→ generate_instruction_with_info()
+//!    │       ├─ Delegates to backend.emit_*() for most operations
+//!    │       ├─ CallImport → host.func_name()
+//!    │       ├─ CallIndirect → dispatch match on func_index
+//!    │       └─ GlobalGet/Set → redirect to imported globals via host traits
+//!    │
+//!    └─→ [Export impl generation]
+//!        └─→ generate_export_impl()
+//!            └─ pub fn process(&mut self, ...) { func_0(...) }
+//!
+//! ```
+//!
+//! # Key Design Decisions
+//!
+//! 1. **Backend Delegation**: All instruction emission is delegated to a `Backend` trait
+//!    (SafeBackend, VerifiedBackend, etc.). This module orchestrates structure;
+//!    the backend handles the actual Rust code patterns.
+//!
+//! 2. **Trait-Based Imports**: Imported functions become trait bounds on a generic `H`
+//!    parameter. Each import module gets its own trait (e.g., `EnvImports`, `WasiImports`).
+//!    This ensures zero-cost dispatch and type safety.
+//!
+//! 3. **SSA Variable Inference**: Types are inferred from instructions using a HashMap,
+//!    ensuring correct Rust type declarations for all intermediate values.
+//!
+//! 4. **State Machine for Multi-Block Functions**: Functions with multiple blocks emit
+//!    a local `Block` enum and a `loop { match }` structure. Single-block functions
+//!    optimize to flat code.
+//!
+//! 5. **Const Generics Over Runtime Sizes**: `MAX_PAGES` and `TABLE_MAX` are const
+//!    generics, not runtime values. This enables monomorphization and zero-cost memory
+//!    bounds checking.
+//!
+//! # Integration Points
+//!
+//! - **Input**: [`ModuleInfo`] from IR builder, [`Backend`] trait for emission rules
+//! - **Output**: Formatted Rust source code (typically passed through `rustfmt`)
+//! - **Error Handling**: Uses `anyhow::Result` for context on generation failures
+
+pub mod constructor;
+pub mod export;
+pub mod function;
+pub mod instruction;
+pub mod module;
+pub mod traits;
+pub mod types;
+pub mod utils;
 
 use crate::backend::Backend;
 use crate::ir::*;
-use anyhow::{Context, Result};
-use heck::ToUpperCamelCase;
+use anyhow::Result;
 
-// ─── Helper functions ───────────────────────────────────────────────────────
-
-/// Convert a module name to a Rust trait name.
+/// Main code generator struct that orchestrates emission of Rust code from IR.
 ///
-/// Examples:
-/// - "env" → "EnvImports"
-/// - "wasi_snapshot_preview1" → "WasiSnapshotPreview1Imports"
-fn module_name_to_trait_name(module_name: &str) -> String {
-    format!("{}Imports", module_name.to_upper_camel_case())
-}
-
-/// Build a call args vector by conditionally adding globals/memory/table/host.
-fn build_inner_call_args(
-    base_args: &[String],
-    has_globals: bool,
-    globals_expr: &str,
-    has_memory: bool,
-    memory_expr: &str,
-    has_table: bool,
-    table_expr: &str,
-) -> Vec<String> {
-    let mut call_args = base_args.to_vec();
-    if has_globals {
-        call_args.push(globals_expr.to_string());
-    }
-    if has_memory {
-        call_args.push(memory_expr.to_string());
-    }
-    if has_table {
-        call_args.push(table_expr.to_string());
-    }
-    call_args
-}
-
-// ─── CodeGenerator ──────────────────────────────────────────────────────────
-
-/// Generates a complete Rust function from IR.
+/// # Example
+///
+/// ```ignore
+/// let backend = SafeBackend::new();
+/// let codegen = CodeGenerator::new(&backend);
+/// let rust_code = codegen.generate_module_with_info(&module_info)?;
+/// ```
 pub struct CodeGenerator<'a, B: Backend> {
     backend: &'a B,
 }
 
 impl<'a, B: Backend> CodeGenerator<'a, B> {
+    /// Create a new code generator with a given backend.
     pub fn new(backend: &'a B) -> Self {
         CodeGenerator { backend }
     }
 
-    /// Generate a complete Rust module from IR functions with full module info.
+    /// Generate a complete Rust module from IR with full module info.
     ///
-    /// This is the main entry point for Milestone 4+. It decides between
-    /// standalone functions and a module wrapper based on `info.needs_wrapper()`.
+    /// This is the main entry point. It decides between standalone and wrapper
+    /// modes based on `info.needs_wrapper()`.
     pub fn generate_module_with_info(&self, info: &ModuleInfo) -> Result<String> {
-        if info.needs_wrapper() {
-            self.generate_wrapper_module(info)
-        } else {
-            self.generate_standalone_module(info)
-        }
-    }
-
-    /// Generate host trait definitions from imports (Milestone 3/4).
-    /// Includes both function imports and global import accessors.
-    fn generate_host_traits(&self, info: &ModuleInfo) -> String {
-        if info.func_imports.is_empty() && info.imported_globals.is_empty() {
-            return String::new();
-        }
-
-        let mut code = String::new();
-
-        // Group function imports by module name
-        let func_grouped = group_by_module(&info.func_imports, |i| &i.module_name);
-
-        // Group global imports by module name
-        let global_grouped = group_by_module(&info.imported_globals, |g| &g.module_name);
-
-        // Collect all module names
-        let all_modules = all_import_module_names(info);
-
-        // Generate one trait per module
-        for module_name in &all_modules {
-            let trait_name = module_name_to_trait_name(module_name);
-            code.push_str(&format!("pub trait {trait_name} {{\n"));
-
-            // Function imports for this module
-            if let Some(imports) = func_grouped.get(module_name) {
-                for imp in imports {
-                    // Generate method signature
-                    let mut params: Vec<String> = Vec::new();
-                    params.push("&mut self".to_string());
-                    for (i, ty) in imp.params.iter().enumerate() {
-                        let rust_ty = self.wasm_type_to_rust(ty);
-                        params.push(format!("arg{i}: {rust_ty}"));
-                    }
-
-                    let return_ty = self.format_return_type(imp.return_type.as_ref());
-
-                    code.push_str(&format!(
-                        "    fn {}({}) -> {};\n",
-                        imp.func_name,
-                        params.join(", "),
-                        return_ty
-                    ));
-                }
-            }
-
-            // Global import accessors for this module (Milestone 4)
-            if let Some(globals) = global_grouped.get(module_name) {
-                for g in globals {
-                    let rust_ty = self.wasm_type_to_rust(&g.wasm_type);
-
-                    // Getter (always)
-                    code.push_str(&format!("    fn get_{}(&self) -> {rust_ty};\n", g.name));
-
-                    // Setter (only if mutable)
-                    if g.mutable {
-                        code.push_str(&format!(
-                            "    fn set_{}(&mut self, val: {rust_ty});\n",
-                            g.name
-                        ));
-                    }
-                }
-            }
-
-            code.push_str("}\n\n");
-        }
-
-        code
-    }
-
-    /// Build trait bounds string from imports (e.g., "EnvImports + WasiImports").
-    fn build_trait_bounds(&self, info: &ModuleInfo) -> Option<String> {
-        if info.func_imports.is_empty() && info.imported_globals.is_empty() {
-            return None;
-        }
-
-        let module_names = all_import_module_names(info);
-        let trait_names: Vec<String> = module_names
-            .iter()
-            .map(|module_name| module_name_to_trait_name(module_name))
-            .collect();
-
-        Some(trait_names.join(" + "))
-    }
-
-    /// Generate const items for immutable globals.
-    fn emit_const_globals(&self, info: &ModuleInfo) -> String {
-        let mut code = String::new();
-        for (idx, g) in info.globals.iter().enumerate() {
-            if !g.mutable {
-                let (rust_ty, value_str) = self.global_init_to_rust(&g.init_value, &g.wasm_type);
-                code.push_str(&format!("pub const G{idx}: {rust_ty} = {value_str};\n"));
-            }
-        }
-        if info.globals.iter().any(|g| !g.mutable) {
-            code.push('\n');
-        }
-        code
-    }
-
-    fn rust_code_preamble() -> String {
-        let mut code = String::new();
-        code.push_str("// Generated by herkos\n");
-        code.push_str("// DO NOT EDIT\n\n");
-        code.push_str("use herkos_runtime::*;\n\n");
-        code
-    }
-
-    /// Generate standalone functions (no module wrapper).
-    fn generate_standalone_module(&self, info: &ModuleInfo) -> Result<String> {
-        let mut rust_code = Self::rust_code_preamble();
-
-        if info.has_memory {
-            rust_code.push_str(&format!("const MAX_PAGES: usize = {};\n\n", info.max_pages));
-        }
-
-        // Host trait definitions
-        rust_code.push_str(&self.generate_host_traits(info));
-
-        // Const items for immutable globals
-        rust_code.push_str(&self.emit_const_globals(info));
-
-        // Generate each function
-        for (idx, ir_func) in info.ir_functions.iter().enumerate() {
-            let func_name = format!("func_{}", idx);
-            let code = self
-                .generate_function_with_info(ir_func, &func_name, info, true)
-                .with_context(|| format!("failed to generate code for function {}", idx))?;
-            rust_code.push_str(&code);
-            rust_code.push('\n');
-        }
-
-        Ok(rust_code)
-    }
-
-    /// Generate a module wrapper with Globals struct, constructor, and export methods.
-    fn generate_wrapper_module(&self, info: &ModuleInfo) -> Result<String> {
-        let mut rust_code = Self::rust_code_preamble();
-        let has_mut_globals = info.has_mutable_globals();
-
-        if info.has_memory {
-            rust_code.push_str(&format!("const MAX_PAGES: usize = {};\n\n", info.max_pages));
-        }
-
-        if info.has_table() {
-            rust_code.push_str(&format!("const TABLE_MAX: usize = {};\n", info.table_max));
-        }
-        rust_code.push('\n');
-
-        // Host trait definitions
-        rust_code.push_str(&self.generate_host_traits(info));
-
-        // Globals struct (mutable globals only)
-        if has_mut_globals {
-            rust_code.push_str("pub struct Globals {\n");
-            for (idx, g) in info.globals.iter().enumerate() {
-                if g.mutable {
-                    let rust_ty = self.wasm_type_to_rust(&g.wasm_type);
-                    rust_code.push_str(&format!("    pub g{idx}: {rust_ty},\n"));
-                }
-            }
-            rust_code.push_str("}\n\n");
-        }
-
-        // Const items for immutable globals
-        rust_code.push_str(&self.emit_const_globals(info));
-
-        // Newtype wrapper struct (required to allow `impl WasmModule` on a foreign type)
-        let globals_type = if has_mut_globals { "Globals" } else { "()" };
-        let table_size_str = if info.has_table() { "TABLE_MAX" } else { "0" };
-        if info.has_memory {
-            rust_code.push_str(&format!(
-                "pub struct WasmModule(pub Module<{globals_type}, MAX_PAGES, {table_size_str}>);\n\n"
-            ));
-        } else {
-            rust_code.push_str(&format!(
-                "pub struct WasmModule(pub LibraryModule<{globals_type}, {table_size_str}>);\n\n"
-            ));
-        }
-
-        // Constructor (standalone for backwards compatibility)
-        rust_code.push_str(&self.generate_constructor(info, has_mut_globals));
-        rust_code.push('\n');
-
-        // Internal functions (private)
-        for (idx, ir_func) in info.ir_functions.iter().enumerate() {
-            let func_name = format!("func_{}", idx);
-            let code = self
-                .generate_function_with_info(ir_func, &func_name, info, false)
-                .with_context(|| format!("failed to generate code for function {}", idx))?;
-            rust_code.push_str(&code);
-            rust_code.push('\n');
-        }
-
-        // Export impl block
-        if !info.func_exports.is_empty() {
-            rust_code.push_str(&self.generate_export_impl(info));
-            rust_code.push('\n');
-        }
-
-        Ok(rust_code)
-    }
-
-    /// Generate element segment initialization code for a table.
-    ///
-    /// `table_receiver` is the expression to access the table (e.g., "module.table" or "table").
-    fn emit_element_segments(&self, info: &ModuleInfo, table_receiver: &str) -> String {
-        let mut code = String::new();
-        for seg in &info.element_segments {
-            for (i, func_idx) in seg.func_indices.iter().enumerate() {
-                let table_idx = seg.offset + i;
-                let local_func_idx = *func_idx - info.num_imported_functions();
-                let type_idx = info
-                    .func_signatures
-                    .get(local_func_idx)
-                    .map(|s| s.type_idx)
-                    .unwrap_or(0);
-                code.push_str(&format!(
-                    "    {}.set({}, Some(FuncRef {{ type_index: {}, func_index: {} }})).unwrap();\n",
-                    table_receiver, table_idx, type_idx, local_func_idx
-                ));
-            }
-        }
-        code
-    }
-
-    /// Generate the `pub fn new() -> WasmModule` or `pub fn new() -> WasmResult<WasmModule>` constructor.
-    fn generate_constructor(&self, info: &ModuleInfo, has_mut_globals: bool) -> String {
-        let mut code = String::new();
-
-        // Simple constructor for modules with no initialization
-        if !info.has_memory
-            && !has_mut_globals
-            && info.data_segments.is_empty()
-            && info.element_segments.is_empty()
-        {
-            code.push_str(
-                "pub fn new() -> Result<WasmModule, herkos_runtime::ConstructionError> {\n",
-            );
-            code.push_str("    Ok(WasmModule(LibraryModule::new((), Table::try_new(0)?)))\n");
-            code.push_str("}\n");
-            return code;
-        }
-
-        code.push_str("pub fn new() -> WasmResult<WasmModule> {\n");
-
-        // Build globals initializer
-        let globals_init = if has_mut_globals {
-            let mut fields = String::from("Globals { ");
-            let mut first = true;
-            for (idx, g) in info.globals.iter().enumerate() {
-                if g.mutable {
-                    if !first {
-                        fields.push_str(", ");
-                    }
-                    let (_, value_str) = self.global_init_to_rust(&g.init_value, &g.wasm_type);
-                    fields.push_str(&format!("g{idx}: {value_str}"));
-                    first = false;
-                }
-            }
-            fields.push_str(" }");
-            fields
-        } else {
-            "()".to_string()
-        };
-
-        // Table initialization
-        let table_init = if info.has_table() {
-            format!("Table::try_new({})?", info.table_initial)
-        } else {
-            "Table::try_new(0)?".to_string()
-        };
-
-        if info.has_memory {
-            let needs_mut = !info.data_segments.is_empty() || !info.element_segments.is_empty();
-            let binding = if needs_mut {
-                "let mut module"
-            } else {
-                "let module"
-            };
-            code.push_str(&format!(
-                "    {} = Module::try_new({}, {}, {}).map_err(|_| WasmTrap::OutOfBounds)?;\n",
-                binding, info.initial_pages, globals_init, table_init
-            ));
-
-            // Data segment initialization (byte-by-byte)
-            for seg in &info.data_segments {
-                for (i, byte) in seg.data.iter().enumerate() {
-                    let addr = seg.offset as usize + i;
-                    code.push_str(&format!(
-                        "    module.memory.store_u8({}, {})?;\n",
-                        addr, byte
-                    ));
-                }
-            }
-
-            // Element segment initialization
-            code.push_str(&self.emit_element_segments(info, "module.table"));
-
-            code.push_str("    Ok(WasmModule(module))\n");
-        } else if !info.element_segments.is_empty() {
-            // Need mutable table for element initialization
-            code.push_str(&format!("    let mut table = {};\n", table_init));
-            code.push_str(&self.emit_element_segments(info, "table"));
-            code.push_str(&format!(
-                "    Ok(WasmModule(LibraryModule::new({}, table)))\n",
-                globals_init
-            ));
-        } else {
-            code.push_str(&format!(
-                "    Ok(WasmModule(LibraryModule::new({}, {})))\n",
-                globals_init, table_init
-            ));
-        }
-
-        code.push_str("}\n");
-        code
-    }
-
-    /// Generate the `impl WasmModule { ... }` block with export methods.
-    fn generate_export_impl(&self, info: &ModuleInfo) -> String {
-        let mut code = String::new();
-        let has_mut_globals = info.has_mutable_globals();
-
-        code.push_str("impl WasmModule {\n");
-
-        for export in &info.func_exports {
-            let func_idx = export.func_index;
-            let sig = &info.func_signatures[func_idx];
-
-            // Determine trait bounds for this export
-            let trait_bounds_opt = if sig.needs_host {
-                self.build_trait_bounds(info)
-            } else {
-                None
-            };
-            let has_multiple_bounds = trait_bounds_opt.as_ref().is_some_and(|b| b.contains(" + "));
-
-            // Build generics: handle both H (host) and MP (imported memory size)
-            let mut generics: Vec<String> = Vec::new();
-            if info.has_memory_import {
-                generics.push("const MP: usize".to_string());
-            }
-            if has_multiple_bounds {
-                generics.push(format!("H: {}", trait_bounds_opt.as_ref().unwrap()));
-            }
-
-            // Method signature with optional generic parameter
-            let mut param_parts: Vec<String> = Vec::new();
-            param_parts.push("&mut self".to_string());
-            for (i, ty) in sig.params.iter().enumerate() {
-                let rust_ty = self.wasm_type_to_rust(ty);
-                param_parts.push(format!("v{i}: {rust_ty}"));
-            }
-
-            // Add memory parameter if imported (Milestone 4)
-            if info.has_memory_import {
-                param_parts.push("memory: &mut IsolatedMemory<MP>".to_string());
-            }
-
-            // Add host parameter if function needs it (Milestone 2/3/4)
-            if sig.needs_host {
-                if let Some(trait_bounds) = &trait_bounds_opt {
-                    if has_multiple_bounds {
-                        // Use generic parameter H
-                        param_parts.push("host: &mut H".to_string());
-                    } else {
-                        // Single trait bound - use impl directly
-                        param_parts.push(format!("host: &mut impl {trait_bounds}"));
-                    }
-                } else {
-                    // Fallback for backwards compatibility
-                    param_parts.push("host: &mut impl Host".to_string());
-                }
-            }
-
-            let return_type = self.format_return_type(sig.return_type.as_ref());
-
-            // Generate method signature (with generics if needed)
-            let generic_part = if generics.is_empty() {
-                String::new()
-            } else {
-                format!("<{}>", generics.join(", "))
-            };
-
-            code.push_str(&format!(
-                "    pub fn {}{generic_part}({}) -> {} {{\n",
-                export.name,
-                param_parts.join(", "),
-                return_type
-            ));
-
-            // Forward call to internal function
-            let mut call_args: Vec<String> =
-                (0..sig.params.len()).map(|i| format!("v{i}")).collect();
-
-            // Forward host parameter if needed
-            if sig.needs_host {
-                call_args.push("host".to_string());
-            }
-
-            if has_mut_globals {
-                call_args.push("&mut self.0.globals".to_string());
-            }
-            if info.has_memory {
-                call_args.push("&mut self.0.memory".to_string());
-            } else if info.has_memory_import {
-                call_args.push("memory".to_string());
-            }
-            if info.has_table() {
-                call_args.push("&self.0.table".to_string());
-            }
-
-            code.push_str(&format!(
-                "        func_{}({})\n",
-                export.func_index,
-                call_args.join(", ")
-            ));
-            code.push_str("    }\n");
-        }
-
-        code.push_str("}\n");
-        code
-    }
-
-    /// Generate a complete Rust function from IR with module info.
-    ///
-    /// `is_public` controls whether the function is `pub fn` or `fn`.
-    fn generate_function_with_info(
-        &self,
-        ir_func: &IrFunction,
-        func_name: &str,
-        info: &ModuleInfo,
-        is_public: bool,
-    ) -> Result<String> {
-        let mut output = String::new();
-
-        // Suppress warnings for generated code patterns that are hard to avoid
-        output.push_str("#[allow(unused_mut, unused_variables, unused_assignments, clippy::needless_return, clippy::manual_range_contains, clippy::never_loop)]\n");
-
-        // Generate function signature
-        output.push_str(&self.generate_signature_with_info(ir_func, func_name, info, is_public));
-        output.push_str(" {\n");
-
-        // Create mapping from BlockId to vector index
-        let mut block_id_to_index = std::collections::HashMap::new();
-        for (idx, block) in ir_func.blocks.iter().enumerate() {
-            block_id_to_index.insert(block.id, idx);
-        }
-
-        // Collect all variables and their types from instructions.
-        let mut var_types: std::collections::HashMap<VarId, WasmType> =
-            std::collections::HashMap::new();
-
-        // Seed with parameter types
-        for (var, ty) in &ir_func.params {
-            var_types.insert(*var, *ty);
-        }
-
-        // Seed with declared local variable types
-        for (var, ty) in &ir_func.locals {
-            var_types.insert(*var, *ty);
-        }
-
-        // Infer types from instructions
-        for block in &ir_func.blocks {
-            for instr in &block.instructions {
-                match instr {
-                    IrInstr::Const { dest, value } => {
-                        var_types.insert(*dest, value.wasm_type());
-                    }
-                    IrInstr::BinOp { dest, op, .. } => {
-                        var_types.insert(*dest, op.result_type());
-                    }
-                    IrInstr::UnOp { dest, op, .. } => {
-                        var_types.insert(*dest, op.result_type());
-                    }
-                    IrInstr::Load { dest, ty, .. } => {
-                        var_types.insert(*dest, *ty);
-                    }
-                    IrInstr::Call {
-                        dest: Some(dest),
-                        func_idx,
-                        ..
-                    } => {
-                        // func_idx is in global space (imports + locals).
-                        // For Milestone 1, we error on imported functions during codegen,
-                        // so just use a fallback type here if it's an import.
-                        let ty = if *func_idx >= info.num_imported_functions() {
-                            let local_idx = func_idx - info.num_imported_functions();
-                            info.func_signatures
-                                .get(local_idx)
-                                .and_then(|s| s.return_type)
-                                .unwrap_or(WasmType::I32)
-                        } else {
-                            // Call to imported function — will error during codegen.
-                            // Use fallback type for now.
-                            WasmType::I32
-                        };
-                        var_types.insert(*dest, ty);
-                    }
-                    IrInstr::CallImport {
-                        dest: Some(dest),
-                        import_idx,
-                        ..
-                    } => {
-                        // Look up import signature from func_imports
-                        let ty = info
-                            .func_imports
-                            .get(*import_idx)
-                            .and_then(|imp| imp.return_type)
-                            .unwrap_or(WasmType::I32);
-                        var_types.insert(*dest, ty);
-                    }
-                    IrInstr::Assign { dest, src } => {
-                        if let Some(ty) = var_types.get(src) {
-                            var_types.insert(*dest, *ty);
-                        } else {
-                            var_types.insert(*dest, WasmType::I32);
-                        }
-                    }
-                    IrInstr::GlobalGet { dest, index } => {
-                        // Distinguish imported globals (lower indices) from local globals
-                        let ty = if *index < info.imported_globals.len() {
-                            // Imported global
-                            info.imported_globals[*index].wasm_type
-                        } else {
-                            // Local global — adjust index by removing imported count
-                            let local_idx = *index - info.imported_globals.len();
-                            info.globals
-                                .get(local_idx)
-                                .map(|g| g.wasm_type)
-                                .unwrap_or(WasmType::I32)
-                        };
-                        var_types.insert(*dest, ty);
-                    }
-                    IrInstr::CallIndirect {
-                        dest: Some(dest),
-                        type_idx,
-                        ..
-                    } => {
-                        let ty = info
-                            .type_signatures
-                            .get(*type_idx)
-                            .and_then(|s| s.return_type)
-                            .unwrap_or(WasmType::I32);
-                        var_types.insert(*dest, ty);
-                    }
-                    IrInstr::MemorySize { dest } | IrInstr::MemoryGrow { dest, .. } => {
-                        var_types.insert(*dest, WasmType::I32);
-                    }
-                    IrInstr::Select { dest, val1, .. } => {
-                        // Result type matches the operand type
-                        let ty = var_types.get(val1).copied().unwrap_or(WasmType::I32);
-                        var_types.insert(*dest, ty);
-                    }
-                    _ => {}
-                }
-            }
-
-            // Also scan terminators for variable references (needed for
-            // dead-code blocks after `unreachable` where the variable
-            // was never assigned by an instruction).
-            match &block.terminator {
-                IrTerminator::Return { value: Some(var) } => {
-                    var_types
-                        .entry(*var)
-                        .or_insert(ir_func.return_type.unwrap_or(WasmType::I32));
-                }
-                IrTerminator::BranchIf { condition, .. } => {
-                    var_types.entry(*condition).or_insert(WasmType::I32);
-                }
-                IrTerminator::BranchTable { index, .. } => {
-                    var_types.entry(*index).or_insert(WasmType::I32);
-                }
-                _ => {}
-            }
-        }
-
-        // Declare all SSA variables with their inferred types
-        let mut sorted_vars: Vec<_> = var_types
-            .iter()
-            .filter(|(var, _)| !ir_func.params.iter().any(|(p, _)| p == *var))
-            .collect();
-        sorted_vars.sort_by_key(|(var, _)| var.0);
-
-        for (var, ty) in sorted_vars {
-            let rust_ty = self.wasm_type_to_rust(ty);
-            let default = ty.default_value_literal();
-            output.push_str(&format!("    let mut {var}: {rust_ty} = {default};\n"));
-        }
-
-        if ir_func.blocks.len() == 1 {
-            // Single-block optimization: emit flat body without loop/match
-            let block = &ir_func.blocks[0];
-            for instr in &block.instructions {
-                let code = self.generate_instruction_with_info(instr, info);
-                output.push_str(&code);
-                output.push('\n');
-            }
-            let term_code = self.generate_terminator_with_mapping(
-                &block.terminator,
-                &block_id_to_index,
-                ir_func.return_type,
-            );
-            output.push_str(&term_code);
-            output.push('\n');
-        } else {
-            // Multi-block: state machine with per-function Block enum
-            output.push_str("    #[derive(Clone, Copy)]\n    #[allow(dead_code)]\n");
-            output.push_str("    enum Block { ");
-            for idx in 0..ir_func.blocks.len() {
-                if idx > 0 {
-                    output.push_str(", ");
-                }
-                output.push_str(&format!("B{}", idx));
-            }
-            output.push_str(" }\n");
-            output.push_str("    let mut __current_block = Block::B0;\n");
-            output.push_str("    loop {\n");
-            output.push_str("        match __current_block {\n");
-
-            for (idx, block) in ir_func.blocks.iter().enumerate() {
-                output.push_str(&format!("            Block::B{} => {{\n", idx));
-
-                for instr in &block.instructions {
-                    let code = self.generate_instruction_with_info(instr, info);
-                    output.push_str(&code);
-                    output.push('\n');
-                }
-
-                let term_code = self.generate_terminator_with_mapping(
-                    &block.terminator,
-                    &block_id_to_index,
-                    ir_func.return_type,
-                );
-                output.push_str(&term_code);
-                output.push('\n');
-
-                output.push_str("            }\n");
-            }
-
-            // No catch-all needed — match is exhaustive over Block enum
-            output.push_str("        }\n");
-            output.push_str("    }\n");
-        }
-
-        output.push_str("}\n");
-        Ok(output)
-    }
-
-    /// Generate function signature with module info.
-    fn generate_signature_with_info(
-        &self,
-        ir_func: &IrFunction,
-        func_name: &str,
-        info: &ModuleInfo,
-        is_public: bool,
-    ) -> String {
-        let visibility = if is_public { "pub " } else { "" };
-
-        // Check if function needs host parameter (imports or global imports)
-        let needs_host = has_import_calls(ir_func)
-            || has_global_import_access(ir_func, info.imported_globals.len());
-        let trait_bounds_opt = if needs_host {
-            self.build_trait_bounds(info)
-        } else {
-            None
-        };
-
-        let has_multiple_bounds = trait_bounds_opt.as_ref().is_some_and(|b| b.contains(" + "));
-
-        // Build generics: handle both H (host) and MP (imported memory size)
-        let mut generics: Vec<String> = Vec::new();
-        if info.has_memory_import {
-            generics.push("const MP: usize".to_string());
-        }
-        if has_multiple_bounds {
-            generics.push(format!("H: {}", trait_bounds_opt.as_ref().unwrap()));
-        }
-
-        let generic_part = if generics.is_empty() {
-            String::new()
-        } else {
-            format!("<{}>", generics.join(", "))
-        };
-
-        let mut sig = format!("{visibility}fn {func_name}{generic_part}(");
-
-        // Parameters (mutable, as in WebAssembly all locals are mutable)
-        let mut param_parts: Vec<String> = ir_func
-            .params
-            .iter()
-            .map(|(var_id, ty)| {
-                let rust_ty = self.wasm_type_to_rust(ty);
-                format!("mut {}: {}", var_id, rust_ty)
-            })
-            .collect();
-
-        // Add host parameter if function needs imports or global imports (Milestone 2/3/4)
-        if needs_host {
-            if let Some(trait_bounds) = trait_bounds_opt {
-                if has_multiple_bounds {
-                    // Use generic parameter H
-                    param_parts.push("host: &mut H".to_string());
-                } else {
-                    // Single trait bound - use impl directly
-                    param_parts.push(format!("host: &mut impl {trait_bounds}"));
-                }
-            } else {
-                // Fallback for backwards compatibility
-                param_parts.push("host: &mut impl Host".to_string());
-            }
-        }
-
-        // Add globals parameter if wrapper mode has mutable globals
-        if info.needs_wrapper() && info.has_mutable_globals() {
-            param_parts.push("globals: &mut Globals".to_string());
-        }
-
-        // Add memory parameter — either const MAX_PAGES or generic MP
-        if info.has_memory {
-            param_parts.push("memory: &mut IsolatedMemory<MAX_PAGES>".to_string());
-        } else if info.has_memory_import {
-            param_parts.push("memory: &mut IsolatedMemory<MP>".to_string());
-        }
-
-        // Add table parameter if module has a table
-        if info.has_table() {
-            param_parts.push("table: &Table<TABLE_MAX>".to_string());
-        }
-
-        sig.push_str(&param_parts.join(", "));
-        sig.push(')');
-
-        // Return type
-        sig.push_str(&format!(
-            " -> {}",
-            self.format_return_type(ir_func.return_type.as_ref())
-        ));
-
-        sig
-    }
-
-    /// Generate code for a single instruction with module info.
-    fn generate_instruction_with_info(&self, instr: &IrInstr, info: &ModuleInfo) -> String {
-        match instr {
-            IrInstr::Const { dest, value } => self.backend.emit_const(*dest, value),
-
-            IrInstr::BinOp { dest, op, lhs, rhs } => {
-                self.backend.emit_binop(*dest, *op, *lhs, *rhs)
-            }
-
-            IrInstr::UnOp { dest, op, operand } => self.backend.emit_unop(*dest, *op, *operand),
-
-            IrInstr::Load {
-                dest,
-                ty,
-                addr,
-                offset,
-                width,
-                sign,
-            } => self
-                .backend
-                .emit_load(*dest, *ty, *addr, *offset, *width, *sign),
-
-            IrInstr::Store {
-                ty,
-                addr,
-                value,
-                offset,
-                width,
-            } => self.backend.emit_store(*ty, *addr, *value, *offset, *width),
-
-            IrInstr::Call {
-                dest,
-                func_idx,
-                args,
-            } => {
-                // Call to local function (imports are handled by CallImport)
-                let has_globals = info.needs_wrapper() && info.has_mutable_globals();
-                let has_memory = info.has_memory;
-                let has_table = info.has_table();
-                self.backend
-                    .emit_call(*dest, *func_idx, args, has_globals, has_memory, has_table)
-            }
-
-            IrInstr::CallImport {
-                dest,
-                module_name,
-                func_name,
-                args,
-                ..
-            } => self
-                .backend
-                .emit_call_import(*dest, module_name, func_name, args),
-
-            IrInstr::CallIndirect {
-                dest,
-                type_idx,
-                table_idx,
-                args,
-            } => self.generate_call_indirect(*dest, *type_idx, *table_idx, args, info),
-
-            IrInstr::Assign { dest, src } => self.backend.emit_assign(*dest, *src),
-
-            IrInstr::GlobalGet { dest, index } => {
-                if *index < info.imported_globals.len() {
-                    // Imported global — access via host trait getter
-                    let g = &info.imported_globals[*index];
-                    format!("                {} = host.get_{}();", dest, g.name)
-                } else {
-                    // Local global — use corrected index and backend
-                    let local_idx = index - info.imported_globals.len();
-                    let is_mutable = info
-                        .globals
-                        .get(local_idx)
-                        .map(|g| g.mutable)
-                        .unwrap_or(true);
-                    self.backend.emit_global_get(*dest, local_idx, is_mutable)
-                }
-            }
-
-            IrInstr::GlobalSet { index, value } => {
-                if *index < info.imported_globals.len() {
-                    // Imported global — access via host trait setter
-                    let g = &info.imported_globals[*index];
-                    format!("                host.set_{}({});", g.name, value)
-                } else {
-                    // Local global — use corrected index and backend
-                    let local_idx = index - info.imported_globals.len();
-                    self.backend.emit_global_set(local_idx, *value)
-                }
-            }
-
-            IrInstr::MemorySize { dest } => self.backend.emit_memory_size(*dest),
-
-            IrInstr::MemoryGrow { dest, delta } => self.backend.emit_memory_grow(*dest, *delta),
-
-            IrInstr::Select {
-                dest,
-                val1,
-                val2,
-                condition,
-            } => self.backend.emit_select(*dest, *val1, *val2, *condition),
-        }
-    }
-
-    /// Generate code for a terminator with BlockId to index mapping.
-    fn generate_terminator_with_mapping(
-        &self,
-        term: &IrTerminator,
-        block_id_to_index: &std::collections::HashMap<BlockId, usize>,
-        func_return_type: Option<WasmType>,
-    ) -> String {
-        match term {
-            IrTerminator::Return { value } => {
-                // If the function has a return type but the return has no value,
-                // this is dead code after `unreachable` — emit a trap instead
-                // of `return Ok(())` which would be a type mismatch.
-                if value.is_none() && func_return_type.is_some() {
-                    return self.backend.emit_unreachable();
-                }
-                self.backend.emit_return(*value)
-            }
-
-            IrTerminator::Jump { target } => {
-                let idx = block_id_to_index[target];
-                self.backend.emit_jump_to_index(idx)
-            }
-
-            IrTerminator::BranchIf {
-                condition,
-                if_true,
-                if_false,
-            } => {
-                let true_idx = block_id_to_index[if_true];
-                let false_idx = block_id_to_index[if_false];
-                self.backend
-                    .emit_branch_if_to_index(*condition, true_idx, false_idx)
-            }
-
-            IrTerminator::BranchTable {
-                index,
-                targets,
-                default,
-            } => {
-                let target_indices: Vec<usize> =
-                    targets.iter().map(|t| block_id_to_index[t]).collect();
-                let default_idx = block_id_to_index[default];
-                self.backend
-                    .emit_branch_table_to_index(*index, &target_indices, default_idx)
-            }
-
-            IrTerminator::Unreachable => self.backend.emit_unreachable(),
-        }
-    }
-
-    /// Convert WasmType to Rust type string.
-    fn wasm_type_to_rust(&self, ty: &WasmType) -> &'static str {
-        match ty {
-            WasmType::I32 => "i32",
-            WasmType::I64 => "i64",
-            WasmType::F32 => "f32",
-            WasmType::F64 => "f64",
-        }
-    }
-
-    /// Format a Wasm return type as a Rust WasmResult type.
-    ///
-    /// Examples:
-    /// - `Some(I32)` → `"WasmResult<i32>"`
-    /// - `None` → `"WasmResult<()>"`
-    fn format_return_type(&self, ty: Option<&WasmType>) -> String {
-        match ty {
-            Some(t) => format!("WasmResult<{}>", self.wasm_type_to_rust(t)),
-            None => "WasmResult<()>".to_string(),
-        }
-    }
-
-    /// Convert a GlobalInit to (Rust type string, value literal string).
-    fn global_init_to_rust(&self, init: &GlobalInit, ty: &WasmType) -> (&'static str, String) {
-        let rust_ty = self.wasm_type_to_rust(ty);
-        let value = match init {
-            GlobalInit::I32(v) => format!("{v}i32"),
-            GlobalInit::I64(v) => format!("{v}i64"),
-            GlobalInit::F32(v) => format!("{v}f32"),
-            GlobalInit::F64(v) => format!("{v}f64"),
-        };
-        (rust_ty, value)
-    }
-
-    /// Generate inline dispatch code for `call_indirect`.
-    ///
-    /// The generated code:
-    /// 1. Looks up the table entry by index
-    /// 2. Checks the type signature matches
-    /// 3. Dispatches to the matching function via a match on func_index
-    fn generate_call_indirect(
-        &self,
-        dest: Option<VarId>,
-        type_idx: usize,
-        table_idx: VarId,
-        args: &[VarId],
-        info: &ModuleInfo,
-    ) -> String {
-        let has_globals = info.needs_wrapper() && info.has_mutable_globals();
-        let has_memory = info.has_memory;
-        let has_table = info.has_table();
-
-        // Canonicalize the type index for structural equivalence (Wasm spec §4.4.9).
-        // Two different type indices with identical (params, results) must match.
-        let canon_idx = info
-            .canonical_type
-            .get(type_idx)
-            .copied()
-            .unwrap_or(type_idx);
-
-        let mut code = String::new();
-
-        // Look up the table entry
-        code.push_str(&format!(
-            "                let __entry = table.get({table_idx} as u32)?;\n"
-        ));
-
-        // Type check (compares canonical indices — FuncRef.type_index is
-        // also stored as canonical during element segment initialization)
-        code.push_str(&format!(
-            "                if __entry.type_index != {canon_idx} {{ return Err(WasmTrap::IndirectCallTypeMismatch); }}\n"
-        ));
-
-        // Build the common args string for dispatch calls
-        let base_args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-        let call_args = build_inner_call_args(
-            &base_args,
-            has_globals,
-            "globals",
-            has_memory,
-            "memory",
-            has_table,
-            "table",
-        );
-        let args_str = call_args.join(", ");
-
-        // Build dispatch match — only dispatch to functions with matching
-        // canonical type (structural equivalence)
-        let dest_prefix = match dest {
-            Some(d) => format!("{d} = "),
-            None => String::new(),
-        };
-
-        code.push_str(&format!(
-            "                {dest_prefix}match __entry.func_index {{\n"
-        ));
-
-        for (func_idx, sig) in info.func_signatures.iter().enumerate() {
-            if sig.type_idx == canon_idx {
-                code.push_str(&format!(
-                    "                    {} => func_{}({})?,\n",
-                    func_idx, func_idx, args_str
-                ));
-            }
-        }
-
-        code.push_str("                    _ => return Err(WasmTrap::UndefinedElement),\n");
-        code.push_str("                };");
-
-        code
+        module::generate_module_with_info(self.backend, info)
     }
 }
 
@@ -1108,7 +209,7 @@ mod tests {
         };
 
         let backend = SafeBackend::new();
-        let codegen = CodeGenerator::new(&backend);
+        let _codegen = CodeGenerator::new(&backend);
         let info = ModuleInfo {
             has_memory: false,
             has_memory_import: false,
@@ -1127,9 +228,8 @@ mod tests {
             imported_globals: Vec::new(),
             ir_functions: Vec::new(),
         };
-        let code = codegen
-            .generate_function_with_info(&ir_func, "add", &info, true)
-            .unwrap();
+        let code =
+            function::generate_function_with_info(&backend, &ir_func, "add", &info, true).unwrap();
 
         println!("Generated code:\n{}", code);
 
@@ -1159,7 +259,7 @@ mod tests {
         };
 
         let backend = SafeBackend::new();
-        let codegen = CodeGenerator::new(&backend);
+        let _codegen = CodeGenerator::new(&backend);
         let info = ModuleInfo {
             has_memory: false,
             has_memory_import: false,
@@ -1178,9 +278,8 @@ mod tests {
             imported_globals: Vec::new(),
             ir_functions: Vec::new(),
         };
-        let code = codegen
-            .generate_function_with_info(&ir_func, "noop", &info, true)
-            .unwrap();
+        let code =
+            function::generate_function_with_info(&backend, &ir_func, "noop", &info, true).unwrap();
 
         assert!(code.contains("pub fn noop()"));
         assert!(code.contains("-> WasmResult<()>"));
@@ -1265,7 +364,7 @@ mod tests {
         };
 
         let backend = SafeBackend::new();
-        let codegen = CodeGenerator::new(&backend);
+        let _codegen = CodeGenerator::new(&backend);
         let info = ModuleInfo {
             has_memory: false,
             has_memory_import: false,
@@ -1284,8 +383,7 @@ mod tests {
             imported_globals: Vec::new(),
             ir_functions: Vec::new(),
         };
-        let code = codegen
-            .generate_function_with_info(&ir_func, "add64", &info, true)
+        let code = function::generate_function_with_info(&backend, &ir_func, "add64", &info, true)
             .unwrap();
 
         println!("Generated code:\n{}", code);
@@ -1329,7 +427,7 @@ mod tests {
         };
 
         let backend = SafeBackend::new();
-        let codegen = CodeGenerator::new(&backend);
+        let _codegen = CodeGenerator::new(&backend);
         let info = ModuleInfo {
             has_memory: false,
             has_memory_import: false,
@@ -1348,9 +446,8 @@ mod tests {
             imported_globals: Vec::new(),
             ir_functions: Vec::new(),
         };
-        let code = codegen
-            .generate_function_with_info(&ir_func, "eq64", &info, true)
-            .unwrap();
+        let code =
+            function::generate_function_with_info(&backend, &ir_func, "eq64", &info, true).unwrap();
 
         println!("Generated code:\n{}", code);
 
