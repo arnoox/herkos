@@ -743,7 +743,6 @@ pub enum MemoryMode {
     None,
 }
 
-///
 /// This is the IR representation of a module's structure and metadata,
 /// independent of any specific code generation backend. It includes memory
 /// layout, table configuration, globals, imports, exports, and code segments.
@@ -792,17 +791,6 @@ impl ModuleInfo {
     /// This is derived from `func_imports.len()` rather than storing it separately.
     pub fn num_imported_functions(&self) -> usize {
         self.func_imports.len()
-    }
-
-    /// Whether the module needs a wrapper struct (Module/LibraryModule).
-    ///
-    /// A wrapper is generated when there are mutable globals, data segments,
-    /// or a table (for indirect calls).
-    pub fn needs_wrapper(&self) -> bool {
-        self.globals.iter().any(|g| g.mutable)
-            || !self.data_segments.is_empty()
-            || !self.element_segments.is_empty()
-            || self.has_memory_import
     }
 
     /// Whether the module has any mutable globals.
@@ -1167,41 +1155,6 @@ mod tests {
 
         info.table_max = 10;
         assert!(info.has_table());
-    }
-
-    #[test]
-    fn test_module_info_needs_wrapper() {
-        let mut info = ModuleInfo::default();
-        assert!(!info.needs_wrapper());
-
-        // Add mutable global
-        info.globals.push(GlobalDef {
-            wasm_type: WasmType::I32,
-            mutable: true,
-            init_value: GlobalInit::I32(0),
-        });
-        assert!(info.needs_wrapper());
-
-        // Remove mutable global, add data segment
-        info.globals.clear();
-        info.data_segments.push(DataSegmentDef {
-            offset: 0,
-            data: vec![1, 2, 3],
-        });
-        assert!(info.needs_wrapper());
-
-        // Remove data segment, add element segment
-        info.data_segments.clear();
-        info.element_segments.push(ElementSegmentDef {
-            offset: 0,
-            func_indices: vec![0],
-        });
-        assert!(info.needs_wrapper());
-
-        // Remove element segment, set has_memory_import
-        info.element_segments.clear();
-        info.has_memory_import = true;
-        assert!(info.needs_wrapper());
     }
 
     #[test]

@@ -600,38 +600,9 @@ fn test_module_with_immutable_global() -> Result<()> {
 
     // Immutable global only → standalone (no wrapper)
     assert!(rust_code.contains("pub const G0: i32 = 42i32;"));
-    assert!(rust_code.contains("pub fn func_0"));
+    assert!(rust_code.contains("fn func_0"));
     // GlobalGet for immutable should reference const
     assert!(rust_code.contains("G0"));
-    // No wrapper
-    assert!(!rust_code.contains("pub struct Globals"));
-    assert!(!rust_code.contains("WasmModule"));
-
-    Ok(())
-}
-
-#[test]
-fn test_backwards_compat_no_wrapper() -> Result<()> {
-    // Existing modules with exports but no globals/data should still work
-    let wat = r#"
-        (module
-            (func (param i32 i32) (result i32)
-                local.get 0
-                local.get 1
-                i32.add)
-            (export "add" (func 0)))
-    "#;
-
-    let rust_code = transpile_wat(wat)?;
-
-    println!("Generated Rust code:\n{}", rust_code);
-
-    // No wrapper needed
-    assert!(!rust_code.contains("pub struct Globals"));
-    assert!(!rust_code.contains("WasmModule"));
-    assert!(!rust_code.contains("impl"));
-    // Standalone function
-    assert!(rust_code.contains("pub fn func_0("));
 
     Ok(())
 }

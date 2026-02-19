@@ -75,8 +75,8 @@ fn test_hello_data_second_byte() {
 
 #[test]
 fn test_const_global() {
-    // const_global generates standalone functions (no wrapper)
-    assert_eq!(const_global::func_0().unwrap(), 42);
+    let mut module = const_global::new().unwrap();
+    assert_eq!(module.get_answer().unwrap(), 42);
 }
 
 #[test]

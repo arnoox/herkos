@@ -3,10 +3,8 @@
 //! # Overview
 //!
 //! This module walks the IR and uses a Backend to emit complete Rust functions and module
-//! structures. It supports two generation modes:
-//! - **Standalone** (backwards compatible): generates `pub fn func_N(...)` functions
-//! - **Module wrapper**: generates a `Module<Globals, MAX_PAGES, 0>` struct with
-//!   constructor, internal functions, and exported methods
+//! structures. It generates a `Module<Globals, MAX_PAGES, 0>` struct with constructor,
+//! internal functions, and exported methods.
 //!
 //! # Architecture
 //!
@@ -26,27 +24,21 @@
 //!                          │   generate_module_with_info()       │
 //!                          │   (Main entry point)                │
 //!                          └─────────────────────────────────────┘
-//!                           │
-//!           ┌───────────────┴───────────────┐
-//!           │                               │
-//!           ▼                               ▼
-//!    ┌─────────────────┐          ┌─────────────────────┐
-//!    │   STANDALONE    │          │   MODULE WRAPPER    │
-//!    │    (no-op mode) │          │   (recommended)     │
-//!    └─────────────────┘          └─────────────────────┘
-//!           │                              │
-//!           ├─ Preamble                   ├─ Preamble
-//!           ├─ Host traits                ├─ Host traits
-//!           ├─ Const globals              ├─ Const globals
-//!           ├─ Pub functions              ├─ Globals struct
-//!           │                             ├─ WasmModule newtype
-//!           │                             ├─ Constructor (new())
-//!           │                             ├─ Private functions
-//!           │                             ├─ Export impl block
-//!           │                             │
-//!           └──────────────┬──────────────┘
-//!                          │
-//!                          ▼
+//!                                            │
+//!                                            ▼
+//!                      ┌──────────────────────────────────────┐
+//!                      │      MODULE WRAPPER GENERATION      │
+//!                      ├─ Preamble                           │
+//!                      ├─ Host traits                        │
+//!                      ├─ Const globals                      │
+//!                      ├─ Globals struct                     │
+//!                      ├─ WasmModule newtype                 │
+//!                      ├─ Constructor (new())                │
+//!                      ├─ Private functions                  │
+//!                      ├─ Export impl block                  │
+//!                      └──────────────────────────────────────┘
+//!                                            │
+//!                                            ▼
 //!                ┌──────────────────────┐
 //!                │   Rust Source Code   │
 //!                │   (ready to compile) │
@@ -79,8 +71,7 @@
 //! }
 //!    │
 //!    ├─→ generate_module_with_info()
-//!    │     └─→ needs_wrapper() → true (has_memory + exports)
-//!    │         └─→ generate_wrapper_module()
+//!    │     └─→ generate_wrapper_module()
 //!    │
 //!    ├─→ [Constructor generation]
 //!    │   └─ emit_element_segments() (if table)
@@ -173,8 +164,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
 
     /// Generate a complete Rust module from IR with full module info.
     ///
-    /// This is the main entry point. It decides between standalone and wrapper
-    /// modes based on `info.needs_wrapper()`.
+    /// This is the main entry point. It generates a module wrapper structure.
     pub fn generate_module_with_info(&self, info: &ModuleInfo) -> Result<String> {
         module::generate_module_with_info(self.backend, info)
     }
@@ -633,7 +623,10 @@ mod tests {
                 init_value: GlobalInit::I32(42),
             }],
             data_segments: Vec::new(),
-            func_exports: Vec::new(),
+            func_exports: vec![FuncExport {
+                name: "get_const".to_string(),
+                func_index: 0,
+            }],
             func_signatures: vec![FuncSignature {
                 params: vec![],
                 return_type: Some(WasmType::I32),
@@ -651,76 +644,14 @@ mod tests {
         let codegen = CodeGenerator::new(&backend);
         let code = codegen.generate_module_with_info(&info).unwrap();
 
-        println!("Generated standalone code:\n{}", code);
+        println!("Generated code with immutable global:\n{}", code);
 
-        // Immutable only → standalone (no wrapper needed)
-        assert!(!info.needs_wrapper());
+        // Should use wrapper mode
         assert!(code.contains("pub const G0: i32 = 42i32;"));
-        assert!(code.contains("pub fn func_0"));
+        assert!(code.contains("pub struct WasmModule"));
+        assert!(code.contains("pub fn new()"));
+        assert!(code.contains("pub fn get_const"));
         // GlobalGet for immutable should use const name
         assert!(code.contains("G0"));
-    }
-
-    #[test]
-    fn generate_backwards_compat_no_wrapper() {
-        let ir_func = IrFunction {
-            params: vec![(VarId(0), WasmType::I32), (VarId(1), WasmType::I32)],
-            locals: vec![],
-            blocks: vec![IrBlock {
-                id: BlockId(0),
-                label: "block0".to_string(),
-                instructions: vec![IrInstr::BinOp {
-                    dest: VarId(2),
-                    op: BinOp::I32Add,
-                    lhs: VarId(0),
-                    rhs: VarId(1),
-                }],
-                terminator: IrTerminator::Return {
-                    value: Some(VarId(2)),
-                },
-            }],
-            entry_block: BlockId(0),
-            return_type: Some(WasmType::I32),
-        };
-
-        let info = ModuleInfo {
-            has_memory: false,
-            has_memory_import: false,
-            max_pages: 0,
-            initial_pages: 0,
-            table_initial: 0,
-            table_max: 0,
-            element_segments: Vec::new(),
-            globals: Vec::new(),
-            data_segments: Vec::new(),
-            func_exports: vec![FuncExport {
-                name: "add".to_string(),
-                func_index: 0,
-            }],
-            func_signatures: vec![FuncSignature {
-                params: vec![WasmType::I32, WasmType::I32],
-                return_type: Some(WasmType::I32),
-                type_idx: 0,
-                needs_host: false,
-            }],
-            type_signatures: Vec::new(),
-            canonical_type: Vec::new(),
-            func_imports: Vec::new(),
-            imported_globals: Vec::new(),
-            ir_functions: vec![ir_func],
-        };
-
-        let backend = SafeBackend::new();
-        let codegen = CodeGenerator::new(&backend);
-        let code = codegen.generate_module_with_info(&info).unwrap();
-
-        println!("Generated backwards compat code:\n{}", code);
-
-        // No wrapper — standalone functions
-        assert!(!info.needs_wrapper());
-        assert!(!code.contains("pub struct Globals"));
-        assert!(!code.contains("WasmModule"));
-        assert!(!code.contains("impl"));
-        assert!(code.contains("pub fn func_0("));
     }
 }

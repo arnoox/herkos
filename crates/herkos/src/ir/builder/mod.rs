@@ -83,7 +83,7 @@ pub fn build_module_info(parsed: &ParsedModule, options: &TranspileOptions) -> R
     // Analyze module structure (memory, table, types)
     let mem_info = analysis::extract_memory_info(parsed, options)?;
     let table_info = analysis::extract_table_info(parsed);
-    let (canonical_type, type_sigs) = analysis::build_type_mappings(parsed);
+    let (canonical_type, type_sigs) = analysis::build_type_mappings(parsed); // TODO: could we maybe just build 2 different functions for canonical-types and type-sigs instead of returning a tuple?
 
     // Analyze imports
     let imported_globals = analysis::build_imported_globals(parsed);

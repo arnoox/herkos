@@ -305,8 +305,8 @@ fn generate_signature_with_info<B: Backend>(
         }
     }
 
-    // Add globals parameter if wrapper mode has mutable globals
-    if info.needs_wrapper() && info.has_mutable_globals() {
+    // Add globals parameter if module has mutable globals
+    if info.has_mutable_globals() {
         param_parts.push("globals: &mut Globals".to_string());
     }
 

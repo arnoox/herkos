@@ -1,5 +1,5 @@
 (module
-  (memory 1 4)
+  (memory 1 2)
   ;; get_size: returns current memory size in pages
   (func (result i32)
     memory.size)

@@ -1,21 +1,35 @@
 //! Export implementation generation.
 //!
-//! Generates the `impl WasmModule { ... }` block with exported function methods
-//! that forward calls to internal functions while managing shared state.
+//! Generates the `impl WasmModule { ... }` block with methods for all functions.
+//! Exported functions use their export names, internal functions use func_N names.
 
 use crate::backend::Backend;
 use crate::ir::*;
 
-/// Generate the `impl WasmModule { ... }` block with export methods.
+/// Generate the `impl WasmModule { ... }` block with accessor methods for all functions.
 pub fn generate_export_impl<B: Backend>(_backend: &B, info: &ModuleInfo) -> String {
     let mut code = String::new();
     let has_mut_globals = info.has_mutable_globals();
 
     code.push_str("impl WasmModule {\n");
 
-    for export in &info.func_exports {
-        let func_idx = export.func_index;
+    // Build a map of function index -> export name for quick lookup
+    let export_names: std::collections::HashMap<usize, &str> = info
+        .func_exports
+        .iter()
+        .map(|e| (e.func_index, e.name.as_str()))
+        .collect();
+
+    // Generate accessor methods for all functions
+    for func_idx in 0..info.func_signatures.len() {
         let sig = &info.func_signatures[func_idx];
+
+        // Use export name if available, otherwise use func_N
+        let method_name = if let Some(export_name) = export_names.get(&func_idx) {
+            (*export_name).to_string()
+        } else {
+            format!("func_{}", func_idx)
+        };
 
         // Determine trait bounds for this export
         let trait_bounds_opt = if sig.needs_host {
@@ -74,7 +88,7 @@ pub fn generate_export_impl<B: Backend>(_backend: &B, info: &ModuleInfo) -> Stri
 
         code.push_str(&format!(
             "    pub fn {}{generic_part}({}) -> {} {{\n",
-            export.name,
+            method_name,
             param_parts.join(", "),
             return_type
         ));
@@ -101,7 +115,7 @@ pub fn generate_export_impl<B: Backend>(_backend: &B, info: &ModuleInfo) -> Stri
 
         code.push_str(&format!(
             "        func_{}({})\n",
-            export.func_index,
+            func_idx,
             call_args.join(", ")
         ));
         code.push_str("    }\n");

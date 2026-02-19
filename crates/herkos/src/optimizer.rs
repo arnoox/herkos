@@ -2,6 +2,8 @@
 //!
 //! This module implements optimizations on the intermediate representation (IR)
 //! to improve code generation quality and runtime performance.
+//!
+//! Currently, this is a placeholder with no actual optimizations implemented.
 
 use crate::ir::ModuleInfo;
 use anyhow::Result;

@@ -1,9 +1,7 @@
 //! Module-level code generation.
 //!
-//! Handles the two main generation modes:
-//! - **Standalone**: generates `pub fn func_N(...)` functions (backwards compatible)
-//! - **Module wrapper**: generates a `Module<Globals, MAX_PAGES, 0>` struct with
-//!   constructor, internal functions, and exported methods
+//! Generates a `Module<Globals, MAX_PAGES, 0>` or `LibraryModule<Globals, 0>` struct
+//! with constructor, internal functions, and exported methods.
 
 use crate::backend::Backend;
 use crate::ir::*;
@@ -11,44 +9,9 @@ use anyhow::{Context, Result};
 
 /// Generate a complete Rust module from IR functions with full module info.
 ///
-/// This is the main entry point for Milestone 4+. It decides between
-/// standalone functions and a module wrapper based on `info.needs_wrapper()`.
+/// This is the main entry point. It generates a module wrapper structure.
 pub fn generate_module_with_info<B: Backend>(backend: &B, info: &ModuleInfo) -> Result<String> {
-    if info.needs_wrapper() {
-        generate_wrapper_module(backend, info)
-    } else {
-        generate_standalone_module(backend, info)
-    }
-}
-
-/// Generate standalone functions (no module wrapper).
-fn generate_standalone_module<B: Backend>(backend: &B, info: &ModuleInfo) -> Result<String> {
-    let mut rust_code = crate::codegen::constructor::rust_code_preamble();
-
-    if info.has_memory {
-        rust_code.push_str(&format!("const MAX_PAGES: usize = {};\n\n", info.max_pages));
-    }
-
-    // Host trait definitions
-    rust_code.push_str(&crate::codegen::traits::generate_host_traits(backend, info));
-
-    // Const items for immutable globals
-    rust_code.push_str(&crate::codegen::constructor::emit_const_globals(
-        backend, info,
-    ));
-
-    // Generate each function
-    for (idx, ir_func) in info.ir_functions.iter().enumerate() {
-        let func_name = format!("func_{}", idx);
-        let code = crate::codegen::function::generate_function_with_info(
-            backend, ir_func, &func_name, info, true,
-        )
-        .with_context(|| format!("failed to generate code for function {}", idx))?;
-        rust_code.push_str(&code);
-        rust_code.push('\n');
-    }
-
-    Ok(rust_code)
+    generate_wrapper_module(backend, info)
 }
 
 /// Generate a module wrapper with Globals struct, constructor, and export methods.
@@ -117,8 +80,8 @@ fn generate_wrapper_module<B: Backend>(backend: &B, info: &ModuleInfo) -> Result
         rust_code.push('\n');
     }
 
-    // Export impl block
-    if !info.func_exports.is_empty() {
+    // Impl block with accessor methods for all functions
+    if !info.ir_functions.is_empty() {
         rust_code.push_str(&crate::codegen::export::generate_export_impl(backend, info));
         rust_code.push('\n');
     }

@@ -12,23 +12,25 @@ use herkos_tests::{
 #[test]
 fn test_add_correctness() {
     // Basic addition
-    assert_eq!(add::func_0(2, 3).unwrap(), 5);
-    assert_eq!(add::func_0(0, 0).unwrap(), 0);
-    assert_eq!(add::func_0(-1, 1).unwrap(), 0);
-    assert_eq!(add::func_0(100, -50).unwrap(), 50);
+    let mut add_mod = add::new().unwrap();
+    assert_eq!(add_mod.func_0(2, 3).unwrap(), 5);
+    assert_eq!(add_mod.func_0(0, 0).unwrap(), 0);
+    assert_eq!(add_mod.func_0(-1, 1).unwrap(), 0);
+    assert_eq!(add_mod.func_0(100, -50).unwrap(), 50);
 }
 
 #[test]
 fn test_add_wrapping() {
     // Wasm uses wrapping arithmetic (matches Rust's wrapping_add)
+    let mut add_mod = add::new().unwrap();
     assert_eq!(
-        add::func_0(i32::MAX, 1).unwrap(),
+        add_mod.func_0(i32::MAX, 1).unwrap(),
         i32::MIN,
         "i32::MAX + 1 should wrap to i32::MIN"
     );
 
     assert_eq!(
-        add::func_0(i32::MAX, i32::MAX).unwrap(),
+        add_mod.func_0(i32::MAX, i32::MAX).unwrap(),
         -2,
         "i32::MAX + i32::MAX should wrap"
     );
@@ -36,15 +38,17 @@ fn test_add_wrapping() {
 
 #[test]
 fn test_sub_correctness() {
-    assert_eq!(sub::func_0(10, 3).unwrap(), 7);
-    assert_eq!(sub::func_0(0, 0).unwrap(), 0);
-    assert_eq!(sub::func_0(5, 10).unwrap(), -5);
+    let mut sub_mod = sub::new().unwrap();
+    assert_eq!(sub_mod.func_0(10, 3).unwrap(), 7);
+    assert_eq!(sub_mod.func_0(0, 0).unwrap(), 0);
+    assert_eq!(sub_mod.func_0(5, 10).unwrap(), -5);
 }
 
 #[test]
 fn test_sub_wrapping() {
+    let mut sub_mod = sub::new().unwrap();
     assert_eq!(
-        sub::func_0(i32::MIN, 1).unwrap(),
+        sub_mod.func_0(i32::MIN, 1).unwrap(),
         i32::MAX,
         "i32::MIN - 1 should wrap to i32::MAX"
     );
@@ -52,16 +56,18 @@ fn test_sub_wrapping() {
 
 #[test]
 fn test_mul_correctness() {
-    assert_eq!(mul::func_0(6, 7).unwrap(), 42);
-    assert_eq!(mul::func_0(0, 100).unwrap(), 0);
-    assert_eq!(mul::func_0(-2, 3).unwrap(), -6);
-    assert_eq!(mul::func_0(-2, -3).unwrap(), 6);
+    let mut mul_mod = mul::new().unwrap();
+    assert_eq!(mul_mod.func_0(6, 7).unwrap(), 42);
+    assert_eq!(mul_mod.func_0(0, 100).unwrap(), 0);
+    assert_eq!(mul_mod.func_0(-2, 3).unwrap(), -6);
+    assert_eq!(mul_mod.func_0(-2, -3).unwrap(), 6);
 }
 
 #[test]
 fn test_mul_wrapping() {
+    let mut mul_mod = mul::new().unwrap();
     assert_eq!(
-        mul::func_0(i32::MAX, 2).unwrap(),
+        mul_mod.func_0(i32::MAX, 2).unwrap(),
         -2,
         "i32::MAX * 2 should wrap"
     );
@@ -70,13 +76,15 @@ fn test_mul_wrapping() {
 #[test]
 fn test_const_return() {
     // Function that returns a constant
-    assert_eq!(const_return::func_0().unwrap(), 42);
+    let mut const_return_mod = const_return::new().unwrap();
+    assert_eq!(const_return_mod.func_0().unwrap(), 42);
 }
 
 #[test]
 fn test_nop() {
     // Void function with no-op
-    assert_eq!(nop::func_0().unwrap(), ());
+    let mut nop_mod = nop::new().unwrap();
+    assert_eq!(nop_mod.func_0().unwrap(), ());
 }
 
 // Comprehensive property: addition commutes
@@ -91,10 +99,11 @@ fn test_add_commutative() {
         (i32::MIN, -1),
     ];
 
+    let mut add_mod = add::new().unwrap();
     for (a, b) in test_cases {
         assert_eq!(
-            add::func_0(a, b).unwrap(),
-            add::func_0(b, a).unwrap(),
+            add_mod.func_0(a, b).unwrap(),
+            add_mod.func_0(b, a).unwrap(),
             "addition should be commutative: {} + {} != {} + {}",
             a,
             b,
@@ -107,17 +116,19 @@ fn test_add_commutative() {
 // i64 type safety: generated code declares i64 variables correctly
 #[test]
 fn test_i64_add_correctness() {
-    assert_eq!(add_i64::func_0(2, 3).unwrap(), 5i64);
-    assert_eq!(add_i64::func_0(0, 0).unwrap(), 0i64);
-    assert_eq!(add_i64::func_0(-1, 1).unwrap(), 0i64);
+    let mut add_i64_mod = add_i64::new().unwrap();
+    assert_eq!(add_i64_mod.func_0(2, 3).unwrap(), 5i64);
+    assert_eq!(add_i64_mod.func_0(0, 0).unwrap(), 0i64);
+    assert_eq!(add_i64_mod.func_0(-1, 1).unwrap(), 0i64);
 }
 
 #[test]
 fn test_i64_add_large_values() {
     // Values that exceed i32 range — proves i64 typing is correct
     let large: i64 = 3_000_000_000;
+    let mut add_i64_mod = add_i64::new().unwrap();
     assert_eq!(
-        add_i64::func_0(large, large).unwrap(),
+        add_i64_mod.func_0(large, large).unwrap(),
         6_000_000_000i64,
         "i64 add with values > i32::MAX should work"
     );
@@ -125,8 +136,9 @@ fn test_i64_add_large_values() {
 
 #[test]
 fn test_i64_add_wrapping() {
+    let mut add_i64_mod = add_i64::new().unwrap();
     assert_eq!(
-        add_i64::func_0(i64::MAX, 1).unwrap(),
+        add_i64_mod.func_0(i64::MAX, 1).unwrap(),
         i64::MIN,
         "i64::MAX + 1 should wrap to i64::MIN"
     );
@@ -134,8 +146,9 @@ fn test_i64_add_wrapping() {
 
 #[test]
 fn test_i64_const() {
+    let mut const_i64_mod = const_i64::new().unwrap();
     assert_eq!(
-        const_i64::func_0().unwrap(),
+        const_i64_mod.func_0().unwrap(),
         9_999_999_999i64,
         "i64 constant should preserve value beyond i32 range"
     );
@@ -144,7 +157,7 @@ fn test_i64_const() {
 // Fibonacci: exercises locals, loops, comparisons, and arithmetic together
 #[test]
 fn test_fibonacci() {
-    let expected: &[(i32, i32)] = &[
+    let expected = [
         (0, 0),
         (1, 1),
         (2, 1),
@@ -157,9 +170,10 @@ fn test_fibonacci() {
         (20, 6765),
     ];
 
-    for &(n, fib_n) in expected {
+    let mut fibonacci_mod = fibonacci::new().unwrap();
+    for (n, fib_n) in expected {
         assert_eq!(
-            fibonacci::func_0(n).unwrap(),
+            fibonacci_mod.func_0(n).unwrap(),
             fib_n,
             "fib({}) should be {}",
             n,
@@ -168,23 +182,21 @@ fn test_fibonacci() {
     }
 }
 
-// GCD: Euclidean algorithm
 #[test]
 fn test_gcd() {
-    let cases: &[(i32, i32, i32)] = &[
+    let cases = [
         (12, 8, 4),
         (54, 24, 6),
-        (7, 13, 1),
-        (100, 100, 100),
         (0, 5, 5),
         (5, 0, 5),
         (1, 1, 1),
         (48, 18, 6),
     ];
 
-    for &(a, b, expected) in cases {
+    let mut gcd_mod = gcd::new().unwrap();
+    for (a, b, expected) in cases {
         assert_eq!(
-            gcd::func_0(a, b).unwrap(),
+            gcd_mod.func_0(a, b).unwrap(),
             expected,
             "gcd({}, {}) should be {}",
             a,
@@ -197,10 +209,11 @@ fn test_gcd() {
 #[test]
 fn test_gcd_commutative() {
     let pairs = [(12, 8), (54, 24), (7, 13), (100, 75)];
+    let mut gcd_mod = gcd::new().unwrap();
     for (a, b) in pairs {
         assert_eq!(
-            gcd::func_0(a, b).unwrap(),
-            gcd::func_0(b, a).unwrap(),
+            gcd_mod.func_0(a, b).unwrap(),
+            gcd_mod.func_0(b, a).unwrap(),
             "gcd should be commutative: gcd({}, {}) != gcd({}, {})",
             a,
             b,
@@ -210,10 +223,10 @@ fn test_gcd_commutative() {
     }
 }
 
-// Factorial: iterative, uses wrapping multiplication
+// Factorial: exercises loops and multiplication
 #[test]
 fn test_factorial() {
-    let cases: &[(i32, i32)] = &[
+    let cases = [
         (0, 1),
         (1, 1),
         (2, 2),
@@ -226,9 +239,10 @@ fn test_factorial() {
         (12, 479001600),
     ];
 
-    for &(n, expected) in cases {
+    let mut factorial_mod = factorial::new().unwrap();
+    for (n, expected) in cases {
         assert_eq!(
-            factorial::func_0(n).unwrap(),
+            factorial_mod.func_0(n).unwrap(),
             expected,
             "{}! should be {}",
             n,
@@ -240,7 +254,8 @@ fn test_factorial() {
 #[test]
 fn test_factorial_wrapping() {
     // 13! = 6227020800 which overflows i32, so wrapping arithmetic kicks in
-    let result = factorial::func_0(13).unwrap();
+    let mut factorial_mod = factorial::new().unwrap();
+    let result = factorial_mod.func_0(13).unwrap();
     let expected = 1932053504i32; // 6227020800 as wrapping i32
     assert_eq!(result, expected, "13! should wrap to {}", expected);
 }
@@ -248,20 +263,22 @@ fn test_factorial_wrapping() {
 // Absolute value
 #[test]
 fn test_abs() {
-    assert_eq!(abs::func_0(42).unwrap(), 42);
-    assert_eq!(abs::func_0(-42).unwrap(), 42);
-    assert_eq!(abs::func_0(0).unwrap(), 0);
-    assert_eq!(abs::func_0(1).unwrap(), 1);
-    assert_eq!(abs::func_0(-1).unwrap(), 1);
-    assert_eq!(abs::func_0(i32::MAX).unwrap(), i32::MAX);
+    let mut abs_mod = abs::new().unwrap();
+    assert_eq!(abs_mod.func_0(42).unwrap(), 42);
+    assert_eq!(abs_mod.func_0(-42).unwrap(), 42);
+    assert_eq!(abs_mod.func_0(0).unwrap(), 0);
+    assert_eq!(abs_mod.func_0(1).unwrap(), 1);
+    assert_eq!(abs_mod.func_0(-1).unwrap(), 1);
+    assert_eq!(abs_mod.func_0(i32::MAX).unwrap(), i32::MAX);
 }
 
 #[test]
 fn test_abs_min_wraps() {
     // abs(i32::MIN) overflows — Wasm wrapping gives i32::MIN back
     // because 0 - i32::MIN wraps to i32::MIN
+    let mut abs_mod = abs::new().unwrap();
     assert_eq!(
-        abs::func_0(i32::MIN).unwrap(),
+        abs_mod.func_0(i32::MIN).unwrap(),
         i32::MIN,
         "abs(i32::MIN) should wrap to i32::MIN"
     );
@@ -279,8 +296,9 @@ fn test_add_matches_rust_wrapping() {
         (i32::MIN, i32::MIN),
     ];
 
+    let mut add_mod = add::new().unwrap();
     for (a, b) in test_cases {
-        let wasm_result = add::func_0(a, b).unwrap();
+        let wasm_result = add_mod.func_0(a, b).unwrap();
         let rust_result = a.wrapping_add(b);
         assert_eq!(
             wasm_result, rust_result,

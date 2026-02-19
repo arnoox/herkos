@@ -43,7 +43,7 @@ pub fn generate_instruction_with_info<B: Backend>(
             args,
         } => {
             // Call to local function (imports are handled by CallImport)
-            let has_globals = info.needs_wrapper() && info.has_mutable_globals();
+            let has_globals = info.has_mutable_globals();
             let has_memory = info.has_memory;
             let has_table = info.has_table();
             backend.emit_call(*dest, *func_idx, args, has_globals, has_memory, has_table)
@@ -168,7 +168,7 @@ fn generate_call_indirect(
     args: &[VarId],
     info: &ModuleInfo,
 ) -> String {
-    let has_globals = info.needs_wrapper() && info.has_mutable_globals();
+    let has_globals = info.has_mutable_globals();
     let has_memory = info.has_memory;
     let has_table = info.has_table();
 
