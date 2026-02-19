@@ -18,5 +18,4 @@ herkos takes a different approach: if the Rust compiler accepts the transpiled c
 
    GETTING_STARTED.md
    REQUIREMENTS.md
-   WebAssemblyReferenceManual.md
    SPECIFICATION.md
