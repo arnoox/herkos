@@ -8,9 +8,11 @@ A compilation pipeline that transpiles WebAssembly modules into memory-safe Rust
 
 ## Motivation
 
-Safety-critical standards (ISO 26262, IEC 61508, DO-178C) require **freedom from interference** between software modules of different criticality levels. Today this is achieved via MMU/MPU or hypervisors — approaches that are expensive in performance (10-50% overhead), energy, and certification effort.
+Safety-critical standards (ISO 26262, IEC 61508, DO-178C) require **freedom from interference** between software modules of different criticality levels. Typically this is achieved via MMU/MPU or hypervisors, approaches that are expensive in cpu time performance, energy, and certification effort.
 
 herkos takes a different approach: if the Rust compiler accepts the transpiled code, isolation is guaranteed; no MMU, no context switches, no runtime overhead for proven accesses.
+
+Still we have a challenge: how to do efficient communication between "*compile-time-mmu*" partitions? This will be one of the things this project will explore.
 
 ## Architecture
 
@@ -50,4 +52,4 @@ cargo run -p herkos -- input.wasm --output output.rs
 
 ## License
 
-Licensed under the Apache License, Version 2.0 ([LICENSE](LICENSE) or http://www.apache.org/licenses/LICENSE-2.0)
+Licensed under the Apache License, Version 2.0 ([LICENSE](LICENSE))
