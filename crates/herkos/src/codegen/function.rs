@@ -75,9 +75,9 @@ pub fn generate_function_with_info<B: Backend>(
                     // so just use a fallback type here if it's an import.
                     let ty = if *func_idx >= info.num_imported_functions() {
                         let local_idx = func_idx - info.num_imported_functions();
-                        info.func_signatures
+                        info.ir_functions
                             .get(local_idx)
-                            .and_then(|s| s.return_type)
+                            .and_then(|f| f.return_type)
                             .unwrap_or(WasmType::I32)
                     } else {
                         // Call to imported function — will error during codegen.

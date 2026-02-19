@@ -21,8 +21,8 @@ pub fn generate_export_impl<B: Backend>(_backend: &B, info: &ModuleInfo) -> Stri
         .collect();
 
     // Generate accessor methods for all functions
-    for func_idx in 0..info.func_signatures.len() {
-        let sig = &info.func_signatures[func_idx];
+    for func_idx in 0..info.ir_functions.len() {
+        let ir_func = &info.ir_functions[func_idx];
 
         // Use export name if available, otherwise use func_N
         let method_name = if let Some(export_name) = export_names.get(&func_idx) {
@@ -32,7 +32,7 @@ pub fn generate_export_impl<B: Backend>(_backend: &B, info: &ModuleInfo) -> Stri
         };
 
         // Determine trait bounds for this export
-        let trait_bounds_opt = if sig.needs_host {
+        let trait_bounds_opt = if ir_func.needs_host {
             crate::codegen::traits::build_trait_bounds(info)
         } else {
             None
@@ -51,7 +51,7 @@ pub fn generate_export_impl<B: Backend>(_backend: &B, info: &ModuleInfo) -> Stri
         // Method signature with optional generic parameter
         let mut param_parts: Vec<String> = Vec::new();
         param_parts.push("&mut self".to_string());
-        for (i, ty) in sig.params.iter().enumerate() {
+        for (i, (_, ty)) in ir_func.params.iter().enumerate() {
             let rust_ty = crate::codegen::types::wasm_type_to_rust(ty);
             param_parts.push(format!("v{i}: {rust_ty}"));
         }
@@ -62,7 +62,7 @@ pub fn generate_export_impl<B: Backend>(_backend: &B, info: &ModuleInfo) -> Stri
         }
 
         // Add host parameter if function needs it
-        if sig.needs_host {
+        if ir_func.needs_host {
             if let Some(trait_bounds) = &trait_bounds_opt {
                 if has_multiple_bounds {
                     // Use generic parameter H
@@ -77,7 +77,7 @@ pub fn generate_export_impl<B: Backend>(_backend: &B, info: &ModuleInfo) -> Stri
             }
         }
 
-        let return_type = crate::codegen::types::format_return_type(sig.return_type.as_ref());
+        let return_type = crate::codegen::types::format_return_type(ir_func.return_type.as_ref());
 
         // Generate method signature (with generics if needed)
         let generic_part = if generics.is_empty() {
@@ -94,10 +94,11 @@ pub fn generate_export_impl<B: Backend>(_backend: &B, info: &ModuleInfo) -> Stri
         ));
 
         // Forward call to internal function
-        let mut call_args: Vec<String> = (0..sig.params.len()).map(|i| format!("v{i}")).collect();
+        let mut call_args: Vec<String> =
+            (0..ir_func.params.len()).map(|i| format!("v{i}")).collect();
 
         // Forward host parameter if needed
-        if sig.needs_host {
+        if ir_func.needs_host {
             call_args.push("host".to_string());
         }
 

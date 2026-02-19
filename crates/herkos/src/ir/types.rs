@@ -99,6 +99,12 @@ pub struct IrFunction {
 
     /// Return type (None for void functions)
     pub return_type: Option<WasmType>,
+
+    /// Index into the Wasm type section (needed for call_indirect dispatch).
+    pub type_idx: usize,
+
+    /// Whether this function calls imported functions or accesses imported globals (needs host parameter).
+    pub needs_host: bool,
 }
 
 /// A basic block — sequence of instructions with a single entry and exit.
@@ -766,8 +772,6 @@ pub struct ModuleInfo {
     pub data_segments: Vec<DataSegmentDef>,
     /// Exported functions.
     pub func_exports: Vec<FuncExport>,
-    /// Signatures for all functions (index-aligned with IR functions).
-    pub func_signatures: Vec<FuncSignature>,
     /// Type section signatures (for call_indirect dispatch).
     pub type_signatures: Vec<FuncSignature>,
     /// Canonical type index mapping: maps each Wasm type index to the
@@ -1246,6 +1250,8 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: None,
+            type_idx: 0,
+            needs_host: false,
         };
         assert!(!has_import_calls(&ir_func_no_imports));
 
@@ -1273,6 +1279,8 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: None,
+            type_idx: 0,
+            needs_host: true,
         };
         assert!(has_import_calls(&ir_func_with_imports));
     }
@@ -1293,6 +1301,8 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: None,
+            type_idx: 0,
+            needs_host: false,
         };
 
         // No imported globals
@@ -1322,6 +1332,8 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: None,
+            type_idx: 0,
+            needs_host: true,
         };
         assert!(has_global_import_access(&ir_func_with_global_get, 2));
     }
@@ -1342,6 +1354,8 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: None,
+            type_idx: 0,
+            needs_host: true,
         };
 
         assert!(has_global_import_access(&ir_func, 2));

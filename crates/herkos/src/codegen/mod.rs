@@ -196,6 +196,8 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: Some(WasmType::I32),
+            type_idx: 0,
+            needs_host: false,
         };
 
         let backend = SafeBackend::new();
@@ -211,7 +213,6 @@ mod tests {
             globals: Vec::new(),
             data_segments: Vec::new(),
             func_exports: Vec::new(),
-            func_signatures: Vec::new(),
             type_signatures: Vec::new(),
             canonical_type: Vec::new(),
             func_imports: Vec::new(),
@@ -246,6 +247,8 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: None,
+            type_idx: 0,
+            needs_host: false,
         };
 
         let backend = SafeBackend::new();
@@ -261,7 +264,6 @@ mod tests {
             globals: Vec::new(),
             data_segments: Vec::new(),
             func_exports: Vec::new(),
-            func_signatures: Vec::new(),
             type_signatures: Vec::new(),
             canonical_type: Vec::new(),
             func_imports: Vec::new(),
@@ -351,6 +353,8 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: Some(WasmType::I64),
+            type_idx: 0,
+            needs_host: false,
         };
 
         let backend = SafeBackend::new();
@@ -366,7 +370,6 @@ mod tests {
             globals: Vec::new(),
             data_segments: Vec::new(),
             func_exports: Vec::new(),
-            func_signatures: Vec::new(),
             type_signatures: Vec::new(),
             canonical_type: Vec::new(),
             func_imports: Vec::new(),
@@ -414,6 +417,8 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: Some(WasmType::I32),
+            type_idx: 0,
+            needs_host: false,
         };
 
         let backend = SafeBackend::new();
@@ -429,7 +434,6 @@ mod tests {
             globals: Vec::new(),
             data_segments: Vec::new(),
             func_exports: Vec::new(),
-            func_signatures: Vec::new(),
             type_signatures: Vec::new(),
             canonical_type: Vec::new(),
             func_imports: Vec::new(),
@@ -466,6 +470,8 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: Some(WasmType::I32),
+            type_idx: 0,
+            needs_host: false,
         };
 
         let info = ModuleInfo {
@@ -485,12 +491,6 @@ mod tests {
             func_exports: vec![FuncExport {
                 name: "get_value".to_string(),
                 func_index: 0,
-            }],
-            func_signatures: vec![FuncSignature {
-                params: vec![],
-                return_type: Some(WasmType::I32),
-                type_idx: 0,
-                needs_host: false,
             }],
             type_signatures: Vec::new(),
             canonical_type: Vec::new(),
@@ -537,6 +537,8 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: Some(WasmType::I32),
+            type_idx: 0,
+            needs_host: false,
         };
 
         let info = ModuleInfo {
@@ -555,12 +557,6 @@ mod tests {
             func_exports: vec![FuncExport {
                 name: "load_word".to_string(),
                 func_index: 0,
-            }],
-            func_signatures: vec![FuncSignature {
-                params: vec![WasmType::I32],
-                return_type: Some(WasmType::I32),
-                type_idx: 0,
-                needs_host: false,
             }],
             type_signatures: Vec::new(),
             canonical_type: Vec::new(),
@@ -607,6 +603,8 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: Some(WasmType::I32),
+            type_idx: 0,
+            needs_host: false,
         };
 
         let info = ModuleInfo {
@@ -626,12 +624,6 @@ mod tests {
             func_exports: vec![FuncExport {
                 name: "get_const".to_string(),
                 func_index: 0,
-            }],
-            func_signatures: vec![FuncSignature {
-                params: vec![],
-                return_type: Some(WasmType::I32),
-                type_idx: 0,
-                needs_host: false,
             }],
             type_signatures: Vec::new(),
             canonical_type: Vec::new(),

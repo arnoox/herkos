@@ -217,8 +217,8 @@ fn generate_call_indirect(
         "                {dest_prefix}match __entry.func_index {{\n"
     ));
 
-    for (func_idx, sig) in info.func_signatures.iter().enumerate() {
-        if sig.type_idx == canon_idx {
+    for (func_idx, ir_func) in info.ir_functions.iter().enumerate() {
+        if ir_func.type_idx == canon_idx {
             code.push_str(&format!(
                 "                    {} => func_{}({})?,\n",
                 func_idx, func_idx, args_str

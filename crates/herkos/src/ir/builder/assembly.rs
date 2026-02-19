@@ -16,7 +16,7 @@ pub(super) fn assemble_module_metadata(
     mem_info: &MemoryInfo,
     table_info: &TableInfo,
     canonical_type: &[usize],
-    ir_functions: Vec<IrFunction>,
+    mut ir_functions: Vec<IrFunction>,
     num_imported_functions: usize,
     imported_globals: &[ImportedGlobalDef],
 ) -> Result<ModuleInfo> {
@@ -24,10 +24,11 @@ pub(super) fn assemble_module_metadata(
     let data_segments = build_data_segments(parsed);
     let element_segments = build_element_segments(parsed);
     let func_exports = build_function_exports(parsed, num_imported_functions);
-    let func_signatures =
-        build_function_type_signatures(parsed, canonical_type, &ir_functions, imported_globals);
     let type_signatures = build_call_indirect_signatures(parsed);
     let func_imports = build_function_imports(parsed);
+
+    // Enrich IR functions with signature metadata (type_idx and needs_host)
+    enrich_ir_functions(parsed, canonical_type, &mut ir_functions, imported_globals);
 
     Ok(ModuleInfo {
         has_memory: mem_info.has_memory,
@@ -40,7 +41,6 @@ pub(super) fn assemble_module_metadata(
         globals,
         data_segments,
         func_exports,
-        func_signatures,
         type_signatures,
         canonical_type: canonical_type.to_vec(),
         func_imports,
@@ -111,46 +111,23 @@ fn build_function_exports(parsed: &ParsedModule, num_imported_functions: usize) 
         .collect()
 }
 
-/// Builds function type signatures for exported functions.
+/// Enriches IR functions with signature metadata (type_idx and needs_host).
 ///
-/// This is indexed by local function index (0-based, excluding imports) and includes
-/// the `needs_host` flag to indicate if a function requires a host parameter.
-fn build_function_type_signatures(
+/// This iterates through the parsed functions and sets the type_idx and needs_host
+/// fields in the corresponding IR functions.
+fn enrich_ir_functions(
     parsed: &ParsedModule,
     canonical_type: &[usize],
-    ir_functions: &[IrFunction],
+    ir_functions: &mut [IrFunction],
     imported_globals: &[ImportedGlobalDef],
-) -> Vec<FuncSignature> {
+) {
     let num_imported_globals = imported_globals.len();
-    parsed
-        .functions
-        .iter()
-        .enumerate()
-        .map(|(func_idx, func)| {
-            let func_type = &parsed.types[func.type_idx as usize];
-            let params = func_type
-                .params()
-                .iter()
-                .map(|vt| WasmType::from_wasmparser(*vt))
-                .collect();
-            let return_type = func_type
-                .results()
-                .first()
-                .map(|vt| WasmType::from_wasmparser(*vt));
-
-            let needs_host = ir_functions
-                .get(func_idx)
-                .map(|ir_func| function_calls_imports(ir_func, num_imported_globals))
-                .unwrap_or(false);
-
-            FuncSignature {
-                params,
-                return_type,
-                type_idx: canonical_type[func.type_idx as usize],
-                needs_host,
-            }
-        })
-        .collect()
+    for (func_idx, func) in parsed.functions.iter().enumerate() {
+        if let Some(ir_func) = ir_functions.get_mut(func_idx) {
+            ir_func.type_idx = canonical_type[func.type_idx as usize];
+            ir_func.needs_host = function_calls_imports(ir_func, num_imported_globals);
+        }
+    }
 }
 
 /// Determines if a function calls imports or accesses imported globals.

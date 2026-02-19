@@ -44,9 +44,9 @@ pub fn emit_element_segments(info: &ModuleInfo, table_receiver: &str) -> String 
             let table_idx = seg.offset + i;
             let local_func_idx = *func_idx - info.num_imported_functions();
             let type_idx = info
-                .func_signatures
+                .ir_functions
                 .get(local_func_idx)
-                .map(|s| s.type_idx)
+                .map(|f| f.type_idx)
                 .unwrap_or(0);
             code.push_str(&format!(
                 "    {}.set({}, Some(FuncRef {{ type_index: {}, func_index: {} }})).unwrap();\n",
