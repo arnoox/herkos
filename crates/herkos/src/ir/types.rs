@@ -654,11 +654,9 @@ impl fmt::Display for BinOp {
 /// Definition of a Wasm global variable.
 #[derive(Debug, Clone)]
 pub struct GlobalDef {
-    /// The Wasm value type of the global.
-    pub wasm_type: WasmType,
     /// Whether the global is mutable.
     pub mutable: bool,
-    /// The constant initializer value.
+    /// The constant initializer value (also encodes the type).
     pub init_value: GlobalInit,
 }
 
@@ -669,6 +667,18 @@ pub enum GlobalInit {
     I64(i64),
     F32(f32),
     F64(f64),
+}
+
+impl GlobalInit {
+    /// Get the WasmType of this global init value.
+    pub fn ty(&self) -> WasmType {
+        match self {
+            GlobalInit::I32(_) => WasmType::I32,
+            GlobalInit::I64(_) => WasmType::I64,
+            GlobalInit::F32(_) => WasmType::F32,
+            GlobalInit::F64(_) => WasmType::F64,
+        }
+    }
 }
 
 /// A data segment to initialize memory.
@@ -1138,14 +1148,12 @@ mod tests {
         assert!(!info.has_mutable_globals());
 
         info.globals.push(GlobalDef {
-            wasm_type: WasmType::I32,
             mutable: false,
             init_value: GlobalInit::I32(0),
         });
         assert!(!info.has_mutable_globals());
 
         info.globals.push(GlobalDef {
-            wasm_type: WasmType::I32,
             mutable: true,
             init_value: GlobalInit::I32(0),
         });

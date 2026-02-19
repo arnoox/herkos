@@ -36,7 +36,7 @@ fn generate_wrapper_module<B: Backend>(backend: &B, info: &ModuleInfo) -> Result
         rust_code.push_str("pub struct Globals {\n");
         for (idx, g) in info.globals.iter().enumerate() {
             if g.mutable {
-                let rust_ty = crate::codegen::types::wasm_type_to_rust(&g.wasm_type);
+                let rust_ty = crate::codegen::types::wasm_type_to_rust(&g.init_value.ty());
                 rust_code.push_str(&format!("    pub g{idx}: {rust_ty},\n"));
             }
         }

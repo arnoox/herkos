@@ -55,7 +55,6 @@ fn build_globals(parsed: &ParsedModule) -> Vec<GlobalDef> {
         .globals
         .iter()
         .map(|g| {
-            let wasm_type = WasmType::from_wasmparser(g.val_type);
             let init_value = match g.init_value {
                 crate::parser::InitValue::I32(v) => GlobalInit::I32(v),
                 crate::parser::InitValue::I64(v) => GlobalInit::I64(v),
@@ -63,7 +62,6 @@ fn build_globals(parsed: &ParsedModule) -> Vec<GlobalDef> {
                 crate::parser::InitValue::F64(v) => GlobalInit::F64(v),
             };
             GlobalDef {
-                wasm_type,
                 mutable: g.mutable,
                 init_value,
             }

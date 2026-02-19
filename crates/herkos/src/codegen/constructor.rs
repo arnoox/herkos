@@ -23,8 +23,7 @@ pub fn emit_const_globals<B: Backend>(_backend: &B, info: &ModuleInfo) -> String
     let mut code = String::new();
     for (idx, g) in info.globals.iter().enumerate() {
         if !g.mutable {
-            let (rust_ty, value_str) =
-                crate::codegen::types::global_init_to_rust(&g.init_value, &g.wasm_type);
+            let (rust_ty, value_str) = crate::codegen::types::global_init_to_rust(&g.init_value);
             code.push_str(&format!("pub const G{idx}: {rust_ty} = {value_str};\n"));
         }
     }
@@ -88,8 +87,7 @@ pub fn generate_constructor<B: Backend>(
                 if !first {
                     fields.push_str(", ");
                 }
-                let (_, value_str) =
-                    crate::codegen::types::global_init_to_rust(&g.init_value, &g.wasm_type);
+                let (_, value_str) = crate::codegen::types::global_init_to_rust(&g.init_value);
                 fields.push_str(&format!("g{idx}: {value_str}"));
                 first = false;
             }

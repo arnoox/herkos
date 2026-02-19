@@ -25,8 +25,9 @@ pub fn format_return_type(ty: Option<&WasmType>) -> String {
 }
 
 /// Convert a GlobalInit to (Rust type string, value literal string).
-pub fn global_init_to_rust(init: &GlobalInit, ty: &WasmType) -> (&'static str, String) {
-    let rust_ty = wasm_type_to_rust(ty);
+pub fn global_init_to_rust(init: &GlobalInit) -> (&'static str, String) {
+    let ty = init.ty();
+    let rust_ty = wasm_type_to_rust(&ty);
     let value = match init {
         GlobalInit::I32(v) => format!("{v}i32"),
         GlobalInit::I64(v) => format!("{v}i64"),

@@ -116,7 +116,7 @@ pub fn generate_function_with_info<B: Backend>(
                         let local_idx = *index - info.imported_globals.len();
                         info.globals
                             .get(local_idx)
-                            .map(|g| g.wasm_type)
+                            .map(|g| g.init_value.ty())
                             .unwrap_or(WasmType::I32)
                     };
                     var_types.insert(*dest, ty);

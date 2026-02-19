@@ -483,7 +483,6 @@ mod tests {
             table_max: 0,
             element_segments: Vec::new(),
             globals: vec![GlobalDef {
-                wasm_type: WasmType::I32,
                 mutable: true,
                 init_value: GlobalInit::I32(0),
             }],
@@ -616,7 +615,6 @@ mod tests {
             table_max: 0,
             element_segments: Vec::new(),
             globals: vec![GlobalDef {
-                wasm_type: WasmType::I32,
                 mutable: false,
                 init_value: GlobalInit::I32(42),
             }],
