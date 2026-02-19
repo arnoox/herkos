@@ -145,7 +145,6 @@ impl IrBuilder {
             // Current block doesn't exist yet, create it
             self.blocks.push(IrBlock {
                 id: self.current_block,
-                label: format!("block_{}", self.current_block.0),
                 instructions: vec![instr],
                 terminator: IrTerminator::Unreachable, // Will be set later
             });
@@ -214,7 +213,6 @@ impl IrBuilder {
         self.current_block = entry;
         self.blocks.push(IrBlock {
             id: entry,
-            label: format!("block_{}", entry.0), // "block_0"
             instructions: Vec::new(),
             terminator: IrTerminator::Unreachable,
         });
@@ -307,7 +305,6 @@ impl IrBuilder {
         self.current_block = block_id;
         self.blocks.push(IrBlock {
             id: block_id,
-            label: format!("block_{}", block_id.0),
             instructions: Vec::new(),
             terminator: IrTerminator::Unreachable,
         });

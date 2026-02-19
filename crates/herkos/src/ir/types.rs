@@ -113,9 +113,6 @@ pub struct IrBlock {
     /// Unique identifier for this block
     pub id: BlockId,
 
-    /// Label for Rust codegen ('block_0, 'block_1, etc.)
-    pub label: String,
-
     /// Instructions in this block (no control flow within)
     pub instructions: Vec<IrInstr>,
 
@@ -1249,7 +1246,6 @@ mod tests {
             locals: vec![],
             blocks: vec![IrBlock {
                 id: BlockId(0),
-                label: "block_0".to_string(),
                 instructions: vec![IrInstr::Const {
                     dest: VarId(0),
                     value: IrValue::I32(42),
@@ -1269,7 +1265,6 @@ mod tests {
             locals: vec![],
             blocks: vec![IrBlock {
                 id: BlockId(0),
-                label: "block_0".to_string(),
                 instructions: vec![
                     IrInstr::Const {
                         dest: VarId(0),
@@ -1300,7 +1295,6 @@ mod tests {
             locals: vec![],
             blocks: vec![IrBlock {
                 id: BlockId(0),
-                label: "block_0".to_string(),
                 instructions: vec![IrInstr::Const {
                     dest: VarId(0),
                     value: IrValue::I32(42),
@@ -1325,7 +1319,6 @@ mod tests {
             locals: vec![],
             blocks: vec![IrBlock {
                 id: BlockId(0),
-                label: "block_0".to_string(),
                 instructions: vec![
                     IrInstr::Const {
                         dest: VarId(0),
@@ -1353,7 +1346,6 @@ mod tests {
             locals: vec![],
             blocks: vec![IrBlock {
                 id: BlockId(0),
-                label: "block_0".to_string(),
                 instructions: vec![IrInstr::GlobalSet {
                     index: 1, // Second imported global
                     value: VarId(0),

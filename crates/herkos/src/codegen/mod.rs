@@ -183,7 +183,6 @@ mod tests {
             locals: vec![],
             blocks: vec![IrBlock {
                 id: BlockId(0),
-                label: "block0".to_string(),
                 instructions: vec![IrInstr::BinOp {
                     dest: VarId(2),
                     op: BinOp::I32Add,
@@ -241,7 +240,6 @@ mod tests {
             locals: vec![],
             blocks: vec![IrBlock {
                 id: BlockId(0),
-                label: "block0".to_string(),
                 instructions: vec![],
                 terminator: IrTerminator::Return { value: None },
             }],
@@ -340,7 +338,6 @@ mod tests {
             locals: vec![],
             blocks: vec![IrBlock {
                 id: BlockId(0),
-                label: "block0".to_string(),
                 instructions: vec![IrInstr::BinOp {
                     dest: VarId(2),
                     op: BinOp::I64Add,
@@ -397,7 +394,6 @@ mod tests {
             locals: vec![],
             blocks: vec![IrBlock {
                 id: BlockId(0),
-                label: "block0".to_string(),
                 instructions: vec![
                     IrInstr::Const {
                         dest: VarId(1),
@@ -459,7 +455,6 @@ mod tests {
             locals: vec![],
             blocks: vec![IrBlock {
                 id: BlockId(0),
-                label: "block0".to_string(),
                 instructions: vec![IrInstr::GlobalGet {
                     dest: VarId(0),
                     index: 0,
@@ -521,7 +516,6 @@ mod tests {
             locals: vec![],
             blocks: vec![IrBlock {
                 id: BlockId(0),
-                label: "block0".to_string(),
                 instructions: vec![IrInstr::Load {
                     dest: VarId(1),
                     ty: WasmType::I32,
@@ -591,7 +585,6 @@ mod tests {
             locals: vec![],
             blocks: vec![IrBlock {
                 id: BlockId(0),
-                label: "block0".to_string(),
                 instructions: vec![IrInstr::GlobalGet {
                     dest: VarId(0),
                     index: 0,
