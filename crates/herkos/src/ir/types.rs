@@ -12,6 +12,66 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VarId(pub u32);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Idx<TAG> {
+    idx: usize,
+    _marker: std::marker::PhantomData<TAG>,
+}
+
+impl<TAG> Idx<TAG> {
+    pub fn new(idx: usize) -> Self {
+        Self {
+            idx,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    pub fn as_usize(&self) -> usize {
+        self.idx
+    }
+}
+
+impl<TAG> From<Idx<TAG>> for usize {
+    fn from(idx: Idx<TAG>) -> Self {
+        idx.idx
+    }
+}
+
+/// Type index — indexes into `ModuleInfo::type_signatures` and `ModuleInfo::canonical_type`.
+pub type TypeIdx = Idx<FuncSignature>;
+
+/// Local function index — indexes into `ModuleInfo::ir_functions`.
+/// Import count has already been subtracted (imports occupy 0..num_imported_functions-1 in the
+/// global Wasm function index space).
+pub type LocalFuncIdx = Idx<IrFunction>;
+
+/// Global function index — raw Wasm function index space (imports + locals).
+/// Used in `ElementSegmentDef::func_indices` before adjustment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GlobalFuncIdxTag;
+pub type GlobalFuncIdx = Idx<GlobalFuncIdxTag>;
+
+/// Imported function index — indexes into `ModuleInfo::func_imports`.
+/// Numerically equivalent to the position in the global Wasm function index space
+/// (imports occupy indices 0..num_imports-1).
+pub type ImportIdx = Idx<FuncImport>;
+
+/// Global index — unified index into the global space (imported globals first, then local globals).
+/// Resolved via `ModuleInfo::resolve_global()` to distinguish imported from local.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GlobalIdxdxTag;
+pub type GlobalIdx = Idx<GlobalIdxdxTag>;
+
+/// Imported global index — indexes into `ModuleInfo::imported_globals` (raw position).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ImportedGlobalIdxTag;
+pub type ImportedGlobalIdx = Idx<ImportedGlobalIdxTag>;
+
+/// Local global index — indexes into `ModuleInfo::globals` (import count already subtracted).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LocalGlobalIdxTag;
+pub type LocalGlobalIdx = Idx<LocalGlobalIdxTag>;
+
 impl fmt::Display for VarId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "v{}", self.0)
@@ -101,7 +161,7 @@ pub struct IrFunction {
     pub return_type: Option<WasmType>,
 
     /// Index into the Wasm type section (needed for call_indirect dispatch).
-    pub type_idx: usize,
+    pub type_idx: TypeIdx,
 
     /// Whether this function calls imported functions or accesses imported globals (needs host parameter).
     pub needs_host: bool,
@@ -141,6 +201,15 @@ pub enum MemoryAccessWidth {
 pub enum SignExtension {
     Signed,
     Unsigned,
+}
+
+/// Result of resolving a `GlobalIdx` to distinguish imported from local globals.
+#[derive(Debug, Clone)]
+pub enum ResolvedGlobal<'a> {
+    /// Imported global with its index and definition.
+    Imported(ImportedGlobalIdx, &'a ImportedGlobalDef),
+    /// Local global with its index and definition.
+    Local(LocalGlobalIdx, &'a GlobalDef),
 }
 
 /// A single IR instruction (SSA form — each produces a new variable).
@@ -192,24 +261,24 @@ pub enum IrInstr {
 
     /// Call direct function (local, not imported)
     Call {
-        dest: Option<VarId>, // None for void functions
-        func_idx: usize,     // Local function index (imports are handled separately)
+        dest: Option<VarId>,    // None for void functions
+        func_idx: LocalFuncIdx, // Local function index (imports are handled separately)
         args: Vec<VarId>,
     },
 
     /// Call imported function from host
     CallImport {
-        dest: Option<VarId>, // None for void functions
-        import_idx: usize,   // Index into the imports list
-        module_name: String, // Import module name (e.g., "env")
-        func_name: String,   // Import field name (e.g., "log")
+        dest: Option<VarId>,   // None for void functions
+        import_idx: ImportIdx, // Index into the imports list
+        module_name: String,   // Import module name (e.g., "env")
+        func_name: String,     // Import field name (e.g., "log")
         args: Vec<VarId>,
     },
 
     /// Call indirect (via table)
     CallIndirect {
         dest: Option<VarId>,
-        type_idx: usize,
+        type_idx: TypeIdx,
         table_idx: VarId,
         args: Vec<VarId>,
     },
@@ -219,10 +288,10 @@ pub enum IrInstr {
     Assign { dest: VarId, src: VarId },
 
     /// Read a global variable (dest = globals.g{index} or const G{index})
-    GlobalGet { dest: VarId, index: usize },
+    GlobalGet { dest: VarId, index: GlobalIdx },
 
     /// Write a mutable global variable (globals.g{index} = value)
-    GlobalSet { index: usize, value: VarId },
+    GlobalSet { index: GlobalIdx, value: VarId },
 
     /// Query current memory size in pages (dest = memory.size())
     MemorySize { dest: VarId },
@@ -692,8 +761,8 @@ pub struct DataSegmentDef {
 pub struct FuncExport {
     /// The exported name (becomes a Rust method name).
     pub name: String,
-    /// Index into the function index space.
-    pub func_index: usize,
+    /// Index into the local function index space (imports excluded).
+    pub func_index: LocalFuncIdx,
 }
 
 /// Signature of a function.
@@ -704,7 +773,8 @@ pub struct FuncSignature {
     /// Return type (None for void).
     pub return_type: Option<WasmType>,
     /// Index into the Wasm type section (needed for call_indirect dispatch).
-    pub type_idx: usize,
+    /// Note: This field is currently always set to 0 and not used in codegen.
+    pub type_idx: TypeIdx,
     /// Whether this function calls imported functions (needs host parameter).
     pub needs_host: bool,
 }
@@ -715,7 +785,8 @@ pub struct ElementSegmentDef {
     /// Starting offset in the table.
     pub offset: usize,
     /// Function indices to place into the table starting at `offset`.
-    pub func_indices: Vec<usize>,
+    /// These are in the raw Wasm global function index space (imports + locals).
+    pub func_indices: Vec<GlobalFuncIdx>,
 }
 
 /// An imported function for trait generation.
@@ -804,6 +875,83 @@ impl ModuleInfo {
         self.func_imports.len()
     }
 
+    // ─── Typed accessors ───────────────────────────────────────────────────
+
+    /// Get an IR function by local function index.
+    pub fn ir_function(&self, idx: LocalFuncIdx) -> Option<&IrFunction> {
+        self.ir_functions.get(idx.as_usize())
+    }
+
+    /// Get a type signature by type index.
+    pub fn type_signature(&self, idx: TypeIdx) -> Option<&FuncSignature> {
+        self.type_signatures.get(idx.as_usize())
+    }
+
+    /// Get a function import by import index.
+    pub fn func_import(&self, idx: ImportIdx) -> Option<&FuncImport> {
+        self.func_imports.get(idx.as_usize())
+    }
+
+    /// Get a local global by local global index.
+    pub fn local_global(&self, idx: LocalGlobalIdx) -> Option<&GlobalDef> {
+        self.globals.get(idx.as_usize())
+    }
+
+    /// Get an imported global by imported global index.
+    pub fn imported_global(&self, idx: ImportedGlobalIdx) -> Option<&ImportedGlobalDef> {
+        self.imported_globals.get(idx.as_usize())
+    }
+
+    /// Resolve a global index to distinguish imported from local globals.
+    pub fn resolve_global(&self, idx: GlobalIdx) -> ResolvedGlobal<'_> {
+        let i = idx.as_usize();
+        if i < self.imported_globals.len() {
+            ResolvedGlobal::Imported(ImportedGlobalIdx::new(i), &self.imported_globals[i])
+        } else {
+            let local_i = i - self.imported_globals.len();
+            ResolvedGlobal::Local(LocalGlobalIdx::new(local_i), &self.globals[local_i])
+        }
+    }
+
+    // ─── Builder methods ───────────────────────────────────────────────────
+
+    /// Push an IR function and return its local function index.
+    pub fn push_ir_function(&mut self, f: IrFunction) -> LocalFuncIdx {
+        let idx = LocalFuncIdx::new(self.ir_functions.len());
+        self.ir_functions.push(f);
+        idx
+    }
+
+    /// Push a type signature and return its type index.
+    pub fn push_type_signature(&mut self, s: FuncSignature) -> TypeIdx {
+        let idx = TypeIdx::new(self.type_signatures.len());
+        self.type_signatures.push(s);
+        idx
+    }
+
+    /// Push a function import and return its import index.
+    pub fn push_func_import(&mut self, i: FuncImport) -> ImportIdx {
+        let idx = ImportIdx::new(self.func_imports.len());
+        self.func_imports.push(i);
+        idx
+    }
+
+    /// Push a local global and return its local global index.
+    pub fn push_global(&mut self, g: GlobalDef) -> LocalGlobalIdx {
+        let idx = LocalGlobalIdx::new(self.globals.len());
+        self.globals.push(g);
+        idx
+    }
+
+    /// Push an imported global and return its imported global index.
+    pub fn push_imported_global(&mut self, g: ImportedGlobalDef) -> ImportedGlobalIdx {
+        let idx = ImportedGlobalIdx::new(self.imported_globals.len());
+        self.imported_globals.push(g);
+        idx
+    }
+
+    // ─── Query methods ─────────────────────────────────────────────────────
+
     /// Whether the module has any mutable globals.
     pub fn has_mutable_globals(&self) -> bool {
         self.globals.iter().any(|g| g.mutable)
@@ -869,7 +1017,7 @@ pub fn has_global_import_access(ir_func: &IrFunction, num_imported_globals: usiz
             matches!(
                 instr,
                 IrInstr::GlobalGet { index, .. } | IrInstr::GlobalSet { index, .. }
-                if *index < num_imported_globals
+                if index.as_usize() < num_imported_globals
             )
         })
     })
@@ -1254,7 +1402,7 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: None,
-            type_idx: 0,
+            type_idx: TypeIdx::new(0),
             needs_host: false,
         };
         assert!(!has_import_calls(&ir_func_no_imports));
@@ -1272,7 +1420,7 @@ mod tests {
                     },
                     IrInstr::CallImport {
                         dest: None,
-                        import_idx: 0,
+                        import_idx: ImportIdx::new(0),
                         module_name: "env".to_string(),
                         func_name: "log".to_string(),
                         args: vec![VarId(0)],
@@ -1282,7 +1430,7 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: None,
-            type_idx: 0,
+            type_idx: TypeIdx::new(0),
             needs_host: true,
         };
         assert!(has_import_calls(&ir_func_with_imports));
@@ -1303,7 +1451,7 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: None,
-            type_idx: 0,
+            type_idx: TypeIdx::new(0),
             needs_host: false,
         };
 
@@ -1326,14 +1474,14 @@ mod tests {
                     },
                     IrInstr::GlobalGet {
                         dest: VarId(1),
-                        index: 0, // First imported global
+                        index: GlobalIdx::new(0), // First imported global
                     },
                 ],
                 terminator: IrTerminator::Return { value: None },
             }],
             entry_block: BlockId(0),
             return_type: None,
-            type_idx: 0,
+            type_idx: TypeIdx::new(0),
             needs_host: true,
         };
         assert!(has_global_import_access(&ir_func_with_global_get, 2));
@@ -1347,14 +1495,14 @@ mod tests {
             blocks: vec![IrBlock {
                 id: BlockId(0),
                 instructions: vec![IrInstr::GlobalSet {
-                    index: 1, // Second imported global
+                    index: GlobalIdx::new(1), // Second imported global
                     value: VarId(0),
                 }],
                 terminator: IrTerminator::Return { value: None },
             }],
             entry_block: BlockId(0),
             return_type: None,
-            type_idx: 0,
+            type_idx: TypeIdx::new(0),
             needs_host: true,
         };
 

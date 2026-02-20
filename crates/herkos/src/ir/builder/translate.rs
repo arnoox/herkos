@@ -101,7 +101,7 @@ impl IrBuilder {
                 let dest = self.new_var();
                 self.emit(IrInstr::GlobalGet {
                     dest,
-                    index: *global_index as usize,
+                    index: GlobalIdx::new(*global_index as usize),
                 });
                 self.value_stack.push(dest);
             }
@@ -112,7 +112,7 @@ impl IrBuilder {
                     .pop()
                     .ok_or_else(|| anyhow::anyhow!("Stack underflow for global.set"))?;
                 self.emit(IrInstr::GlobalSet {
-                    index: *global_index as usize,
+                    index: GlobalIdx::new(*global_index as usize),
                     value,
                 });
             }
@@ -738,7 +738,7 @@ impl IrBuilder {
 
                     self.emit(IrInstr::CallImport {
                         dest,
-                        import_idx,
+                        import_idx: ImportIdx::new(import_idx),
                         module_name,
                         func_name,
                         args,
@@ -748,7 +748,7 @@ impl IrBuilder {
                     let local_func_idx = func_idx - self.num_imported_functions;
                     self.emit(IrInstr::Call {
                         dest,
-                        func_idx: local_func_idx,
+                        func_idx: LocalFuncIdx::new(local_func_idx),
                         args,
                     });
                 }
@@ -765,10 +765,10 @@ impl IrBuilder {
                 if *table_index != 0 {
                     bail!("Multi-table not supported (table_index={})", table_index);
                 }
-                let type_idx = *type_index as usize;
+                let type_idx_usize = *type_index as usize;
                 let (param_count, callee_return_type) =
-                    *self.type_signatures.get(type_idx).ok_or_else(|| {
-                        anyhow::anyhow!("CallIndirect: unknown type index {}", type_idx)
+                    *self.type_signatures.get(type_idx_usize).ok_or_else(|| {
+                        anyhow::anyhow!("CallIndirect: unknown type index {}", type_idx_usize)
                     })?;
 
                 // Pop table element index (on top of stack)
@@ -778,7 +778,7 @@ impl IrBuilder {
 
                 // Pop arguments
                 if self.value_stack.len() < param_count {
-                    bail!("Stack underflow for call_indirect type {}", type_idx);
+                    bail!("Stack underflow for call_indirect type {}", type_idx_usize);
                 }
                 let mut args = Vec::new();
                 for _ in 0..param_count {
@@ -791,7 +791,7 @@ impl IrBuilder {
                 let dest = callee_return_type.map(|_| self.new_var());
                 self.emit(IrInstr::CallIndirect {
                     dest,
-                    type_idx,
+                    type_idx: TypeIdx::new(*type_index as usize),
                     table_idx: table_idx_var,
                     args,
                 });

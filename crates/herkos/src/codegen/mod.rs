@@ -195,7 +195,7 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: Some(WasmType::I32),
-            type_idx: 0,
+            type_idx: TypeIdx::new(0),
             needs_host: false,
         };
 
@@ -245,7 +245,7 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: None,
-            type_idx: 0,
+            type_idx: TypeIdx::new(0),
             needs_host: false,
         };
 
@@ -350,7 +350,7 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: Some(WasmType::I64),
-            type_idx: 0,
+            type_idx: TypeIdx::new(0),
             needs_host: false,
         };
 
@@ -413,7 +413,7 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: Some(WasmType::I32),
-            type_idx: 0,
+            type_idx: TypeIdx::new(0),
             needs_host: false,
         };
 
@@ -457,7 +457,7 @@ mod tests {
                 id: BlockId(0),
                 instructions: vec![IrInstr::GlobalGet {
                     dest: VarId(0),
-                    index: 0,
+                    index: GlobalIdx::new(0),
                 }],
                 terminator: IrTerminator::Return {
                     value: Some(VarId(0)),
@@ -465,7 +465,7 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: Some(WasmType::I32),
-            type_idx: 0,
+            type_idx: TypeIdx::new(0),
             needs_host: false,
         };
 
@@ -484,7 +484,7 @@ mod tests {
             data_segments: Vec::new(),
             func_exports: vec![FuncExport {
                 name: "get_value".to_string(),
-                func_index: 0,
+                func_index: LocalFuncIdx::new(0),
             }],
             type_signatures: Vec::new(),
             canonical_type: Vec::new(),
@@ -530,7 +530,7 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: Some(WasmType::I32),
-            type_idx: 0,
+            type_idx: TypeIdx::new(0),
             needs_host: false,
         };
 
@@ -549,7 +549,7 @@ mod tests {
             }],
             func_exports: vec![FuncExport {
                 name: "load_word".to_string(),
-                func_index: 0,
+                func_index: LocalFuncIdx::new(0),
             }],
             type_signatures: Vec::new(),
             canonical_type: Vec::new(),
@@ -587,7 +587,7 @@ mod tests {
                 id: BlockId(0),
                 instructions: vec![IrInstr::GlobalGet {
                     dest: VarId(0),
-                    index: 0,
+                    index: GlobalIdx::new(0),
                 }],
                 terminator: IrTerminator::Return {
                     value: Some(VarId(0)),
@@ -595,7 +595,7 @@ mod tests {
             }],
             entry_block: BlockId(0),
             return_type: Some(WasmType::I32),
-            type_idx: 0,
+            type_idx: TypeIdx::new(0),
             needs_host: false,
         };
 
@@ -614,7 +614,7 @@ mod tests {
             data_segments: Vec::new(),
             func_exports: vec![FuncExport {
                 name: "get_const".to_string(),
-                func_index: 0,
+                func_index: LocalFuncIdx::new(0),
             }],
             type_signatures: Vec::new(),
             canonical_type: Vec::new(),

@@ -17,7 +17,7 @@ pub fn generate_export_impl<B: Backend>(_backend: &B, info: &ModuleInfo) -> Stri
     let export_names: std::collections::HashMap<usize, &str> = info
         .func_exports
         .iter()
-        .map(|e| (e.func_index, e.name.as_str()))
+        .map(|e| (e.func_index.as_usize(), e.name.as_str()))
         .collect();
 
     // Generate accessor methods for all functions

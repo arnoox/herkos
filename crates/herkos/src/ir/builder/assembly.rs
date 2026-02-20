@@ -88,7 +88,11 @@ fn build_element_segments(parsed: &ParsedModule) -> Vec<ElementSegmentDef> {
         .iter()
         .map(|es| ElementSegmentDef {
             offset: es.offset as usize,
-            func_indices: es.func_indices.iter().map(|idx| *idx as usize).collect(),
+            func_indices: es
+                .func_indices
+                .iter()
+                .map(|idx| GlobalFuncIdx::new(*idx as usize))
+                .collect(),
         })
         .collect()
 }
@@ -104,7 +108,7 @@ fn build_function_exports(parsed: &ParsedModule, num_imported_functions: usize) 
         .filter(|e| e.kind == ExportKind::Func && (e.index as usize) >= num_imported_functions)
         .map(|e| FuncExport {
             name: e.name.clone(),
-            func_index: (e.index as usize) - num_imported_functions,
+            func_index: LocalFuncIdx::new((e.index as usize) - num_imported_functions),
         })
         .collect()
 }
@@ -122,7 +126,7 @@ fn enrich_ir_functions(
     let num_imported_globals = imported_globals.len();
     for (func_idx, func) in parsed.functions.iter().enumerate() {
         if let Some(ir_func) = ir_functions.get_mut(func_idx) {
-            ir_func.type_idx = canonical_type[func.type_idx as usize];
+            ir_func.type_idx = TypeIdx::new(canonical_type[func.type_idx as usize]);
             ir_func.needs_host = function_calls_imports(ir_func, num_imported_globals);
         }
     }
@@ -138,7 +142,7 @@ fn function_calls_imports(ir_func: &IrFunction, num_imported_globals: usize) -> 
                         instr,
                         IrInstr::GlobalGet { index, .. }
                             | IrInstr::GlobalSet { index, .. }
-                            if *index < num_imported_globals
+                            if index.as_usize() < num_imported_globals
                     ))
         })
     })
@@ -162,7 +166,7 @@ fn build_call_indirect_signatures(parsed: &ParsedModule) -> Vec<FuncSignature> {
             FuncSignature {
                 params,
                 return_type,
-                type_idx: 0,
+                type_idx: TypeIdx::new(0),
                 needs_host: false,
             }
         })

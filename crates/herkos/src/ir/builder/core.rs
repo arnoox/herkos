@@ -233,8 +233,8 @@ impl IrBuilder {
             blocks: self.blocks.clone(),
             entry_block: entry,
             return_type,
-            type_idx: 0,       // Set by enrich_ir_functions during assembly
-            needs_host: false, // Set by enrich_ir_functions during assembly
+            type_idx: TypeIdx::new(0), // Set by enrich_ir_functions during assembly
+            needs_host: false,         // Set by enrich_ir_functions during assembly
         })
     }
 

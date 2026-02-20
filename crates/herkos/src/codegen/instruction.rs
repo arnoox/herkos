@@ -46,7 +46,14 @@ pub fn generate_instruction_with_info<B: Backend>(
             let has_globals = info.has_mutable_globals();
             let has_memory = info.has_memory;
             let has_table = info.has_table();
-            backend.emit_call(*dest, *func_idx, args, has_globals, has_memory, has_table)
+            backend.emit_call(
+                *dest,
+                func_idx.as_usize(),
+                args,
+                has_globals,
+                has_memory,
+                has_table,
+            )
         }
 
         IrInstr::CallImport {
@@ -62,38 +69,26 @@ pub fn generate_instruction_with_info<B: Backend>(
             type_idx,
             table_idx,
             args,
-        } => generate_call_indirect(*dest, *type_idx, *table_idx, args, info),
+        } => generate_call_indirect(*dest, type_idx.clone(), *table_idx, args, info),
 
         IrInstr::Assign { dest, src } => backend.emit_assign(*dest, *src),
 
-        IrInstr::GlobalGet { dest, index } => {
-            if *index < info.imported_globals.len() {
-                // Imported global — access via host trait getter
-                let g = &info.imported_globals[*index];
+        IrInstr::GlobalGet { dest, index } => match info.resolve_global(*index) {
+            ResolvedGlobal::Imported(_idx, g) => {
                 format!("                {} = host.get_{}();", dest, g.name)
-            } else {
-                // Local global — use corrected index and backend
-                let local_idx = index - info.imported_globals.len();
-                let is_mutable = info
-                    .globals
-                    .get(local_idx)
-                    .map(|g| g.mutable)
-                    .unwrap_or(true);
-                backend.emit_global_get(*dest, local_idx, is_mutable)
             }
-        }
+            ResolvedGlobal::Local(idx, g) => {
+                let is_mutable = g.mutable;
+                backend.emit_global_get(*dest, idx.as_usize(), is_mutable)
+            }
+        },
 
-        IrInstr::GlobalSet { index, value } => {
-            if *index < info.imported_globals.len() {
-                // Imported global — access via host trait setter
-                let g = &info.imported_globals[*index];
+        IrInstr::GlobalSet { index, value } => match info.resolve_global(*index) {
+            ResolvedGlobal::Imported(_idx, g) => {
                 format!("                host.set_{}({});", g.name, value)
-            } else {
-                // Local global — use corrected index and backend
-                let local_idx = index - info.imported_globals.len();
-                backend.emit_global_set(local_idx, *value)
             }
-        }
+            ResolvedGlobal::Local(idx, _g) => backend.emit_global_set(idx.as_usize(), *value),
+        },
 
         IrInstr::MemorySize { dest } => backend.emit_memory_size(*dest),
 
@@ -163,7 +158,7 @@ pub fn generate_terminator_with_mapping<B: Backend>(
 /// 3. Dispatches to the matching function via a match on func_index
 fn generate_call_indirect(
     dest: Option<VarId>,
-    type_idx: usize,
+    type_idx: TypeIdx,
     table_idx: VarId,
     args: &[VarId],
     info: &ModuleInfo,
@@ -174,11 +169,12 @@ fn generate_call_indirect(
 
     // Canonicalize the type index for structural equivalence (Wasm spec §4.4.9).
     // Two different type indices with identical (params, results) must match.
+    let type_idx_usize = type_idx.as_usize();
     let canon_idx = info
         .canonical_type
-        .get(type_idx)
+        .get(type_idx_usize)
         .copied()
-        .unwrap_or(type_idx);
+        .unwrap_or(type_idx_usize);
 
     let mut code = String::new();
 
@@ -218,7 +214,7 @@ fn generate_call_indirect(
     ));
 
     for (func_idx, ir_func) in info.ir_functions.iter().enumerate() {
-        if ir_func.type_idx == canon_idx {
+        if ir_func.type_idx.as_usize() == canon_idx {
             code.push_str(&format!(
                 "                    {} => func_{}({})?,\n",
                 func_idx, func_idx, args_str

@@ -70,20 +70,11 @@ pub fn generate_function_with_info<B: Backend>(
                     func_idx,
                     ..
                 } => {
-                    // func_idx is in global space (imports + locals).
-                    // For Milestone 1, we error on imported functions during codegen,
-                    // so just use a fallback type here if it's an import.
-                    let ty = if *func_idx >= info.num_imported_functions() {
-                        let local_idx = func_idx - info.num_imported_functions();
-                        info.ir_functions
-                            .get(local_idx)
-                            .and_then(|f| f.return_type)
-                            .unwrap_or(WasmType::I32)
-                    } else {
-                        // Call to imported function — will error during codegen.
-                        // Use fallback type for now.
-                        WasmType::I32
-                    };
+                    // func_idx is in local space (imports already excluded)
+                    let ty = info
+                        .ir_function(func_idx.clone())
+                        .and_then(|f| f.return_type)
+                        .unwrap_or(WasmType::I32);
                     var_types.insert(*dest, ty);
                 }
                 IrInstr::CallImport {
@@ -93,8 +84,7 @@ pub fn generate_function_with_info<B: Backend>(
                 } => {
                     // Look up import signature from func_imports
                     let ty = info
-                        .func_imports
-                        .get(*import_idx)
+                        .func_import(import_idx.clone())
                         .and_then(|imp| imp.return_type)
                         .unwrap_or(WasmType::I32);
                     var_types.insert(*dest, ty);
@@ -107,17 +97,9 @@ pub fn generate_function_with_info<B: Backend>(
                     }
                 }
                 IrInstr::GlobalGet { dest, index } => {
-                    // Distinguish imported globals (lower indices) from local globals
-                    let ty = if *index < info.imported_globals.len() {
-                        // Imported global
-                        info.imported_globals[*index].wasm_type
-                    } else {
-                        // Local global — adjust index by removing imported count
-                        let local_idx = *index - info.imported_globals.len();
-                        info.globals
-                            .get(local_idx)
-                            .map(|g| g.init_value.ty())
-                            .unwrap_or(WasmType::I32)
+                    let ty = match info.resolve_global(*index) {
+                        ResolvedGlobal::Imported(_idx, g) => g.wasm_type,
+                        ResolvedGlobal::Local(_idx, g) => g.init_value.ty(),
                     };
                     var_types.insert(*dest, ty);
                 }
@@ -127,8 +109,7 @@ pub fn generate_function_with_info<B: Backend>(
                     ..
                 } => {
                     let ty = info
-                        .type_signatures
-                        .get(*type_idx)
+                        .type_signature(type_idx.clone())
                         .and_then(|s| s.return_type)
                         .unwrap_or(WasmType::I32);
                     var_types.insert(*dest, ty);
@@ -351,7 +332,7 @@ fn has_global_import_access(ir_func: &IrFunction, num_imported_globals: usize) -
     }
     ir_func.blocks.iter().any(|block| {
         block.instructions.iter().any(|instr| {
-            matches!(instr, IrInstr::GlobalGet { index, .. } | IrInstr::GlobalSet { index, .. } if *index < num_imported_globals)
+            matches!(instr, IrInstr::GlobalGet { index, .. } | IrInstr::GlobalSet { index, .. } if index.as_usize() < num_imported_globals)
         })
     })
 }
