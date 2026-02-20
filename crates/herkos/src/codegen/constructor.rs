@@ -39,18 +39,18 @@ pub fn emit_const_globals<B: Backend>(_backend: &B, info: &ModuleInfo) -> String
 pub fn emit_element_segments(info: &ModuleInfo, table_receiver: &str) -> String {
     let mut code = String::new();
     for seg in &info.element_segments {
-        for (i, func_gidx) in seg.func_indices.iter().enumerate() {
+        for (i, local_func_idx) in seg.func_indices.iter().enumerate() {
             let table_idx = seg.offset + i;
-            let global_func_idx_usize = func_gidx.as_usize();
-            let local_func_idx = global_func_idx_usize - info.num_imported_functions();
-            let local_func_idx_wrapped = LocalFuncIdx::new(local_func_idx);
             let type_idx = info
-                .ir_function(local_func_idx_wrapped)
+                .ir_function(*local_func_idx)
                 .map(|f| f.type_idx.as_usize())
                 .unwrap_or(0);
             code.push_str(&format!(
                 "    {}.set({}, Some(FuncRef {{ type_index: {}, func_index: {} }})).unwrap();\n",
-                table_receiver, table_idx, type_idx, local_func_idx
+                table_receiver,
+                table_idx,
+                type_idx,
+                local_func_idx.as_usize()
             ));
         }
     }

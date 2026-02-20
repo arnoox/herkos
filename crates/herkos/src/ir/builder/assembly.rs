@@ -22,7 +22,7 @@ pub(super) fn assemble_module_metadata(
 ) -> Result<ModuleInfo> {
     let globals = build_globals(parsed);
     let data_segments = build_data_segments(parsed);
-    let element_segments = build_element_segments(parsed);
+    let element_segments = build_element_segments(parsed, num_imported_functions);
     let func_exports = build_function_exports(parsed, num_imported_functions);
     let type_signatures = build_call_indirect_signatures(parsed);
     let func_imports = build_function_imports(parsed);
@@ -82,7 +82,10 @@ fn build_data_segments(parsed: &ParsedModule) -> Vec<DataSegmentDef> {
 }
 
 /// Builds element segment (table initialization) definitions.
-fn build_element_segments(parsed: &ParsedModule) -> Vec<ElementSegmentDef> {
+fn build_element_segments(
+    parsed: &ParsedModule,
+    num_imported_functions: usize,
+) -> Vec<ElementSegmentDef> {
     parsed
         .element_segments
         .iter()
@@ -91,7 +94,11 @@ fn build_element_segments(parsed: &ParsedModule) -> Vec<ElementSegmentDef> {
             func_indices: es
                 .func_indices
                 .iter()
-                .map(|idx| GlobalFuncIdx::new(*idx as usize))
+                .map(|idx| {
+                    let global_idx = *idx as usize;
+                    let local_idx = global_idx - num_imported_functions;
+                    LocalFuncIdx::new(local_idx)
+                })
                 .collect(),
         })
         .collect()

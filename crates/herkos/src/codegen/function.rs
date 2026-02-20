@@ -72,7 +72,7 @@ pub fn generate_function_with_info<B: Backend>(
                 } => {
                     // func_idx is in local space (imports already excluded)
                     let ty = info
-                        .ir_function(func_idx.clone())
+                        .ir_function(*func_idx)
                         .and_then(|f| f.return_type)
                         .unwrap_or(WasmType::I32);
                     var_types.insert(*dest, ty);

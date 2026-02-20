@@ -40,16 +40,14 @@ impl<TAG> From<Idx<TAG>> for usize {
 /// Type index — indexes into `ModuleInfo::type_signatures` and `ModuleInfo::canonical_type`.
 pub type TypeIdx = Idx<FuncSignature>;
 
+/// Marker type for local function indices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LocalFuncIdxTag;
+
 /// Local function index — indexes into `ModuleInfo::ir_functions`.
 /// Import count has already been subtracted (imports occupy 0..num_imported_functions-1 in the
 /// global Wasm function index space).
-pub type LocalFuncIdx = Idx<IrFunction>;
-
-/// Global function index — raw Wasm function index space (imports + locals).
-/// Used in `ElementSegmentDef::func_indices` before adjustment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct GlobalFuncIdxTag;
-pub type GlobalFuncIdx = Idx<GlobalFuncIdxTag>;
+pub type LocalFuncIdx = Idx<LocalFuncIdxTag>;
 
 /// Imported function index — indexes into `ModuleInfo::func_imports`.
 /// Numerically equivalent to the position in the global Wasm function index space
@@ -785,8 +783,8 @@ pub struct ElementSegmentDef {
     /// Starting offset in the table.
     pub offset: usize,
     /// Function indices to place into the table starting at `offset`.
-    /// These are in the raw Wasm global function index space (imports + locals).
-    pub func_indices: Vec<GlobalFuncIdx>,
+    /// These are in the local function index space (imports already subtracted).
+    pub func_indices: Vec<LocalFuncIdx>,
 }
 
 /// An imported function for trait generation.
