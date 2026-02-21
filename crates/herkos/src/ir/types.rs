@@ -12,6 +12,7 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VarId(pub u32);
 
+/// Generic index type with a phantom tag to distinguish different index spaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Idx<TAG> {
     idx: usize,
@@ -95,7 +96,11 @@ pub enum WasmType {
     F64,
 }
 
-// TODO: interesting that this is done here, because it is very Rust specific. Maybe we want to move this to the codegen phase instead? For now it is convenient to have it here for debugging and testing.
+// `i32`, `i64`, `f32`, `f64` are the canonical names from the Wasm spec, which happen
+// to coincide with Rust's primitive names. This Display implementation reflects the
+// spec-level name, not a Rust-specific choice, so it belongs here in the IR layer.
+// Any backend that uses different type names (e.g., `int32_t` for C) should do its
+// own formatting in codegen rather than calling `to_string()` on a `WasmType`.
 impl fmt::Display for WasmType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -355,7 +360,12 @@ impl IrValue {
     }
 }
 
-// TODO: interesting that this is done here, because it is very Rust specific. Maybe we want to move this to the codegen phase instead? For now it is convenient to have it here for debugging and testing.
+// This Display emits Rust literal syntax (`42i32`, `1.5f32`) and is intentionally
+// backend-specific. It is used by the IR debug output and tests to verify that
+// constants will be emitted correctly. Since herkos currently has one codegen target
+// (Rust), keeping it here avoids premature abstraction. If a second backend is ever
+// added, replace this with an explicit `to_rust_literal()` method in the codegen
+// layer and repurpose Display for a backend-neutral debug form.
 impl fmt::Display for IrValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

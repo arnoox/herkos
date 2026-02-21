@@ -163,7 +163,7 @@ pub fn generate_function_with_info<B: Backend>(
         let block = &ir_func.blocks[0];
         for instr in &block.instructions {
             let code =
-                crate::codegen::instruction::generate_instruction_with_info(backend, instr, info);
+                crate::codegen::instruction::generate_instruction_with_info(backend, instr, info)?;
             output.push_str(&code);
             output.push('\n');
         }
@@ -196,7 +196,7 @@ pub fn generate_function_with_info<B: Backend>(
             for instr in &block.instructions {
                 let code = crate::codegen::instruction::generate_instruction_with_info(
                     backend, instr, info,
-                );
+                )?;
                 output.push_str(&code);
                 output.push('\n');
             }

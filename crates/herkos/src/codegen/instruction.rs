@@ -5,6 +5,7 @@
 
 use crate::backend::Backend;
 use crate::ir::*;
+use anyhow::Result;
 use std::collections::HashMap;
 
 /// Generate code for a single instruction with module info.
@@ -12,8 +13,8 @@ pub fn generate_instruction_with_info<B: Backend>(
     backend: &B,
     instr: &IrInstr,
     info: &ModuleInfo,
-) -> String {
-    match instr {
+) -> Result<String> {
+    let code = match instr {
         IrInstr::Const { dest, value } => backend.emit_const(*dest, value),
 
         IrInstr::BinOp { dest, op, lhs, rhs } => backend.emit_binop(*dest, *op, *lhs, *rhs),
@@ -27,7 +28,7 @@ pub fn generate_instruction_with_info<B: Backend>(
             offset,
             width,
             sign,
-        } => backend.emit_load(*dest, *ty, *addr, *offset, *width, *sign),
+        } => return backend.emit_load(*dest, *ty, *addr, *offset, *width, *sign),
 
         IrInstr::Store {
             ty,
@@ -35,7 +36,7 @@ pub fn generate_instruction_with_info<B: Backend>(
             value,
             offset,
             width,
-        } => backend.emit_store(*ty, *addr, *value, *offset, *width),
+        } => return backend.emit_store(*ty, *addr, *value, *offset, *width),
 
         IrInstr::Call {
             dest,
@@ -100,7 +101,8 @@ pub fn generate_instruction_with_info<B: Backend>(
             val2,
             condition,
         } => backend.emit_select(*dest, *val1, *val2, *condition),
-    }
+    };
+    Ok(code)
 }
 
 /// Generate code for a terminator with BlockId to index mapping.

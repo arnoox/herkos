@@ -66,30 +66,29 @@ pub(super) fn extract_table_info(parsed: &ParsedModule) -> TableInfo {
     }
 }
 
-/// Builds canonical type index mapping and type signatures.
+/// Builds a canonical type index mapping.
 ///
 /// Canonical mapping ensures that call_indirect type checks follow the Wasm spec:
 /// two different type indices with identical (params, results) must match.
 /// We map each type_idx to the smallest index with the same structural signature.
-pub(super) fn build_type_mappings(
-    parsed: &ParsedModule,
-) -> (Vec<usize>, Vec<(usize, Option<WasmType>)>) {
-    let canonical_type: Vec<usize> = {
-        let mut mapping = Vec::with_capacity(parsed.types.len());
-        for (i, ty) in parsed.types.iter().enumerate() {
-            let canon = parsed.types[..i]
-                .iter()
-                .position(|earlier| {
-                    earlier.params() == ty.params() && earlier.results() == ty.results()
-                })
-                .map(|pos| mapping[pos])
-                .unwrap_or(i);
-            mapping.push(canon);
-        }
-        mapping
-    };
+pub(super) fn build_canonical_type_mapping(parsed: &ParsedModule) -> Vec<usize> {
+    let mut mapping = Vec::with_capacity(parsed.types.len());
+    for (i, ty) in parsed.types.iter().enumerate() {
+        let canon = parsed.types[..i]
+            .iter()
+            .position(|earlier| {
+                earlier.params() == ty.params() && earlier.results() == ty.results()
+            })
+            .map(|pos| mapping[pos])
+            .unwrap_or(i);
+        mapping.push(canon);
+    }
+    mapping
+}
 
-    let type_sigs: Vec<(usize, Option<WasmType>)> = parsed
+/// Builds the per-type-index signatures: `(param_count, return_type)`.
+pub(super) fn build_type_signatures(parsed: &ParsedModule) -> Vec<(usize, Option<WasmType>)> {
+    parsed
         .types
         .iter()
         .map(|ty| {
@@ -100,9 +99,7 @@ pub(super) fn build_type_mappings(
                 .map(|vt| WasmType::from_wasmparser(*vt));
             (param_count, ret)
         })
-        .collect();
-
-    (canonical_type, type_sigs)
+        .collect()
 }
 
 /// Extracts imported globals from a parsed WASM module.

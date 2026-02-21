@@ -8,6 +8,7 @@
 
 use crate::backend::Backend;
 use crate::ir::*;
+use anyhow::Result;
 
 /// Emit preamble for generated Rust files.
 pub fn rust_code_preamble() -> String {
@@ -35,26 +36,50 @@ pub fn emit_const_globals<B: Backend>(_backend: &B, info: &ModuleInfo) -> String
 
 /// Generate element segment initialization code for a table.
 ///
-/// `table_receiver` is the expression to access the table (e.g., "module.table" or "table").
-pub fn emit_element_segments(info: &ModuleInfo, table_receiver: &str) -> String {
+/// Element segments are declared in the Wasm binary's `element` section. Each
+/// segment specifies a base offset into the table and a list of function
+/// references to write into consecutive slots starting at that offset. This
+/// function emits the Rust `table.set(...)` calls that perform those writes
+/// inside the generated module's `new()` constructor.
+pub fn emit_element_segments(info: &ModuleInfo, table_receiver: &str) -> Result<String> {
     let mut code = String::new();
+
+    // A Wasm module may declare multiple element segments, each covering a
+    // contiguous slice of table slots at a different base offset.
     for seg in &info.element_segments {
+        // `seg.offset` is the base table index for this segment.
+        // `seg.func_indices` lists the local function indices to place into
+        // consecutive slots: slot (offset+0), (offset+1), ...
+        // All indices are already in the local index space (imports subtracted).
         for (i, local_func_idx) in seg.func_indices.iter().enumerate() {
+            // Absolute table slot = segment base + position within segment.
             let table_idx = seg.offset + i;
+
+            // Each table entry records the function's canonical type index so
+            // that `call_indirect` can validate the expected signature at the
+            // call site before dispatching. We fetch it from the IR function.
             let type_idx = info
                 .ir_function(*local_func_idx)
                 .map(|f| f.type_idx.as_usize())
-                .unwrap_or(0);
+                .ok_or(anyhow::anyhow!("Invalid function index"))?;
+
+            // Emit one table initialisation statement per slot.
+            //
+            // TODO: `.unwrap()` panics if `table_idx` exceeds the table's
+            //       allocated size. The table is sized from the same Wasm module
+            //       so this should be unreachable, but it is not formally proven.
+            //       Generated code should use `?` and propagate a
+            //       `ConstructionError` to stay panic-free (required by no_std).
             code.push_str(&format!(
                 "    {}.set({}, Some(FuncRef {{ type_index: {}, func_index: {} }})).unwrap();\n",
-                table_receiver,
-                table_idx,
-                type_idx,
-                local_func_idx.as_usize()
+                table_receiver,            // "module.table" or "table"
+                table_idx,                 // absolute slot in the table
+                type_idx,                  // for type-checking on call_indirect
+                local_func_idx.as_usize()  // which function to dispatch to
             ));
         }
     }
-    code
+    Ok(code)
 }
 
 /// Generate the `pub fn new() -> WasmModule` or `pub fn new() -> WasmResult<WasmModule>` constructor.
@@ -62,7 +87,7 @@ pub fn generate_constructor<B: Backend>(
     _backend: &B,
     info: &ModuleInfo,
     has_mut_globals: bool,
-) -> String {
+) -> Result<String> {
     let mut code = String::new();
 
     // Simple constructor for modules with no initialization
@@ -71,10 +96,10 @@ pub fn generate_constructor<B: Backend>(
         && info.data_segments.is_empty()
         && info.element_segments.is_empty()
     {
-        code.push_str("pub fn new() -> Result<WasmModule, herkos_runtime::ConstructionError> {\n");
+        code.push_str("pub fn new() -> Result<WasmModule, ConstructionError> {\n");
         code.push_str("    Ok(WasmModule(LibraryModule::new((), Table::try_new(0)?)))\n");
         code.push_str("}\n");
-        return code;
+        return Ok(code);
     }
 
     code.push_str("pub fn new() -> WasmResult<WasmModule> {\n");
@@ -130,13 +155,13 @@ pub fn generate_constructor<B: Backend>(
         }
 
         // Element segment initialization
-        code.push_str(&emit_element_segments(info, "module.table"));
+        code.push_str(&emit_element_segments(info, "module.table")?);
 
         code.push_str("    Ok(WasmModule(module))\n");
     } else if !info.element_segments.is_empty() {
         // Need mutable table for element initialization
         code.push_str(&format!("    let mut table = {};\n", table_init));
-        code.push_str(&emit_element_segments(info, "table"));
+        code.push_str(&emit_element_segments(info, "table")?);
         code.push_str(&format!(
             "    Ok(WasmModule(LibraryModule::new({}, table)))\n",
             globals_init
@@ -149,5 +174,5 @@ pub fn generate_constructor<B: Backend>(
     }
 
     code.push_str("}\n");
-    code
+    Ok(code)
 }

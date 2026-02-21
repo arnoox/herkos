@@ -4,6 +4,11 @@
 //! with constructor, internal functions, and exported methods.
 
 use crate::backend::Backend;
+use crate::codegen::constructor::{emit_const_globals, generate_constructor, rust_code_preamble};
+use crate::codegen::export::generate_export_impl;
+use crate::codegen::function::generate_function_with_info;
+use crate::codegen::traits::generate_host_traits;
+use crate::codegen::types::wasm_type_to_rust;
 use crate::ir::*;
 use anyhow::{Context, Result};
 
@@ -16,11 +21,11 @@ pub fn generate_module_with_info<B: Backend>(backend: &B, info: &ModuleInfo) -> 
 
 /// Generate a module wrapper with Globals struct, constructor, and export methods.
 fn generate_wrapper_module<B: Backend>(backend: &B, info: &ModuleInfo) -> Result<String> {
-    let mut rust_code = crate::codegen::constructor::rust_code_preamble();
+    let mut rust_code = rust_code_preamble();
     let has_mut_globals = info.has_mutable_globals();
 
     if info.has_memory {
-        rust_code.push_str(&format!("const MAX_PAGES: usize = {};\n\n", info.max_pages));
+        rust_code.push_str(&format!("const MAX_PAGES: usize = {};\n", info.max_pages));
     }
 
     if info.has_table() {
@@ -29,14 +34,14 @@ fn generate_wrapper_module<B: Backend>(backend: &B, info: &ModuleInfo) -> Result
     rust_code.push('\n');
 
     // Host trait definitions
-    rust_code.push_str(&crate::codegen::traits::generate_host_traits(backend, info));
+    rust_code.push_str(&generate_host_traits(backend, info));
 
     // Globals struct (mutable globals only)
     if has_mut_globals {
         rust_code.push_str("pub struct Globals {\n");
         for (idx, g) in info.globals.iter().enumerate() {
             if g.mutable {
-                let rust_ty = crate::codegen::types::wasm_type_to_rust(&g.init_value.ty());
+                let rust_ty = wasm_type_to_rust(&g.init_value.ty());
                 rust_code.push_str(&format!("    pub g{idx}: {rust_ty},\n"));
             }
         }
@@ -44,9 +49,7 @@ fn generate_wrapper_module<B: Backend>(backend: &B, info: &ModuleInfo) -> Result
     }
 
     // Const items for immutable globals
-    rust_code.push_str(&crate::codegen::constructor::emit_const_globals(
-        backend, info,
-    ));
+    rust_code.push_str(&emit_const_globals(backend, info));
 
     // Newtype wrapper struct (required to allow `impl WasmModule` on a foreign type)
     let globals_type = if has_mut_globals { "Globals" } else { "()" };
@@ -62,27 +65,21 @@ fn generate_wrapper_module<B: Backend>(backend: &B, info: &ModuleInfo) -> Result
     }
 
     // Constructor (standalone for backwards compatibility)
-    rust_code.push_str(&crate::codegen::constructor::generate_constructor(
-        backend,
-        info,
-        has_mut_globals,
-    ));
+    rust_code.push_str(&generate_constructor(backend, info, has_mut_globals)?);
     rust_code.push('\n');
 
     // Internal functions (private)
     for (idx, ir_func) in info.ir_functions.iter().enumerate() {
         let func_name = format!("func_{}", idx);
-        let code = crate::codegen::function::generate_function_with_info(
-            backend, ir_func, &func_name, info, false,
-        )
-        .with_context(|| format!("failed to generate code for function {}", idx))?;
+        let code = generate_function_with_info(backend, ir_func, &func_name, info, false)
+            .with_context(|| format!("failed to generate code for function {}", idx))?;
         rust_code.push_str(&code);
         rust_code.push('\n');
     }
 
     // Impl block with accessor methods for all functions
     if !info.ir_functions.is_empty() {
-        rust_code.push_str(&crate::codegen::export::generate_export_impl(backend, info));
+        rust_code.push_str(&generate_export_impl(backend, info));
         rust_code.push('\n');
     }
 

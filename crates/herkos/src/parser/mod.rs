@@ -169,9 +169,6 @@ pub struct ParsedFunction {
 
 /// Evaluate a wasmparser ConstExpr into our InitValue.
 /// Wasm MVP globals use a single i32.const/i64.const/f32.const/f64.const instruction.
-// TODO: if I understand correctly, this Operator could be a const block of multiple instructions, right?
-//       If so, we may want to support that by generation a dedicated rust const initializer function that executes the instructions to compute the value.
-//       For now we only support the single-const instruction case, which is what most globals use in practice.
 fn eval_const_expr(const_expr: wasmparser::ConstExpr) -> Result<InitValue> {
     let mut reader = const_expr.get_operators_reader();
     let op = reader.read().context("reading const expr operator")?;
@@ -229,15 +226,16 @@ fn parse_element_segment(element: wasmparser::Element) -> Result<Option<ElementS
             }))
         }
         wasmparser::ElementKind::Passive | wasmparser::ElementKind::Declared => {
-            // Skip passive/declared element segments
-            // TODO: explain why? Not required? Later milestone? Or just for MVP simplicity?
+            // Passive segments are not copied into the table at start-up; they are only
+            // activated via `table.init` / `elem.drop` (bulk-memory proposal). Declared
+            // segments exist solely to mark functions referenced by `ref.func`. Neither
+            // kind maps to anything in our static table model, so we skip them.
             Ok(None)
         }
     }
 }
 
 /// Parse an active data segment, or return None for passive segments.
-// TODO: check if we have a data segment wat file based tests under herkos-tests.
 fn parse_data_segment(data: wasmparser::Data) -> Result<Option<DataSegment>> {
     match data.kind {
         wasmparser::DataKind::Active {
@@ -330,8 +328,10 @@ pub fn parse_wasm(wasm_bytes: &[u8]) -> Result<ParsedModule> {
                                 types.push(func_ty.clone());
                             }
                             _ => {
-                                // Skip non-function types (arrays, structs, conts)
-                                // TODO: why we skip them? No compile/runtime requirements for them? Or just for later milestones?
+                                // Skip non-function types (arrays, structs, conts from the GC proposal).
+                                // herkos targets MVP + WASI Wasm, which only uses function types.
+                                // GC proposal types have no role in the current memory model or
+                                // codegen pipeline and are deferred to a later milestone.
                             }
                         }
                     }

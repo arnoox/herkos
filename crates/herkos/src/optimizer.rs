@@ -13,6 +13,5 @@ use anyhow::Result;
 /// Currently a no-op placeholder. Will implement IR-level optimizations
 /// such as constant folding, dead code elimination, etc.
 pub fn optimize_ir(module_info: ModuleInfo) -> Result<ModuleInfo> {
-    // TODO: implement IR optimizations
     Ok(module_info)
 }

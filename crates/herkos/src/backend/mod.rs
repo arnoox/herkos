@@ -7,6 +7,7 @@ mod safe;
 pub use safe::SafeBackend;
 
 use crate::ir::*;
+use anyhow::Result;
 
 /// Code generation backend trait.
 ///
@@ -33,7 +34,7 @@ pub trait Backend {
         offset: u32,
         width: MemoryAccessWidth,
         sign: Option<SignExtension>,
-    ) -> String;
+    ) -> Result<String>;
 
     /// Emit Rust code for a memory store (full or sub-width).
     fn emit_store(
@@ -43,7 +44,7 @@ pub trait Backend {
         value: VarId,
         offset: u32,
         width: MemoryAccessWidth,
-    ) -> String;
+    ) -> Result<String>;
 
     /// Emit Rust code for a function call (local function).
     fn emit_call(

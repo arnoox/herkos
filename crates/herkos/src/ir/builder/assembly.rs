@@ -15,10 +15,10 @@ pub(super) fn assemble_module_metadata(
     parsed: &ParsedModule,
     mem_info: &MemoryInfo,
     table_info: &TableInfo,
-    canonical_type: &[usize],
+    canonical_type: Vec<usize>,
     mut ir_functions: Vec<IrFunction>,
     num_imported_functions: usize,
-    imported_globals: &[ImportedGlobalDef],
+    imported_globals: Vec<ImportedGlobalDef>,
 ) -> Result<ModuleInfo> {
     let globals = build_globals(parsed);
     let data_segments = build_data_segments(parsed);
@@ -28,7 +28,12 @@ pub(super) fn assemble_module_metadata(
     let func_imports = build_function_imports(parsed);
 
     // Enrich IR functions with signature metadata (type_idx and needs_host)
-    enrich_ir_functions(parsed, canonical_type, &mut ir_functions, imported_globals);
+    enrich_ir_functions(
+        parsed,
+        &canonical_type,
+        &mut ir_functions,
+        &imported_globals,
+    )?;
 
     Ok(ModuleInfo {
         has_memory: mem_info.has_memory,
@@ -42,9 +47,9 @@ pub(super) fn assemble_module_metadata(
         data_segments,
         func_exports,
         type_signatures,
-        canonical_type: canonical_type.to_vec(),
+        canonical_type,
         func_imports,
-        imported_globals: imported_globals.to_vec(),
+        imported_globals,
         ir_functions,
     })
 }
@@ -129,14 +134,20 @@ fn enrich_ir_functions(
     canonical_type: &[usize],
     ir_functions: &mut [IrFunction],
     imported_globals: &[ImportedGlobalDef],
-) {
+) -> Result<()> {
     let num_imported_globals = imported_globals.len();
     for (func_idx, func) in parsed.functions.iter().enumerate() {
         if let Some(ir_func) = ir_functions.get_mut(func_idx) {
             ir_func.type_idx = TypeIdx::new(canonical_type[func.type_idx as usize]);
             ir_func.needs_host = function_calls_imports(ir_func, num_imported_globals);
+        } else {
+            return Err(anyhow::anyhow!(
+                "IR function missing for parsed function index {}",
+                func_idx
+            ));
         }
     }
+    Ok(())
 }
 
 /// Determines if a function calls imports or accesses imported globals.

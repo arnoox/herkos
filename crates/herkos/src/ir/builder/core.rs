@@ -1,31 +1,226 @@
 //! Core IR builder state and control flow management.
 //!
-//! This module contains the `IrBuilder` state machine that translates Wasm bytecode
-//! to SSA-form IR by simulating the Wasm evaluation stack.
+//! ## Overview
+//!
+//! `IrBuilder` translates WebAssembly bytecode to SSA-form (Static Single Assignment)
+//! intermediate representation. Each Wasm value becomes a unique variable (v0, v1, ...),
+//! and explicit control flow is built via a state machine over nested blocks.
+//!
+//! ## Architecture
+//!
+//! The builder maintains **two stacks** that together implement Wasm semantics:
+//!
+//! ### Value Stack (`value_stack: Vec<VarId>`)
+//!
+//! Replaces Wasm's implicit evaluation stack. Instead of pushing raw values, we push
+//! variable IDs. Example:
+//!
+//! ```text
+//! i32.const 5 → emit: v0 = const 5; push(v0)
+//! i32.const 3 → emit: v1 = const 3; push(v1)
+//! i32.add     → pop(v1), pop(v0); emit: v2 = i32_add(v0, v1); push(v2)
+//! ```
+//!
+//! ### Control Stack (`control_stack: Vec<ControlFrame>`)
+//!
+//! Tracks nested blocks/loops/if structures. Each frame records:
+//! - `kind`: Block | Loop | If | Else
+//! - `start_block`: jump target for loops (backward)
+//! - `end_block`: jump target for block exit (forward/join)
+//! - `else_block`: false branch for If
+//! - `result_var`: PHI node if block has a result type
+//!
+//! ## Flow
+//!
+//! 1. `translate_function()` initializes state: allocates VarIds for all locals (params + declared),
+//!    creates entry block (BlockId(0)), pushes function-level control frame.
+//!
+//! 2. For each Wasm operator: `translate_operator()` (in `translate.rs`) pops arguments from
+//!    `value_stack`, allocates new variables, emits IR instructions, pushes results.
+//!
+//! 3. Control flow instructions (`block`, `loop`, `if`, `br`, etc.) manipulate the control stack
+//!    and create new basic blocks as needed.
+//!
+//! 4. Return: `IrFunction` with all blocks, variables typed, and control flow explicit.
+//!
+//! ## Invariants
+//!
+//! - **Entry block**: First `new_block()` call returns `BlockId(0)` (function entry).
+//! - **Value stack**: Operations pop N arguments, push ≤1 result.
+//! - **Control stack**: Push/pop balanced; each frame has a unique start/end pair.
+//! - **Local variables**: `local_vars[i]` = VarId for Wasm local index i (set once at start).
+//!
+//! ## Example 1
+//!
+//! Wasm: `(func (param $a i32) → i32 (local.get $a) (i32.const 1) (i32.add))`
+//!
+//! Generated IR:
+//! ```text
+//! block_0:
+//!   v2 = i32_add(v0, v1)
+//!   return v2
+//! ```
+//! where v0 = param $a, v1 = const 1 (allocated during init/translation).
+//!
+//! ## Example 2 (if-else)
+//!
+//! ```text
+//! Wasm:
+//!   if i32
+//!     (const 1)
+//!   else
+//!     (const 2)
+//!   end
+//! ```
+//!
+//! Generated blocks:
+//!
+//! ```text
+//! ┌──────────────────┐
+//! │   block_0        │  Entry
+//! │  (condition)     │
+//! │  br_if block_2   │
+//! │  br block_3      │
+//! └────────┬─────────┘
+//!          │
+//!     ┌────┴────┐
+//!     ▼         ▼
+//! ┌─────────┐ ┌─────────┐
+//! │ block_1 │ │ block_2 │  True and False branches
+//! │ v1=1    │ │ v2=2    │
+//! │ br block│ │ br block│
+//! │   3     │ │   3     │
+//! └────┬────┘ └────┬────┘
+//!      │           │
+//!      └────┬──────┘
+//!           ▼
+//!     ┌──────────────┐
+//!     │  block_3     │  Join point
+//!     │ v0=phi(v1,v2)│
+//!     └──────────────┘
+//! ```
 
 use super::super::types::*;
 use anyhow::{Context, Result};
 use wasmparser::ValType;
 
 /// Control flow frame for tracking nested blocks/loops/if.
+///
+/// Each control structure (block, loop, if, else) pushes a frame onto the control stack.
+/// When translating branch instructions (br, br_if, br_table), we look up the frame
+/// at the specified depth to determine the branch target. When an End operator is hit,
+/// we pop the frame and finalize the structure.
+///
+/// # Frame Lifecycle
+///
+/// 1. **Push**: When Block, Loop, If, or Else operator is encountered
+/// 2. **Use**: When br/br_if/br_table references it by depth
+/// 3. **Pop**: When End operator is encountered for that structure
+///
+/// # Invariants
+///
+/// - Every frame has start_block ≠ end_block (except in edge cases)
+/// - If result_var is Some, both branches must produce that variable's type
+/// - else_block is only Some for If frames (deferred activation)
+/// - All BlockIds in a frame must be distinct
 #[derive(Debug, Clone)]
 pub(super) struct ControlFrame {
-    /// Kind of control structure
+    /// Kind of control structure (Block, Loop, If, Else)
+    ///
+    /// Determines how `br` instructions behave:
+    /// - **Block**: `br` jumps forward to end_block (exit the block)
+    /// - **Loop**: `br` jumps backward to start_block (re-enter the loop)
+    /// - **If**: `br` jumps forward to end_block (exit the if/else)
+    /// - **Else**: `br` jumps forward to end_block (exit the else branch)
     pub(super) kind: ControlKind,
 
-    /// Start block (where loop branches return to)
+    /// Start block (where to jump when looping, or where we are for blocks)
+    ///
+    /// **Meaning depends on kind**:
+    /// - **Block**: The current block we're building in (no new block created)
+    /// - **Loop**: The loop header block (where backward `br` jumps to re-enter)
+    /// - **If**: The then-block (where true branch starts)
+    /// - **Else**: The else-block where the else branch is executing. This is the
+    ///   *same BlockId* as the parent If frame's `else_block` (retrieved when
+    ///   `Operator::Else` was processed and activated). Unlike Loop's `start_block`,
+    ///   it is NOT used by branch resolution — `br` inside an else body targets
+    ///   `end_block`, not `start_block`. Stored here for documentation/context only.
+    ///
+    /// For backward branches (br in a loop), this is the jump target.
     pub(super) start_block: BlockId,
 
-    /// End block (where forward branches go to)
+    /// End block (join point where all paths converge)
+    ///
+    /// **Meaning is consistent across all kinds**:
+    /// - **Block**: Where `br` jumps to (exit the block)
+    /// - **Loop**: Where `br` with depth > 0 jumps to (exit the loop)
+    /// - **If**: Where both then and else branches merge
+    /// - **Else**: Where the else branch merges back to the if's end
+    ///
+    /// This block is activated with `start_block(end_block)` when the structure's
+    /// End operator is encountered. It's the join point where control flow resumes
+    /// after the entire control structure (block/loop/if/else) completes.
     pub(super) end_block: BlockId,
 
-    /// Else block (for If constructs - where the false branch goes)
+    /// Else block (only for If constructs; None for Block/Loop/Else)
+    ///
+    /// For If frames:
+    /// - Allocated upfront when If operator is processed
+    /// - Activated (with `start_block()`) when Else operator is encountered
+    /// - If no Else operator appears before End, remains empty (only contains jump to end_block)
+    ///
+    /// This field enables deferred activation: we know where the else branch will
+    /// execute before we actually start generating its code. Both then and else
+    /// branches must eventually jump to end_block.
+    ///
+    /// **Lifecycle**: When `Operator::Else` is processed, this BlockId is retrieved,
+    /// activated, and becomes the `start_block` of the newly pushed Else frame.
+    /// In other words: `If frame's else_block` == `Else frame's start_block`
+    /// (same BlockId, different lifecycle phase: deferred vs. active).
+    ///
+    /// For Block/Loop/Else frames: always None.
     pub(super) else_block: Option<BlockId>,
 
-    /// Result type (None for void)
+    /// Result type of the control structure (None if no result)
+    ///
+    /// If the block/loop/if has a result type (e.g., "block i32 ... end"),
+    /// both branches must produce a value of this type at their exit.
+    ///
+    /// Example:
+    /// ```wasm
+    /// block i32         ◄─── result_type = Some(I32)
+    ///   i32.const 5
+    /// end               ◄─── Must have an i32 value on stack
+    /// ```
+    ///
+    /// Used to allocate result_var if needed.
     pub(super) result_type: Option<WasmType>,
 
-    /// Result variable (for blocks with result type - PHI node)
+    /// Result variable (PHI node placeholder for the control structure's result)
+    ///
+    /// If result_type is Some, result_var holds the VarId that will contain
+    /// the final result value at the join point (end_block).
+    ///
+    /// **Flow**:
+    /// 1. When the control structure is pushed, result_var is allocated (if result_type is Some)
+    /// 2. As each branch executes, it computes a value (v0, v1, etc.)
+    /// 3. Before jumping to end_block, each branch assigns: result_var = branch_value
+    /// 4. At end_block, result_var contains the unified result
+    ///
+    /// **Example**:
+    /// ```text
+    /// block i32
+    ///   result_var = v5
+    ///   <then branch computes v1>
+    ///   v5 = v1
+    ///   br end_block
+    /// end
+    ///
+    /// (at end_block)
+    /// v5 contains the result, pushed onto value_stack
+    /// ```
+    ///
+    /// If result_var is None, the structure produces no value.
     pub(super) result_var: Option<VarId>,
 }
 

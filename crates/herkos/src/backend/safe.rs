@@ -363,7 +363,7 @@ impl Backend for SafeBackend {
         offset: u32,
         width: MemoryAccessWidth,
         sign: Option<SignExtension>,
-    ) -> String {
+    ) -> anyhow::Result<String> {
         let addr_expr = if offset > 0 {
             format!("({addr} as usize).wrapping_add({offset} as usize)")
         } else {
@@ -425,12 +425,11 @@ impl Backend for SafeBackend {
                 format!("memory.load_i32({addr_expr})? as u32 as i64")
             }
 
-            // Invalid combinations (shouldn't occur from valid Wasm)
-            // TODO: return an error instead of silently ignoring invalid stores?
-            _ => "0 /* unsupported load width */".to_string(),
+            // Invalid combinations (shouldn't occur in valid Wasm)
+            _ => anyhow::bail!("unsupported load: {ty:?} width={width:?} sign={sign:?}"),
         };
 
-        format!("                {dest} = {load_expr};")
+        Ok(format!("                {dest} = {load_expr};"))
     }
 
     fn emit_store(
@@ -440,7 +439,7 @@ impl Backend for SafeBackend {
         value: VarId,
         offset: u32,
         width: MemoryAccessWidth,
-    ) -> String {
+    ) -> anyhow::Result<String> {
         let addr_expr = if offset > 0 {
             format!("({addr} as usize).wrapping_add({offset} as usize)")
         } else {
@@ -477,12 +476,11 @@ impl Backend for SafeBackend {
                 format!("memory.store_i32({addr_expr}, {value} as i32)?")
             }
 
-            // Invalid combinations
-            // TODO: return an error instead of silently ignoring invalid stores?
-            _ => "() /* unsupported store width */".to_string(),
+            // Invalid combinations (shouldn't occur in valid Wasm)
+            _ => anyhow::bail!("unsupported store: {ty:?} width={width:?}"),
         };
 
-        format!("                {store_call};")
+        Ok(format!("                {store_call};"))
     }
 
     fn emit_call(
