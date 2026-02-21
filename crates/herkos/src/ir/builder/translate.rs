@@ -922,6 +922,27 @@ impl IrBuilder {
                 self.value_stack.push(dest);
             }
 
+            // === Bulk memory operations ===
+            Operator::MemoryCopy {
+                dst_mem: 0,
+                src_mem: 0,
+            } => {
+                // Stack: [dst, src, len] (len on top)
+                let len = self
+                    .value_stack
+                    .pop()
+                    .ok_or_else(|| anyhow::anyhow!("Stack underflow for memory.copy (len)"))?;
+                let src = self
+                    .value_stack
+                    .pop()
+                    .ok_or_else(|| anyhow::anyhow!("Stack underflow for memory.copy (src)"))?;
+                let dst = self
+                    .value_stack
+                    .pop()
+                    .ok_or_else(|| anyhow::anyhow!("Stack underflow for memory.copy (dst)"))?;
+                self.emit(IrInstr::MemoryCopy { dst, src, len });
+            }
+
             _ => bail!("Unsupported operator: {:?}", op),
         }
 

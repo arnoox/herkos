@@ -93,6 +93,27 @@ impl<const MAX_PAGES: usize> IsolatedMemory<MAX_PAGES> {
         self.pages.as_flattened_mut()
     }
 
+    // ── Bulk memory operations ────────────────────────────────────────
+
+    /// Wasm `memory.copy` — copy `len` bytes from `src` to `dst`.
+    ///
+    /// Semantics match `memmove`: overlapping source and destination regions
+    /// are handled correctly. Traps (`OutOfBounds`) if either region extends
+    /// beyond the current active memory.
+    pub fn memory_copy(&mut self, dst: u32, src: u32, len: u32) -> WasmResult<()> {
+        let active = self.active_size();
+        let dst = dst as usize;
+        let src = src as usize;
+        let len = len as usize;
+        if src.checked_add(len).is_none_or(|end| end > active)
+            || dst.checked_add(len).is_none_or(|end| end > active)
+        {
+            return Err(WasmTrap::OutOfBounds);
+        }
+        self.flat_mut().copy_within(src..src + len, dst);
+        Ok(())
+    }
+
     // ── Bounds-checked (safe) load/store ──────────────────────────────
 
     /// Load an i32 from linear memory with bounds checking.

@@ -303,6 +303,11 @@ pub enum IrInstr {
     /// Returns previous page count on success, or -1 on failure.
     MemoryGrow { dest: VarId, delta: VarId },
 
+    /// Copy `len` bytes from `src` to `dst` within linear memory.
+    /// Semantics: like memmove (overlapping regions handled correctly).
+    /// Traps if either region is out of bounds. Returns nothing.
+    MemoryCopy { dst: VarId, src: VarId, len: VarId },
+
     /// Conditional select (dest = if condition != 0 { val1 } else { val2 })
     Select {
         dest: VarId,

@@ -27,7 +27,7 @@ use crate::{WasmResult, WasmTrap};
 /// Wasm `i32.trunc_f32_s`: truncate f32 toward zero to i32, trapping on NaN/overflow.
 #[inline(never)]
 pub fn i32_trunc_f32_s(v: f32) -> WasmResult<i32> {
-    if v.is_nan() || v >= 2147483648.0f32 || v < -2147483648.0f32 {
+    if v.is_nan() || !(-2147483648.0f32..2147483648.0f32).contains(&v) {
         return Err(WasmTrap::IntegerOverflow);
     }
     Ok(v as i32)
@@ -49,7 +49,7 @@ pub fn i32_trunc_f32_u(v: f32) -> WasmResult<i32> {
 /// Wasm `i32.trunc_f64_s`: truncate f64 toward zero to i32, trapping on NaN/overflow.
 #[inline(never)]
 pub fn i32_trunc_f64_s(v: f64) -> WasmResult<i32> {
-    if v.is_nan() || v >= 2147483648.0f64 || v < -2147483648.0f64 {
+    if v.is_nan() || !(-2147483648.0f64..2147483648.0f64).contains(&v) {
         return Err(WasmTrap::IntegerOverflow);
     }
     Ok(v as i32)
@@ -70,7 +70,7 @@ pub fn i32_trunc_f64_u(v: f64) -> WasmResult<i32> {
 /// Wasm `i64.trunc_f32_s`: truncate f32 toward zero to i64, trapping on NaN/overflow.
 #[inline(never)]
 pub fn i64_trunc_f32_s(v: f32) -> WasmResult<i64> {
-    if v.is_nan() || v >= 9223372036854775808.0f32 || v < -9223372036854775808.0f32 {
+    if v.is_nan() || !(-9223372036854775808.0f32..9223372036854775808.0f32).contains(&v) {
         return Err(WasmTrap::IntegerOverflow);
     }
     Ok(v as i64)
@@ -89,7 +89,7 @@ pub fn i64_trunc_f32_u(v: f32) -> WasmResult<i64> {
 /// Wasm `i64.trunc_f64_s`: truncate f64 toward zero to i64, trapping on NaN/overflow.
 #[inline(never)]
 pub fn i64_trunc_f64_s(v: f64) -> WasmResult<i64> {
-    if v.is_nan() || v >= 9223372036854775808.0f64 || v < -9223372036854775808.0f64 {
+    if v.is_nan() || !(-9223372036854775808.0f64..9223372036854775808.0f64).contains(&v) {
         return Err(WasmTrap::IntegerOverflow);
     }
     Ok(v as i64)

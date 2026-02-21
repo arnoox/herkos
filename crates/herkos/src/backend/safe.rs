@@ -347,7 +347,7 @@ impl Backend for SafeBackend {
         sign: Option<SignExtension>,
     ) -> anyhow::Result<String> {
         let addr_expr = if offset > 0 {
-            format!("({addr} as usize).wrapping_add({offset} as usize)")
+            format!("({addr} as usize).wrapping_add({offset}_usize)")
         } else {
             format!("{addr} as usize")
         };
@@ -423,7 +423,7 @@ impl Backend for SafeBackend {
         width: MemoryAccessWidth,
     ) -> anyhow::Result<String> {
         let addr_expr = if offset > 0 {
-            format!("({addr} as usize).wrapping_add({offset} as usize)")
+            format!("({addr} as usize).wrapping_add({offset}_usize)")
         } else {
             format!("{addr} as usize")
         };
@@ -535,6 +535,10 @@ impl Backend for SafeBackend {
 
     fn emit_memory_grow(&self, dest: VarId, delta: VarId) -> String {
         format!("                {dest} = memory.grow({delta} as u32);")
+    }
+
+    fn emit_memory_copy(&self, dst: VarId, src: VarId, len: VarId) -> String {
+        format!("                memory.memory_copy({dst} as u32, {src} as u32, {len} as u32)?;")
     }
 
     fn emit_unreachable(&self) -> String {

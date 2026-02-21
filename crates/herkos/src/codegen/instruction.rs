@@ -95,6 +95,8 @@ pub fn generate_instruction_with_info<B: Backend>(
 
         IrInstr::MemoryGrow { dest, delta } => backend.emit_memory_grow(*dest, *delta),
 
+        IrInstr::MemoryCopy { dst, src, len } => backend.emit_memory_copy(*dst, *src, *len),
+
         IrInstr::Select {
             dest,
             val1,

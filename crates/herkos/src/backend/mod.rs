@@ -89,6 +89,9 @@ pub trait Backend {
     /// Emit Rust code for memory.grow (grows by delta pages, returns old size or -1).
     fn emit_memory_grow(&self, dest: VarId, delta: VarId) -> String;
 
+    /// Emit Rust code for memory.copy (copies len bytes from src to dst).
+    fn emit_memory_copy(&self, dst: VarId, src: VarId, len: VarId) -> String;
+
     /// Emit Rust code for unreachable.
     fn emit_unreachable(&self) -> String;
 
