@@ -47,6 +47,38 @@ impl<const MAX_PAGES: usize> IsolatedMemory<MAX_PAGES> {
         })
     }
 
+    /// Initialize an `IsolatedMemory` in-place within a caller-provided slot.
+    ///
+    /// Unlike `try_new`, this writes directly into `slot` without ever creating
+    /// a large `Result<Self, E>` on the call stack. Use this when `MAX_PAGES`
+    /// is large, to avoid stack overflow in debug builds.
+    ///
+    /// # Errors
+    /// Returns `ConstructionError::MemoryInitialPagesExceedsMax` if `initial_pages > MAX_PAGES`.
+    #[inline(never)]
+    pub fn try_init(
+        slot: &mut core::mem::MaybeUninit<Self>,
+        initial_pages: usize,
+    ) -> Result<(), crate::ConstructionError> {
+        if initial_pages > MAX_PAGES {
+            return Err(crate::ConstructionError::MemoryInitialPagesExceedsMax {
+                initial: initial_pages,
+                max: MAX_PAGES,
+            });
+        }
+        let ptr = slot.as_mut_ptr();
+        // SAFETY: ptr comes from MaybeUninit so it is valid for writes and
+        // correctly aligned. Both fields are written before the caller can
+        // call assume_init on the slot.
+        unsafe {
+            // Zero the entire pages array in-place — the compiler emits a
+            // single memset; no large stack temporary is created.
+            core::ptr::addr_of_mut!((*ptr).pages).write_bytes(0, 1);
+            core::ptr::addr_of_mut!((*ptr).active_pages).write(initial_pages);
+        }
+        Ok(())
+    }
+
     /// Current number of active pages.
     #[inline(always)]
     pub fn page_count(&self) -> usize {

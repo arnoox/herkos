@@ -571,7 +571,7 @@ fn test_module_with_data_segment() -> Result<()> {
     assert!(rust_code.contains("pub struct WasmModule(pub Module<(), MAX_PAGES, 0>)"));
     assert!(rust_code.contains("pub fn new() -> WasmResult<WasmModule>"));
     assert!(rust_code.contains(
-        "Module::try_new(1, (), Table::try_new(0)?).map_err(|_| WasmTrap::OutOfBounds)?"
+        "Module::try_init(&mut __slot, 1, (), Table::try_new(0)?).map_err(|_| WasmTrap::OutOfBounds)?"
     ));
     // Data segment initialization — bulk call
     assert!(rust_code.contains("module.memory.init_data(0,"));
@@ -1078,8 +1078,9 @@ fn test_mode_safe_produces_bounds_checks() -> Result<()> {
 
     // Safe mode uses bounds-checked memory access (via load_i32 which returns Result)
     assert!(code.contains("memory.load_i32("));
-    // No unsafe blocks in safe mode
-    assert!(!code.contains("unsafe"));
+    // Safe mode must not use unchecked (unsafe) memory access paths
+    assert!(!code.contains("load_i32_unchecked"));
+    assert!(!code.contains("store_i32_unchecked"));
 
     Ok(())
 }

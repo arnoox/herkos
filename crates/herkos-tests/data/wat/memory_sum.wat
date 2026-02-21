@@ -1,5 +1,5 @@
 (module
-  (memory 1 1)
+  (memory 1 8)
   (func (param i32 i32) (result i32)
     (local i32 i32)
     ;; local 0 = addr, local 1 = count, local 2 = sum, local 3 = i

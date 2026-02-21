@@ -48,6 +48,40 @@ impl<G, const MAX_PAGES: usize, const TABLE_SIZE: usize> Module<G, MAX_PAGES, TA
             table,
         })
     }
+
+    /// Initialize a `Module` in-place within a caller-provided slot.
+    ///
+    /// Unlike `try_new`, this writes directly into `slot` without ever creating
+    /// a large `Result<Self, E>` on the call stack. Use this when `MAX_PAGES`
+    /// is large, to avoid stack overflow in debug builds.
+    ///
+    /// # Errors
+    /// Returns `ConstructionError` if `initial_pages` exceeds `MAX_PAGES`.
+    #[inline(never)]
+    pub fn try_init(
+        slot: &mut core::mem::MaybeUninit<Self>,
+        initial_pages: usize,
+        globals: G,
+        table: Table<TABLE_SIZE>,
+    ) -> Result<(), crate::ConstructionError> {
+        let ptr = slot.as_mut_ptr();
+        // SAFETY: ptr comes from MaybeUninit so it is valid for writes and
+        // correctly aligned. We initialise all three fields before the caller
+        // can call assume_init on the slot. The cast of the memory field pointer
+        // to *mut MaybeUninit<IsolatedMemory<MAX_PAGES>> is valid because
+        // MaybeUninit<T> has the same memory layout as T (guaranteed by the
+        // standard library), and the field is currently uninitialized.
+        unsafe {
+            IsolatedMemory::try_init(
+                &mut *(core::ptr::addr_of_mut!((*ptr).memory)
+                    as *mut core::mem::MaybeUninit<IsolatedMemory<MAX_PAGES>>),
+                initial_pages,
+            )?;
+            core::ptr::addr_of_mut!((*ptr).globals).write(globals);
+            core::ptr::addr_of_mut!((*ptr).table).write(table);
+        }
+        Ok(())
+    }
 }
 
 /// A module that does NOT define its own memory (§4.1).

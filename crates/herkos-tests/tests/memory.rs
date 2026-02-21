@@ -105,3 +105,36 @@ fn test_memory_sum_negative_values() {
     let sum = memory_sum_mod.func_0(0, 3).unwrap();
     assert_eq!(sum, 2, "sum of [-5, 10, -3] should be 2");
 }
+
+// Microcontroller pattern: the module lives in static (BSS) memory rather than
+// on the stack or heap.  On a real embedded target the linker places the 512 KiB
+// IsolatedMemory<8> in the BSS segment; the stack only ever holds the tiny
+// MaybeUninit bookkeeping and the function arguments.
+//
+// new() uses Module::try_init internally, so while it runs its stack frame
+// holds only a single MaybeUninit<Module<…>> slot — the initialized value is
+// then written directly into MODULE in the static address space via
+// MaybeUninit::write, avoiding any additional large stack copies.
+#[test]
+fn test_memory_sum_as_static() {
+    use core::mem::MaybeUninit;
+
+    // SAFETY: this test function runs exactly once (the standard test harness
+    // never calls the same #[test] fn twice) and Rust's test runner is
+    // multi-threaded but does not re-enter individual test functions.
+    // addr_of_mut! obtains a raw pointer to MODULE without creating a &mut
+    // reference to the static, which avoids the static_mut_refs lint.
+    static mut MODULE: MaybeUninit<memory_sum::WasmModule> = MaybeUninit::uninit();
+    let module: &mut memory_sum::WasmModule = unsafe {
+        let ptr = core::ptr::addr_of_mut!(MODULE).cast::<memory_sum::WasmModule>();
+        ptr.write(memory_sum::new().unwrap());
+        &mut *ptr
+    };
+
+    module.func_1(0, 10).unwrap();
+    module.func_1(4, 20).unwrap();
+    module.func_1(8, 30).unwrap();
+
+    let sum = module.func_0(0, 3).unwrap();
+    assert_eq!(sum, 60, "sum of [10, 20, 30] should be 60");
+}

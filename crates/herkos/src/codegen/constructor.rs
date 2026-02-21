@@ -121,14 +121,25 @@ pub fn generate_constructor<B: Backend>(
 
     if info.has_memory {
         let needs_mut = !info.data_segments.is_empty() || !info.element_segments.is_empty();
-        let binding = if needs_mut {
-            "let mut module"
-        } else {
-            "let module"
-        };
+        let globals_type = if has_mut_globals { "Globals" } else { "()" };
+        let table_size_str = if info.has_table() { "TABLE_MAX" } else { "0" };
+        // Use try_init (in-place initialisation) instead of try_new to avoid
+        // materialising a large Result<Module<…>, E> on the call stack. In
+        // debug builds without NRVO, try_new would stack-allocate several
+        // copies of IsolatedMemory<MAX_PAGES>, causing overflow for large
+        // MAX_PAGES values. try_init writes directly into the slot and returns
+        // only a lightweight Result<(), _>.
         code.push_str(&format!(
-            "    {} = Module::try_new({}, {}, {}).map_err(|_| WasmTrap::OutOfBounds)?;\n",
-            binding, info.initial_pages, globals_init, table_init
+            "    let mut __slot = core::mem::MaybeUninit::<Module<{globals_type}, MAX_PAGES, {table_size_str}>>::uninit();\n"
+        ));
+        code.push_str(&format!(
+            "    Module::try_init(&mut __slot, {}, {}, {}).map_err(|_| WasmTrap::OutOfBounds)?;\n",
+            info.initial_pages, globals_init, table_init
+        ));
+        let mutability = if needs_mut { "mut " } else { "" };
+        // SAFETY: Module::try_init succeeded — all fields are initialized.
+        code.push_str(&format!(
+            "    let {mutability}module = unsafe {{ __slot.assume_init() }};\n"
         ));
 
         // Data segment initialization — one bulk call per segment

@@ -567,7 +567,7 @@ mod tests {
         assert!(code.contains("pub struct WasmModule(pub Module<(), MAX_PAGES, 0>)"));
         assert!(code.contains("pub fn new() -> WasmResult<WasmModule>"));
         assert!(code.contains(
-            "Module::try_new(1, (), Table::try_new(0)?).map_err(|_| WasmTrap::OutOfBounds)?"
+            "Module::try_init(&mut __slot, 1, (), Table::try_new(0)?).map_err(|_| WasmTrap::OutOfBounds)?"
         ));
         // Data segment init — bulk call
         assert!(code.contains("module.memory.init_data(0,"));
