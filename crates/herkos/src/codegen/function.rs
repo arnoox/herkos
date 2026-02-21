@@ -158,15 +158,30 @@ pub fn generate_function_with_info<B: Backend>(
         output.push_str(&format!("    let mut {var}: {rust_ty} = {default};\n"));
     }
 
-    if ir_func.blocks.len() == 1 {
-        // Single-block optimization: emit flat body without loop/match
-        let block = &ir_func.blocks[0];
+    // Multi-block: state machine with per-function Block enum
+    output.push_str("    #[derive(Clone, Copy)]\n    #[allow(dead_code)]\n");
+    output.push_str("    enum Block { ");
+    for idx in 0..ir_func.blocks.len() {
+        if idx > 0 {
+            output.push_str(", ");
+        }
+        output.push_str(&format!("B{}", idx));
+    }
+    output.push_str(" }\n");
+    output.push_str("    let mut __current_block = Block::B0;\n");
+    output.push_str("    loop {\n");
+    output.push_str("        match __current_block {\n");
+
+    for (idx, block) in ir_func.blocks.iter().enumerate() {
+        output.push_str(&format!("            Block::B{} => {{\n", idx));
+
         for instr in &block.instructions {
             let code =
                 crate::codegen::instruction::generate_instruction_with_info(backend, instr, info)?;
             output.push_str(&code);
             output.push('\n');
         }
+
         let term_code = crate::codegen::instruction::generate_terminator_with_mapping(
             backend,
             &block.terminator,
@@ -175,48 +190,13 @@ pub fn generate_function_with_info<B: Backend>(
         );
         output.push_str(&term_code);
         output.push('\n');
-    } else {
-        // Multi-block: state machine with per-function Block enum
-        output.push_str("    #[derive(Clone, Copy)]\n    #[allow(dead_code)]\n");
-        output.push_str("    enum Block { ");
-        for idx in 0..ir_func.blocks.len() {
-            if idx > 0 {
-                output.push_str(", ");
-            }
-            output.push_str(&format!("B{}", idx));
-        }
-        output.push_str(" }\n");
-        output.push_str("    let mut __current_block = Block::B0;\n");
-        output.push_str("    loop {\n");
-        output.push_str("        match __current_block {\n");
 
-        for (idx, block) in ir_func.blocks.iter().enumerate() {
-            output.push_str(&format!("            Block::B{} => {{\n", idx));
-
-            for instr in &block.instructions {
-                let code = crate::codegen::instruction::generate_instruction_with_info(
-                    backend, instr, info,
-                )?;
-                output.push_str(&code);
-                output.push('\n');
-            }
-
-            let term_code = crate::codegen::instruction::generate_terminator_with_mapping(
-                backend,
-                &block.terminator,
-                &block_id_to_index,
-                ir_func.return_type,
-            );
-            output.push_str(&term_code);
-            output.push('\n');
-
-            output.push_str("            }\n");
-        }
-
-        // No catch-all needed — match is exhaustive over Block enum
-        output.push_str("        }\n");
-        output.push_str("    }\n");
+        output.push_str("            }\n");
     }
+
+    // No catch-all needed — match is exhaustive over Block enum
+    output.push_str("        }\n");
+    output.push_str("    }\n");
 
     output.push_str("}\n");
     Ok(output)
