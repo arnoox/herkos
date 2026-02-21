@@ -154,10 +154,6 @@ Dependency chain: M1 → M2 → M3 → M4 → M5 (each milestone strictly depend
 These items were identified during pre-open-source code review and deferred for future milestones:
 
 ### Phase 4: Important Features and Spec Compliance
-- [ ] **IR type system cleanup**: Remove Rust-specific Display implementations from IR types
-  - Files: [types.rs:40-50, 274-284](crates/herkos/src/ir/types.rs)
-  - Move formatting logic to backend-specific code (e.g., `backend/safe.rs`)
-  - Maintain backend-agnostic IR per SPECIFICATION.md §2
 - [ ] **Multi-value blocks**: Document limitation or implement support
   - Currently rejected at [builder.rs:713, 732, 753](crates/herkos/src/ir/builder.rs)
   - Add "Known Limitations" section to README.md and SPECIFICATION.md
@@ -175,9 +171,6 @@ These items were identified during pre-open-source code review and deferred for 
   - Include corresponding `.wat` source files
 
 ### Phase 6: Technical Debt and Polish
-- [ ] **Refactor dead block pattern**: Add IR cleanup pass or document pattern
-  - Dead blocks created after Return/Br waste block IDs [builder.rs:468-469](crates/herkos/src/ir/builder.rs#L468-L469)
-  - Either add post-processing cleanup or add comments explaining necessity
 - [ ] **Store Wasm version and transpiler version in generated code**: Emit version as comment
   - TODO comment at [parser/mod.rs](crates/herkos/src/parser/mod.rs)
   - Add version field to `ParsedModule`
@@ -187,6 +180,7 @@ These items were identified during pre-open-source code review and deferred for 
   - More informative transpilation failures
 - [ ] **Add badges to README**: CI status, crates.io version, license, docs.rs
   - Wait until after first crates.io publication
+- [ ] Search for "backwards compatibility" in the repo. Remove what's useless.
 
 ---
 

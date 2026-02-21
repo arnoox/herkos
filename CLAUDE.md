@@ -180,7 +180,7 @@ Each distinct `MAX_PAGES` and trait bound combination generates separate code. *
 
 4. **LTO**: Link-time optimization eliminates unreachable monomorphized copies.
 
-See SPECIFICATION.md §13.3 for complete strategies.
+See docs/SPECIFICATION.md §13.3 for complete strategies.
 
 ### Parallelization
 The transpilation pipeline can be parallelized. IR building and code generation are embarrassingly parallel (each function is independent). The transpiler should use `rayon` for parallel iteration when processing modules with 20+ functions. See SPECIFICATION.md §13.5 for implementation details and performance expectations.
