@@ -569,9 +569,10 @@ mod tests {
         assert!(code.contains(
             "Module::try_new(1, (), Table::try_new(0)?).map_err(|_| WasmTrap::OutOfBounds)?"
         ));
-        // Data segment init
-        assert!(code.contains("module.memory.store_u8(0, 72)?"));
-        assert!(code.contains("module.memory.store_u8(4, 111)?"));
+        // Data segment init — bulk call
+        assert!(code.contains("module.memory.init_data(0,"));
+        assert!(code.contains("72u8"));
+        assert!(code.contains("111u8"));
         // Export impl
         assert!(code.contains("impl WasmModule"));
         assert!(code.contains("pub fn load_word(&mut self, v0: i32) -> WasmResult<i32>"));

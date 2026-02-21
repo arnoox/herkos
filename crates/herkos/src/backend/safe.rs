@@ -78,26 +78,16 @@ impl Backend for SafeBackend {
             BinOp::I32Sub => return format!("                {dest} = {lhs}.wrapping_sub({rhs});"),
             BinOp::I32Mul => return format!("                {dest} = {lhs}.wrapping_mul({rhs});"),
             BinOp::I32DivS => {
-                // Signed division can trap on overflow or division by zero
-                return format!(
-                    "                {dest} = {lhs}.checked_div({rhs}).ok_or(WasmTrap::DivisionByZero)?;"
-                );
+                return format!("                {dest} = i32_div_s({lhs}, {rhs})?;");
             }
             BinOp::I32DivU => {
-                // Unsigned division: reinterpret as unsigned
-                return format!(
-                    "                {dest} = ({lhs} as u32).checked_div({rhs} as u32).ok_or(WasmTrap::DivisionByZero)? as i32;"
-                );
+                return format!("                {dest} = i32_div_u({lhs}, {rhs})?;");
             }
             BinOp::I32RemS => {
-                return format!(
-                    "                {dest} = {lhs}.checked_rem({rhs}).ok_or(WasmTrap::DivisionByZero)?;"
-                );
+                return format!("                {dest} = i32_rem_s({lhs}, {rhs})?;");
             }
             BinOp::I32RemU => {
-                return format!(
-                    "                {dest} = ({lhs} as u32).checked_rem({rhs} as u32).ok_or(WasmTrap::DivisionByZero)? as i32;"
-                );
+                return format!("                {dest} = i32_rem_u({lhs}, {rhs})?;");
             }
             BinOp::I32And => return format!("                {dest} = {lhs} & {rhs};"),
             BinOp::I32Or => return format!("                {dest} = {lhs} | {rhs};"),
@@ -135,24 +125,16 @@ impl Backend for SafeBackend {
             BinOp::I64Sub => return format!("                {dest} = {lhs}.wrapping_sub({rhs});"),
             BinOp::I64Mul => return format!("                {dest} = {lhs}.wrapping_mul({rhs});"),
             BinOp::I64DivS => {
-                return format!(
-                    "                {dest} = {lhs}.checked_div({rhs}).ok_or(WasmTrap::DivisionByZero)?;"
-                );
+                return format!("                {dest} = i64_div_s({lhs}, {rhs})?;");
             }
             BinOp::I64DivU => {
-                return format!(
-                    "                {dest} = ({lhs} as u64).checked_div({rhs} as u64).ok_or(WasmTrap::DivisionByZero)? as i64;"
-                );
+                return format!("                {dest} = i64_div_u({lhs}, {rhs})?;");
             }
             BinOp::I64RemS => {
-                return format!(
-                    "                {dest} = {lhs}.checked_rem({rhs}).ok_or(WasmTrap::DivisionByZero)?;"
-                );
+                return format!("                {dest} = i64_rem_s({lhs}, {rhs})?;");
             }
             BinOp::I64RemU => {
-                return format!(
-                    "                {dest} = ({lhs} as u64).checked_rem({rhs} as u64).ok_or(WasmTrap::DivisionByZero)? as i64;"
-                );
+                return format!("                {dest} = i64_rem_u({lhs}, {rhs})?;");
             }
             BinOp::I64And => return format!("                {dest} = {lhs} & {rhs};"),
             BinOp::I64Or => return format!("                {dest} = {lhs} | {rhs};"),
@@ -297,32 +279,32 @@ impl Backend for SafeBackend {
             UnOp::I64ExtendI32S => format!("                {dest} = {operand} as i64;"),
             UnOp::I64ExtendI32U => format!("                {dest} = ({operand} as u32) as i64;"),
 
-            // Float → i32 (trapping on NaN/overflow)
+            // Float → i32 (trapping on NaN/overflow) — logic lives in herkos_runtime::ops
             UnOp::I32TruncF32S => {
-                format!("                if {operand}.is_nan() || {operand} >= 2147483648.0f32 || {operand} < -2147483648.0f32 {{ return Err(WasmTrap::IntegerOverflow); }} {dest} = {operand} as i32;")
+                format!("                {dest} = i32_trunc_f32_s({operand})?;")
             }
             UnOp::I32TruncF32U => {
-                format!("                if {operand}.is_nan() || {operand} >= 4294967296.0f32 || {operand} <= -1.0f32 {{ return Err(WasmTrap::IntegerOverflow); }} {dest} = {operand} as u32 as i32;")
+                format!("                {dest} = i32_trunc_f32_u({operand})?;")
             }
             UnOp::I32TruncF64S => {
-                format!("                if {operand}.is_nan() || {operand} >= 2147483648.0f64 || {operand} < -2147483648.0f64 {{ return Err(WasmTrap::IntegerOverflow); }} {dest} = {operand} as i32;")
+                format!("                {dest} = i32_trunc_f64_s({operand})?;")
             }
             UnOp::I32TruncF64U => {
-                format!("                if {operand}.is_nan() || {operand} >= 4294967296.0f64 || {operand} <= -1.0f64 {{ return Err(WasmTrap::IntegerOverflow); }} {dest} = {operand} as u32 as i32;")
+                format!("                {dest} = i32_trunc_f64_u({operand})?;")
             }
 
-            // Float → i64 (trapping on NaN/overflow)
+            // Float → i64 (trapping on NaN/overflow) — logic lives in herkos_runtime::ops
             UnOp::I64TruncF32S => {
-                format!("                if {operand}.is_nan() || {operand} >= 9223372036854775808.0f32 || {operand} < -9223372036854775808.0f32 {{ return Err(WasmTrap::IntegerOverflow); }} {dest} = {operand} as i64;")
+                format!("                {dest} = i64_trunc_f32_s({operand})?;")
             }
             UnOp::I64TruncF32U => {
-                format!("                if {operand}.is_nan() || {operand} >= 18446744073709551616.0f32 || {operand} <= -1.0f32 {{ return Err(WasmTrap::IntegerOverflow); }} {dest} = {operand} as u64 as i64;")
+                format!("                {dest} = i64_trunc_f32_u({operand})?;")
             }
             UnOp::I64TruncF64S => {
-                format!("                if {operand}.is_nan() || {operand} >= 9223372036854775808.0f64 || {operand} < -9223372036854775808.0f64 {{ return Err(WasmTrap::IntegerOverflow); }} {dest} = {operand} as i64;")
+                format!("                {dest} = i64_trunc_f64_s({operand})?;")
             }
             UnOp::I64TruncF64U => {
-                format!("                if {operand}.is_nan() || {operand} >= 18446744073709551616.0f64 || {operand} <= -1.0f64 {{ return Err(WasmTrap::IntegerOverflow); }} {dest} = {operand} as u64 as i64;")
+                format!("                {dest} = i64_trunc_f64_u({operand})?;")
             }
 
             // Integer → float

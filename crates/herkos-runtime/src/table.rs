@@ -99,6 +99,19 @@ impl<const MAX_SIZE: usize> Table<MAX_SIZE> {
         }
     }
 
+    /// Initialize table entries from element segment data.
+    ///
+    /// Writes `entries` (each as `(type_index, func_index)`) into consecutive
+    /// slots starting at `base`. Replaces per-slot `set()` calls in generated
+    /// constructors and propagates bounds errors via `?` instead of panicking.
+    ///
+    /// # Errors
+    /// Returns `Err(TableOutOfBounds)` if any slot index is out of range.
+    #[inline(always)]
+    pub fn init_elements(&mut self, base: u32, entries: &[(u32, u32)]) -> WasmResult<()> {
+        init_elements_inner(&mut self.entries, self.active_size, base, entries)
+    }
+
     /// Grow the table by `delta` slots, filling new slots with `init`.
     /// Returns the previous size, or -1 on failure.
     pub fn grow(&mut self, delta: u32, init: Option<FuncRef>) -> i32 {
@@ -113,6 +126,35 @@ impl<const MAX_SIZE: usize> Table<MAX_SIZE> {
         self.active_size = new;
         old as i32
     }
+}
+
+// ── Non-generic inner function (outline pattern, §13.3) ──────────────────────
+
+#[inline(never)]
+fn init_elements_inner(
+    slots: &mut [Option<FuncRef>],
+    active_size: usize,
+    base: u32,
+    entries: &[(u32, u32)],
+) -> WasmResult<()> {
+    for (i, &(type_index, func_index)) in entries.iter().enumerate() {
+        let idx = (base as usize)
+            .checked_add(i)
+            .ok_or(WasmTrap::TableOutOfBounds)?;
+        if idx >= active_size {
+            return Err(WasmTrap::TableOutOfBounds);
+        }
+        match slots.get_mut(idx) {
+            Some(slot) => {
+                *slot = Some(FuncRef {
+                    type_index,
+                    func_index,
+                })
+            }
+            None => return Err(WasmTrap::TableOutOfBounds),
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -195,6 +237,52 @@ mod tests {
         let mut table = Table::<4>::try_new(2).unwrap();
         assert_eq!(table.grow(3, None), -1); // would be 5 > 4
         assert_eq!(table.size(), 2); // unchanged
+    }
+
+    // ── init_elements ──
+
+    #[test]
+    fn init_elements_writes_entries() {
+        let mut table = Table::<8>::try_new(4).unwrap();
+        table.init_elements(0, &[(1, 2), (3, 4)]).unwrap();
+        let e0 = table.get(0).unwrap();
+        assert_eq!(e0.type_index, 1);
+        assert_eq!(e0.func_index, 2);
+        let e1 = table.get(1).unwrap();
+        assert_eq!(e1.type_index, 3);
+        assert_eq!(e1.func_index, 4);
+    }
+
+    #[test]
+    fn init_elements_empty_is_noop() {
+        let mut table = Table::<4>::try_new(4).unwrap();
+        assert!(table.init_elements(0, &[]).is_ok());
+        assert_eq!(table.get(0), Err(WasmTrap::UndefinedElement));
+    }
+
+    #[test]
+    fn init_elements_at_base_offset() {
+        let mut table = Table::<8>::try_new(6).unwrap();
+        table.init_elements(3, &[(0, 5)]).unwrap();
+        assert_eq!(table.get(3).unwrap().func_index, 5);
+        assert_eq!(table.get(0), Err(WasmTrap::UndefinedElement));
+    }
+
+    #[test]
+    fn init_elements_out_of_bounds() {
+        let mut table = Table::<4>::try_new(4).unwrap();
+        // base=3, 2 entries → slots 3 and 4; slot 4 is OOB
+        let result = table.init_elements(3, &[(0, 0), (0, 1)]);
+        assert_eq!(result, Err(WasmTrap::TableOutOfBounds));
+    }
+
+    #[test]
+    fn init_elements_exactly_fills_table() {
+        let mut table = Table::<4>::try_new(4).unwrap();
+        table
+            .init_elements(0, &[(0, 0), (0, 1), (0, 2), (0, 3)])
+            .unwrap();
+        assert_eq!(table.get(3).unwrap().func_index, 3);
     }
 
     #[test]

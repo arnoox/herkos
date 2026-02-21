@@ -173,6 +173,21 @@ impl<const MAX_PAGES: usize> IsolatedMemory<MAX_PAGES> {
         store_f64_inner(self.flat_mut(), active, offset, value)
     }
 
+    /// Initialize a region of memory from a byte slice (Wasm data segment).
+    ///
+    /// Copies `data` into linear memory starting at `offset`. Equivalent to
+    /// calling `store_u8` for each byte, but avoids emitting N separate
+    /// function calls in generated code.
+    ///
+    /// # Errors
+    /// Returns `Err(WasmTrap::OutOfBounds)` if `offset + data.len()` exceeds
+    /// `active_pages * PAGE_SIZE`.
+    #[inline(always)]
+    pub fn init_data(&mut self, offset: usize, data: &[u8]) -> WasmResult<()> {
+        let active = self.active_size();
+        init_data_inner(self.flat_mut(), active, offset, data)
+    }
+
     // ── Unchecked (verified) load/store ───────────────────────────────
     //
     // These skip bounds checking entirely. The caller MUST guarantee that
@@ -384,6 +399,18 @@ fn store_f64_inner(
 ) -> WasmResult<()> {
     let s = checked_slice_mut(memory, active_bytes, offset, 8)?;
     s.copy_from_slice(&value.to_le_bytes());
+    Ok(())
+}
+
+#[inline(never)]
+fn init_data_inner(
+    memory: &mut [u8],
+    active_bytes: usize,
+    offset: usize,
+    data: &[u8],
+) -> WasmResult<()> {
+    let dst = checked_slice_mut(memory, active_bytes, offset, data.len())?;
+    dst.copy_from_slice(data);
     Ok(())
 }
 
@@ -621,6 +648,50 @@ mod tests {
         assert!(mem.load_i32(PAGE_SIZE).is_ok());
         mem.store_i32(PAGE_SIZE, 99).unwrap();
         assert_eq!(mem.load_i32(PAGE_SIZE), Ok(99));
+    }
+
+    // ── init_data ──
+
+    #[test]
+    fn init_data_writes_bytes() {
+        let mut mem = Mem::try_new(1).unwrap();
+        mem.init_data(10, &[1u8, 2, 3, 4]).unwrap();
+        assert_eq!(mem.load_u8(10).unwrap(), 1);
+        assert_eq!(mem.load_u8(11).unwrap(), 2);
+        assert_eq!(mem.load_u8(12).unwrap(), 3);
+        assert_eq!(mem.load_u8(13).unwrap(), 4);
+    }
+
+    #[test]
+    fn init_data_empty_slice_is_noop() {
+        let mut mem = Mem::try_new(1).unwrap();
+        assert!(mem.init_data(0, &[]).is_ok());
+    }
+
+    #[test]
+    fn init_data_out_of_bounds() {
+        let mut mem = Mem::try_new(1).unwrap();
+        let data = [0u8; 10];
+        assert_eq!(
+            mem.init_data(PAGE_SIZE - 5, &data),
+            Err(WasmTrap::OutOfBounds)
+        );
+    }
+
+    #[test]
+    fn init_data_at_boundary() {
+        let mut mem = Mem::try_new(1).unwrap();
+        let data = [42u8; 4];
+        assert!(mem.init_data(PAGE_SIZE - 4, &data).is_ok());
+        assert_eq!(mem.load_u8(PAGE_SIZE - 1).unwrap(), 42);
+    }
+
+    #[test]
+    fn init_data_overwrites_existing() {
+        let mut mem = Mem::try_new(1).unwrap();
+        mem.store_u8(5, 0xFF).unwrap();
+        mem.init_data(5, &[0xABu8]).unwrap();
+        assert_eq!(mem.load_u8(5).unwrap(), 0xAB);
     }
 
     // ── little-endian encoding ──

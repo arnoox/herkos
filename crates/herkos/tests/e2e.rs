@@ -573,11 +573,11 @@ fn test_module_with_data_segment() -> Result<()> {
     assert!(rust_code.contains(
         "Module::try_new(1, (), Table::try_new(0)?).map_err(|_| WasmTrap::OutOfBounds)?"
     ));
-    // Data segment initialization
-    assert!(rust_code.contains("module.memory.store_u8(0, 72)?")); // 'H'
-    assert!(rust_code.contains("module.memory.store_u8(1, 101)?")); // 'e'
-    assert!(rust_code.contains("module.memory.store_u8(4, 111)?")); // 'o'
-                                                                    // Export
+    // Data segment initialization — bulk call
+    assert!(rust_code.contains("module.memory.init_data(0,"));
+    assert!(rust_code.contains("72u8")); // 'H'
+    assert!(rust_code.contains("111u8")); // 'o'
+                                          // Export
     assert!(rust_code.contains("pub fn load_word(&mut self, v0: i32) -> WasmResult<i32>"));
     assert!(rust_code.contains("&mut self.0.memory"));
 
@@ -624,8 +624,7 @@ fn test_i64_division() -> Result<()> {
     let rust_code = transpile_wat(wat)?;
     println!("Generated Rust code:\n{}", rust_code);
 
-    assert!(rust_code.contains("checked_div"));
-    assert!(rust_code.contains("WasmTrap::DivisionByZero"));
+    assert!(rust_code.contains("i64_div_s("));
 
     Ok(())
 }
@@ -768,9 +767,8 @@ fn test_conversion_ops() -> Result<()> {
     assert!(rust_code.contains("v0 as i64"));
     // extend unsigned
     assert!(rust_code.contains("(v0 as u32) as i64"));
-    // trunc trapping
-    assert!(rust_code.contains("is_nan()"));
-    assert!(rust_code.contains("WasmTrap::IntegerOverflow"));
+    // trunc trapping — delegated to runtime ops
+    assert!(rust_code.contains("i32_trunc_f64_s("));
     // convert
     assert!(rust_code.contains("v0 as f64"));
     // reinterpret
@@ -988,7 +986,7 @@ fn test_module_with_globals_and_memory() -> Result<()> {
     assert!(rust_code.contains("pub struct WasmModule(pub Module<Globals, MAX_PAGES, 0>)"));
     // Constructor initializes both
     assert!(rust_code.contains("Globals { g0: 100i32 }"));
-    assert!(rust_code.contains("module.memory.store_u8("));
+    assert!(rust_code.contains("module.memory.init_data("));
     // Function gets both globals and memory params
     assert!(rust_code.contains("globals: &mut Globals"));
     assert!(rust_code.contains("memory: &mut IsolatedMemory<MAX_PAGES>"));
@@ -1120,10 +1118,6 @@ fn test_call_indirect_basic() -> Result<()> {
         rust_code.contains("TABLE_MAX"),
         "should have TABLE_MAX const"
     );
-    assert!(
-        rust_code.contains("FuncRef"),
-        "should import FuncRef for element init"
-    );
     // Should contain indirect dispatch code
     assert!(
         rust_code.contains("table.get("),
@@ -1138,9 +1132,9 @@ fn test_call_indirect_basic() -> Result<()> {
         rust_code.contains("func_index"),
         "should dispatch on func_index"
     );
-    // Element segment initialization
+    // Element segment initialization — bulk call
     assert!(
-        rust_code.contains("table.set("),
+        rust_code.contains("table.init_elements("),
         "should init table with element segments"
     );
 

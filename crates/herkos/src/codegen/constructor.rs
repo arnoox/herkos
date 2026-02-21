@@ -39,45 +39,33 @@ pub fn emit_const_globals<B: Backend>(_backend: &B, info: &ModuleInfo) -> String
 /// Element segments are declared in the Wasm binary's `element` section. Each
 /// segment specifies a base offset into the table and a list of function
 /// references to write into consecutive slots starting at that offset. This
-/// function emits the Rust `table.set(...)` calls that perform those writes
-/// inside the generated module's `new()` constructor.
+/// function emits one `table.init_elements(...)` call per segment, which is
+/// bounds-checked inside the runtime and propagates errors via `?`.
 pub fn emit_element_segments(info: &ModuleInfo, table_receiver: &str) -> Result<String> {
     let mut code = String::new();
 
-    // A Wasm module may declare multiple element segments, each covering a
-    // contiguous slice of table slots at a different base offset.
     for seg in &info.element_segments {
-        // `seg.offset` is the base table index for this segment.
-        // `seg.func_indices` lists the local function indices to place into
-        // consecutive slots: slot (offset+0), (offset+1), ...
-        // All indices are already in the local index space (imports subtracted).
-        for (i, local_func_idx) in seg.func_indices.iter().enumerate() {
-            // Absolute table slot = segment base + position within segment.
-            let table_idx = seg.offset + i;
+        if seg.func_indices.is_empty() {
+            continue;
+        }
 
-            // Each table entry records the function's canonical type index so
-            // that `call_indirect` can validate the expected signature at the
-            // call site before dispatching. We fetch it from the IR function.
+        // Build &[(type_index, func_index), ...] literal for init_elements.
+        // All indices are already in the local index space (imports subtracted).
+        let mut pairs: Vec<String> = Vec::new();
+        for local_func_idx in &seg.func_indices {
             let type_idx = info
                 .ir_function(*local_func_idx)
                 .map(|f| f.type_idx.as_usize())
                 .ok_or(anyhow::anyhow!("Invalid function index"))?;
-
-            // Emit one table initialisation statement per slot.
-            //
-            // TODO: `.unwrap()` panics if `table_idx` exceeds the table's
-            //       allocated size. The table is sized from the same Wasm module
-            //       so this should be unreachable, but it is not formally proven.
-            //       Generated code should use `?` and propagate a
-            //       `ConstructionError` to stay panic-free (required by no_std).
-            code.push_str(&format!(
-                "    {}.set({}, Some(FuncRef {{ type_index: {}, func_index: {} }})).unwrap();\n",
-                table_receiver,            // "module.table" or "table"
-                table_idx,                 // absolute slot in the table
-                type_idx,                  // for type-checking on call_indirect
-                local_func_idx.as_usize()  // which function to dispatch to
-            ));
+            pairs.push(format!("({}, {})", type_idx, local_func_idx.as_usize()));
         }
+
+        code.push_str(&format!(
+            "    {}.init_elements({}, &[{}])?;\n",
+            table_receiver,
+            seg.offset,
+            pairs.join(", ")
+        ));
     }
     Ok(code)
 }
@@ -143,15 +131,14 @@ pub fn generate_constructor<B: Backend>(
             binding, info.initial_pages, globals_init, table_init
         ));
 
-        // Data segment initialization (byte-by-byte)
+        // Data segment initialization — one bulk call per segment
         for seg in &info.data_segments {
-            for (i, byte) in seg.data.iter().enumerate() {
-                let addr = seg.offset as usize + i;
-                code.push_str(&format!(
-                    "    module.memory.store_u8({}, {})?;\n",
-                    addr, byte
-                ));
-            }
+            let bytes: Vec<String> = seg.data.iter().map(|b| format!("{}u8", b)).collect();
+            code.push_str(&format!(
+                "    module.memory.init_data({}, &[{}])?;\n",
+                seg.offset,
+                bytes.join(", ")
+            ));
         }
 
         // Element segment initialization
