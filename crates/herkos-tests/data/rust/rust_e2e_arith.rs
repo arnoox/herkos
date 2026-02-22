@@ -12,11 +12,11 @@ pub extern "C" fn add_i32(a: i32, b: i32) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn sum_recursive(n: i32) -> i32 {
-  if n <= 0 {
-    0
-  } else {
-    n + sum_recursive(n - 1)
-  }
+    if n <= 0 {
+        0
+    } else {
+        n + sum_recursive(n - 1)
+    }
 }
 
 #[no_mangle]

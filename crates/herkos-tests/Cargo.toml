@@ -16,5 +16,8 @@ wat = { workspace = true }
 herkos = { path = "../herkos" }
 
 [dev-dependencies]
-# Future: property-based testing
-# proptest = "1.0"
+criterion = "0.8.2"
+
+[[bench]]
+name = "herkos_runtime_benchmark"
+harness = false
