@@ -51,14 +51,21 @@ impl IrBuilder {
 
             // Local variable access
             Operator::LocalGet { local_index } => {
-                let var = self
+                let src = self
                     .local_vars
                     .get(*local_index as usize)
                     .copied()
                     .ok_or_else(|| {
                         anyhow::anyhow!("local.get: local index {} out of range", local_index)
                     })?;
-                self.value_stack.push(var);
+                // Emit a copy rather than pushing the local's VarId directly.
+                // If we push the local's VarId, a later local.tee/local.set that
+                // overwrites the same local will corrupt any already-pushed reference
+                // to it, because the backend emits sequential mutable assignments.
+                // A fresh variable captures the value at this point in time.
+                let dest = self.new_var();
+                self.emit(IrInstr::Assign { dest, src });
+                self.value_stack.push(dest);
             }
 
             Operator::LocalSet { local_index } => {

@@ -654,7 +654,7 @@ fn test_i64_bitwise_and_shifts() -> Result<()> {
     let rust_code = transpile_wat(wat)?;
     println!("Generated Rust code:\n{}", rust_code);
 
-    assert!(rust_code.contains("& v1"));
+    assert!(rust_code.contains(" & v"));
     assert!(rust_code.contains("wrapping_shl"));
     assert!(rust_code.contains("rotate_left"));
 
@@ -715,7 +715,7 @@ fn test_f64_operations() -> Result<()> {
     let rust_code = transpile_wat(wat)?;
     println!("Generated Rust code:\n{}", rust_code);
 
-    assert!(rust_code.contains("v0 / v1"));
+    assert!(rust_code.contains(" / v"));
     assert!(rust_code.contains(".floor()"));
     assert!(rust_code.contains(".ceil()"));
     assert!(rust_code.contains(".sqrt()"));
@@ -762,15 +762,15 @@ fn test_conversion_ops() -> Result<()> {
     println!("Generated Rust code:\n{}", rust_code);
 
     // wrap
-    assert!(rust_code.contains("v0 as i32"));
+    assert!(rust_code.contains(" as i32"));
     // extend signed
-    assert!(rust_code.contains("v0 as i64"));
+    assert!(rust_code.contains(" as i64"));
     // extend unsigned
-    assert!(rust_code.contains("(v0 as u32) as i64"));
+    assert!(rust_code.contains("as u32) as i64"));
     // trunc trapping — delegated to runtime ops
     assert!(rust_code.contains("i32_trunc_f64_s("));
     // convert
-    assert!(rust_code.contains("v0 as f64"));
+    assert!(rust_code.contains(" as f64"));
     // reinterpret
     assert!(rust_code.contains("to_bits()"));
     assert!(rust_code.contains("from_bits"));
