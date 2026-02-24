@@ -154,7 +154,7 @@ fn process_rust_e2e_files(
                 "--edition",
                 "2021",
                 "-C",
-                "opt-level=z",
+                "opt-level=3",
                 "-C",
                 "lto=yes",
                 // Reduce the Wasm stack size from the default 1 MiB to 64 KiB,
