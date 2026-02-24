@@ -2,17 +2,21 @@
 
 > ⚠️ **This project is work in progress! Not all wasm features nor corner cases were tested!**
 
-A compilation pipeline that transpiles WebAssembly modules into memory-safe Rust code with compile-time isolation guarantees, replacing runtime hardware-based memory protection (MMU/MPU) with type-system-enforced safety.
+A compilation pipeline that transpiles WebAssembly modules into memory-safe Rust code with compile-time isolation guarantees (memory+capabilities), replacing runtime hardware-based memory protection (MMU/MPU) with type-system-enforced safety.
+
+herkos approach: if the Rust compiler accepts the transpiled code, isolation is guaranteed; no MMU, no context switches, no runtime overhead for proven accesses.
 
 **WebAssembly → Rust source → Safe binary**
 
 ## Motivation
 
-Safety-critical standards (ISO 26262, IEC 61508, DO-178C) require **freedom from interference** between software modules of different criticality levels. Typically this is achieved via MMU/MPU or hypervisors, approaches that are expensive in cpu time performance, energy, and certification effort.
+Running untrusted or unsafe-language components alongside safe code usually requires hardware isolation (MMU/MPU, hypervisors) or process boundaries, all of which add runtime overhead and complexity. What if the compiler itself could enforce "spatial" isolation?
 
-herkos takes a different approach: if the Rust compiler accepts the transpiled code, isolation is guaranteed; no MMU, no context switches, no runtime overhead for proven accesses.
+herkos explores this idea: transpile WebAssembly modules into safe Rust, so that memory isolation and capability restrictions are checked at compile time rather than at runtime. This opens up several use cases:
 
-Still we have a challenge: how to do efficient communication between "*compile-time-mmu*" partitions? This will be one of the things this project will explore.
+- **Isolating untrusted components** — sandbox C/C++ libraries without hardware protection
+- **Porting unsafe-language code to Rust** — use Wasm as an intermediate representation to get a safe Rust version of existing C/C++ code
+- **Efficient cross-partition communication** — how do "compile-time-MMU" partitions talk to each other efficiently?
 
 ## Architecture
 
@@ -21,11 +25,8 @@ The project is a Rust workspace with three core crates:
 | Crate | Purpose |
 |---|---|
 | `herkos` | CLI transpiler: parses `.wasm` binaries, emits Rust source code |
-| `herkos-runtime` | `#![no_std]` runtime library shipped with transpiled output (`IsolatedMemory`, capability types, Wasm operations) |
-
-Features:
-- compile time isolation
-- compile time capability based security access via traits
+| `herkos-runtime` | `#![no_std]` runtime library shipped with transpiled output (isolated memory, capability types, wasm operations) |
+| `herkos-tests` | collection of wat/Rust/C sources that are compiled to .wasm, transpiled and tested. |
 
 ## Build and test
 
