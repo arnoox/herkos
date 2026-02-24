@@ -251,18 +251,13 @@ fn generate_signature_with_info<B: Backend>(
         .collect();
 
     // Add host parameter if function needs imports or global imports
-    if needs_host {
-        if let Some(trait_bounds) = trait_bounds_opt {
-            if has_multiple_bounds {
-                // Use generic parameter H
-                param_parts.push("host: &mut H".to_string());
-            } else {
-                // Single trait bound - use impl directly
-                param_parts.push(format!("host: &mut impl {trait_bounds}"));
-            }
+    if let Some(trait_bounds) = trait_bounds_opt {
+        if has_multiple_bounds {
+            // Use generic parameter H
+            param_parts.push("host: &mut H".to_string());
         } else {
-            // Fallback for backwards compatibility
-            param_parts.push("host: &mut impl Host".to_string());
+            // Single trait bound - use impl directly
+            param_parts.push(format!("host: &mut impl {trait_bounds}"));
         }
     }
 

@@ -64,7 +64,7 @@ fn generate_wrapper_module<B: Backend>(backend: &B, info: &ModuleInfo) -> Result
         ));
     }
 
-    // Constructor (standalone for backwards compatibility)
+    // Constructor (standalone free function)
     rust_code.push_str(&generate_constructor(backend, info, has_mut_globals)?);
     rust_code.push('\n');
 

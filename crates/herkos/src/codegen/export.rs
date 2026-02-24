@@ -62,18 +62,13 @@ pub fn generate_export_impl<B: Backend>(_backend: &B, info: &ModuleInfo) -> Stri
         }
 
         // Add host parameter if function needs it
-        if ir_func.needs_host {
-            if let Some(trait_bounds) = &trait_bounds_opt {
-                if has_multiple_bounds {
-                    // Use generic parameter H
-                    param_parts.push("host: &mut H".to_string());
-                } else {
-                    // Single trait bound - use impl directly
-                    param_parts.push(format!("host: &mut impl {trait_bounds}"));
-                }
+        if let Some(trait_bounds) = &trait_bounds_opt {
+            if has_multiple_bounds {
+                // Use generic parameter H
+                param_parts.push("host: &mut H".to_string());
             } else {
-                // Fallback for backwards compatibility
-                param_parts.push("host: &mut impl Host".to_string());
+                // Single trait bound - use impl directly
+                param_parts.push(format!("host: &mut impl {trait_bounds}"));
             }
         }
 
