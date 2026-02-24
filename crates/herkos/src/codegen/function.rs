@@ -7,6 +7,59 @@
 use crate::backend::Backend;
 use crate::ir::*;
 use anyhow::Result;
+use std::collections::{HashMap, HashSet};
+
+/// Returns the successor block IDs for a terminator.
+fn terminator_successors(term: &IrTerminator) -> Vec<BlockId> {
+    match term {
+        IrTerminator::Return { .. } | IrTerminator::Unreachable => vec![],
+        IrTerminator::Jump { target } => vec![*target],
+        IrTerminator::BranchIf {
+            if_true, if_false, ..
+        } => vec![*if_true, *if_false],
+        IrTerminator::BranchTable {
+            targets, default, ..
+        } => targets
+            .iter()
+            .chain(std::iter::once(default))
+            .copied()
+            .collect(),
+    }
+}
+
+/// Compute the set of blocks that can be inlined into their sole predecessor's
+/// conditional arm. A block is inlinable when:
+/// - It has exactly one *distinct* block-predecessor
+/// - It is not the entry block
+/// - Its predecessor reaches it via `BranchIf` (not `Jump` — those are handled
+///   by the `merge_blocks` IR pass)
+///
+/// Inlining is applied recursively: if block B is inlined into P, and B's
+/// terminator targets block C which is also inlinable, C is inlined into the
+/// same arm.
+fn compute_inlinable_blocks(ir_func: &IrFunction) -> HashSet<BlockId> {
+    // Build predecessor map: BlockId → set of predecessor BlockIds.
+    let mut preds: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
+    for block in &ir_func.blocks {
+        preds.entry(block.id).or_default();
+        for succ in terminator_successors(&block.terminator) {
+            preds.entry(succ).or_default().insert(block.id);
+        }
+    }
+
+    let mut inlinable = HashSet::new();
+    for block in &ir_func.blocks {
+        if block.id == ir_func.entry_block {
+            continue;
+        }
+        if let Some(pred_set) = preds.get(&block.id) {
+            if pred_set.len() == 1 {
+                inlinable.insert(block.id);
+            }
+        }
+    }
+    inlinable
+}
 
 /// Generate a complete Rust function from IR with module info.
 ///
@@ -30,14 +83,34 @@ pub fn generate_function_with_info<B: Backend>(
     output.push_str(" {\n");
 
     // Create mapping from BlockId to vector index
-    let mut block_id_to_index = std::collections::HashMap::new();
+    let mut block_id_to_index = HashMap::new();
     for (idx, block) in ir_func.blocks.iter().enumerate() {
         block_id_to_index.insert(block.id, idx);
     }
 
+    // Index blocks by BlockId for O(1) lookup during inline emission.
+    let block_by_id: HashMap<BlockId, &IrBlock> =
+        ir_func.blocks.iter().map(|b| (b.id, b)).collect();
+
+    // Compute which blocks can be inlined into their predecessor's conditional arm.
+    let inlinable = compute_inlinable_blocks(ir_func);
+
+    // Compute trivial return blocks: no instructions, terminator is Return,
+    // and not the entry block. These can be inlined at every use site
+    // regardless of predecessor count.
+    let trivial_returns: HashSet<BlockId> = ir_func
+        .blocks
+        .iter()
+        .filter(|b| {
+            b.id != ir_func.entry_block
+                && b.instructions.is_empty()
+                && matches!(b.terminator, IrTerminator::Return { .. })
+        })
+        .map(|b| b.id)
+        .collect();
+
     // Collect all variables and their types from instructions.
-    let mut var_types: std::collections::HashMap<VarId, WasmType> =
-        std::collections::HashMap::new();
+    let mut var_types: HashMap<VarId, WasmType> = HashMap::new();
 
     // Seed with parameter types
     for (var, ty) in &ir_func.params {
@@ -158,39 +231,47 @@ pub fn generate_function_with_info<B: Backend>(
         output.push_str(&format!("    let mut {var}: {rust_ty} = {default};\n"));
     }
 
+    // Determine which blocks are emitted as match arms (non-inlined, non-trivial-return blocks).
+    let emitted_blocks: Vec<(usize, &IrBlock)> = ir_func
+        .blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| !inlinable.contains(&b.id) && !trivial_returns.contains(&b.id))
+        .collect();
+
     // Multi-block: state machine with per-function Block enum
     output.push_str("    #[derive(Clone, Copy)]\n    #[allow(dead_code)]\n");
     output.push_str("    enum Block { ");
-    for idx in 0..ir_func.blocks.len() {
-        if idx > 0 {
+    for (i, (idx, _)) in emitted_blocks.iter().enumerate() {
+        if i > 0 {
             output.push_str(", ");
         }
         output.push_str(&format!("B{}", idx));
     }
     output.push_str(" }\n");
-    output.push_str("    let mut __current_block = Block::B0;\n");
+
+    // Entry block is always at index 0 in emitted_blocks.
+    let entry_idx = block_id_to_index[&ir_func.entry_block];
+    output.push_str(&format!(
+        "    let mut __current_block = Block::B{};\n",
+        entry_idx
+    ));
     output.push_str("    loop {\n");
     output.push_str("        match __current_block {\n");
 
-    for (idx, block) in ir_func.blocks.iter().enumerate() {
+    let ctx = EmitCtx {
+        backend,
+        info,
+        block_id_to_index: &block_id_to_index,
+        block_by_id: &block_by_id,
+        inlinable: &inlinable,
+        trivial_returns: &trivial_returns,
+        func_return_type: ir_func.return_type,
+    };
+
+    for (idx, block) in &emitted_blocks {
         output.push_str(&format!("            Block::B{} => {{\n", idx));
-
-        for instr in &block.instructions {
-            let code =
-                crate::codegen::instruction::generate_instruction_with_info(backend, instr, info)?;
-            output.push_str(&code);
-            output.push('\n');
-        }
-
-        let term_code = crate::codegen::instruction::generate_terminator_with_mapping(
-            backend,
-            &block.terminator,
-            &block_id_to_index,
-            ir_func.return_type,
-        );
-        output.push_str(&term_code);
-        output.push('\n');
-
+        ctx.emit_block_body(block, &mut output, 0)?;
         output.push_str("            }\n");
     }
 
@@ -200,6 +281,143 @@ pub fn generate_function_with_info<B: Backend>(
 
     output.push_str("}\n");
     Ok(output)
+}
+
+/// Maximum inline depth to prevent unbounded recursion on pathological CFGs.
+const MAX_INLINE_DEPTH: usize = 16;
+
+/// Shared context for recursive block emission, avoiding excessive parameters.
+struct EmitCtx<'a, B: Backend> {
+    backend: &'a B,
+    info: &'a ModuleInfo,
+    block_id_to_index: &'a HashMap<BlockId, usize>,
+    block_by_id: &'a HashMap<BlockId, &'a IrBlock>,
+    inlinable: &'a HashSet<BlockId>,
+    trivial_returns: &'a HashSet<BlockId>,
+    func_return_type: Option<WasmType>,
+}
+
+impl<B: Backend> EmitCtx<'_, B> {
+    /// Try to emit a target block inline. Returns `true` if the target was
+    /// emitted (either as a single-predecessor inline or a trivial return).
+    fn try_emit_inline_target(
+        &self,
+        target: &BlockId,
+        output: &mut String,
+        depth: usize,
+    ) -> Result<bool> {
+        if depth < MAX_INLINE_DEPTH && self.inlinable.contains(target) {
+            self.emit_block_body(self.block_by_id[target], output, depth + 1)?;
+            return Ok(true);
+        }
+        if self.trivial_returns.contains(target) {
+            let block = self.block_by_id[target];
+            let term_code =
+                crate::codegen::instruction::generate_terminator_with_mapping(
+                    self.backend,
+                    &block.terminator,
+                    self.block_id_to_index,
+                    self.func_return_type,
+                );
+            output.push_str(&term_code);
+            output.push('\n');
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Emit the body of a block (instructions + terminator), inlining single-
+    /// predecessor target blocks into conditional arms recursively.
+    fn emit_block_body(
+        &self,
+        block: &IrBlock,
+        output: &mut String,
+        depth: usize,
+    ) -> Result<()> {
+        for instr in &block.instructions {
+            let code = crate::codegen::instruction::generate_instruction_with_info(
+                self.backend,
+                instr,
+                self.info,
+            )?;
+            output.push_str(&code);
+            output.push('\n');
+        }
+        self.emit_terminator(&block.terminator, output, depth)
+    }
+
+    /// Emit a terminator, inlining target blocks that are in the `inlinable` set
+    /// or the `trivial_returns` set.
+    fn emit_terminator(
+        &self,
+        term: &IrTerminator,
+        output: &mut String,
+        depth: usize,
+    ) -> Result<()> {
+        match term {
+            IrTerminator::BranchIf {
+                condition,
+                if_true,
+                if_false,
+            } => {
+                output.push_str(&format!("                if {} != 0 {{\n", condition));
+
+                let true_inlined = self.try_emit_inline_target(if_true, output, depth)?;
+                if !true_inlined {
+                    let idx = self.block_id_to_index[if_true];
+                    output.push_str(&format!(
+                        "                    __current_block = Block::B{};\n",
+                        idx
+                    ));
+                }
+
+                output.push_str("                } else {\n");
+
+                let false_inlined = self.try_emit_inline_target(if_false, output, depth)?;
+                if !false_inlined {
+                    let idx = self.block_id_to_index[if_false];
+                    output.push_str(&format!(
+                        "                    __current_block = Block::B{};\n",
+                        idx
+                    ));
+                }
+
+                output.push_str("                }\n");
+                if !true_inlined || !false_inlined {
+                    output.push_str("                continue;\n");
+                }
+            }
+
+            // Jump to a trivial return block — emit the return directly.
+            IrTerminator::Jump { target } if self.trivial_returns.contains(target) => {
+                let block = self.block_by_id[target];
+                let term_code =
+                    crate::codegen::instruction::generate_terminator_with_mapping(
+                        self.backend,
+                        &block.terminator,
+                        self.block_id_to_index,
+                        self.func_return_type,
+                    );
+                output.push_str(&term_code);
+                output.push('\n');
+            }
+
+            // For other terminators, fall back to the standard generation.
+            _ => {
+                let term_code =
+                    crate::codegen::instruction::generate_terminator_with_mapping(
+                        self.backend,
+                        term,
+                        self.block_id_to_index,
+                        self.func_return_type,
+                    );
+                output.push_str(&term_code);
+                output.push('\n');
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// Generate function signature with module info.
