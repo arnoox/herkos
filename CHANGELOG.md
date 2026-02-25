@@ -68,25 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Many tests are missing!
 
-**Current Phase**: Milestone 3 complete (Import/Export System)
-
-**Completed**:
-- ✅ Phase 0: Workspace scaffold
-- ✅ Phase 1: Runtime core (herkos-runtime)
-- ✅ Milestone 1: Arithmetic and memory operations
-- ✅ Milestone 2: Control flow (if/block/loop/br)
-- ✅ Milestone 3: Import/Export system
-
-**In Progress**:
-- 🔄 Pre-open-source code review and cleanup
-
-**Planned**:
-- ⏳ Backend selection (verified/hybrid modes)
-- ⏳ Local variable tracking
-- ⏳ Multi-value blocks
-- ⏳ WASI, optimization, documentation
-
-See [PLAN.md](PLAN.md) for the complete roadmap.
+See [docs/FUTURE.md](docs/FUTURE.md) for planned features.
 
 ## Version History
 

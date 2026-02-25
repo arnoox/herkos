@@ -192,7 +192,7 @@ Good commit messages:
 ```
 feat: add support for multi-value blocks in IR builder
 
-Implements multi-value block support as specified in SPECIFICATION.md §5.
+Implements multi-value block support as specified in SPECIFICATION.md §4.
 Adds tracking for block result types and proper stack management.
 
 Closes #42
@@ -316,7 +316,7 @@ See [SECURITY.md](SECURITY.md) for responsible disclosure instructions.
 - Use the **outline pattern** for generic functions to prevent monomorphization bloat
 - Profile before optimizing (use `cargo bench` for microbenchmarks)
 - Document any performance-critical code sections
-- See SPECIFICATION.md §13.3 for monomorphization mitigation strategies
+- See SPECIFICATION.md §6.2 for monomorphization mitigation strategies
 
 ## Questions?
 
