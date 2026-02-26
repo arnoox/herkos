@@ -38,13 +38,7 @@ If you have thoughts on how this could be implemented:
 
 ## Additional Context
 
-Add any other context, screenshots, or examples here.
-
-## Willing to Contribute?
-
-- [ ] I am willing to submit a PR to implement this feature
-- [ ] I need guidance on implementation
-- [ ] I can only describe the feature
+Add any other context or examples here.
 
 ## References
 
