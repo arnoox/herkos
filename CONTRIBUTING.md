@@ -289,12 +289,6 @@ Use the [feature request template](.github/ISSUE_TEMPLATE/feature_request.md):
 - Suggest a possible implementation (optional)
 - Reference relevant SPECIFICATION.md sections if applicable
 
-### Security Issues
-
-**Do NOT open public issues for security vulnerabilities.**
-
-See [SECURITY.md](SECURITY.md) for responsible disclosure instructions.
-
 ## Development Guidelines
 
 ### Error Handling
