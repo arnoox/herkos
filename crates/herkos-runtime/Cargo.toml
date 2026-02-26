@@ -1,12 +1,13 @@
 [package]
 name = "herkos-runtime"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Runtime library for herkos transpiled output — IsolatedMemory, WasmTrap, capability traits"
 license = "Apache-2.0"
 repository = "https://github.com/arnoox/herkos"
 homepage = "https://github.com/arnoox/herkos"
-authors = ["herkos contributors"]
+readme = "../../README.md"
+authors = ["Arnaud Riess"]
 keywords = ["webassembly", "wasm", "runtime", "no-std", "isolation"]
 categories = ["wasm", "no-std"]
 
