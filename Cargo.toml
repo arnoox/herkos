@@ -5,6 +5,9 @@ members = [
     "crates/herkos",
     "crates/herkos-tests",
 ]
+exclude = [
+    "examples/c-to-wasm-to-rust",
+]
 
 [workspace.dependencies]
 anyhow = "1"

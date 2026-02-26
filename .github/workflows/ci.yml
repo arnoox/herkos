@@ -37,3 +37,6 @@ jobs:
 
       - name: Format check
         run: cargo fmt --check
+
+      - name: Example (C → Wasm → Rust)
+        run: ./examples/c-to-wasm-to-rust/run.sh
