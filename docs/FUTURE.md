@@ -86,7 +86,7 @@ let b = memory.load_i32(dynamic_offset as usize)?;
 
 ## 3. Temporal Isolation (Fuel-Based Execution)
 
-Spatial isolation (implemented) prevents memory corruption. **Temporal isolation** prevents CPU time starvation — equally critical for safety standards (ISO 26262 requires both).
+Spatial isolation (implemented) prevents memory corruption. **Temporal isolation** prevents CPU time starvation — equally important for systems that need both memory and timing guarantees.
 
 ### 3.1 The Fuel Model
 

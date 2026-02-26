@@ -15,11 +15,11 @@ herkos is a compilation pipeline that transforms WebAssembly modules into memory
 
 ## 2. Problem Statement
 
-Industry standards for functional safety (e.g., ISO 26262) and security require **freedom from interference** between software modules of different criticality levels. In practice this means:
+Systems that mix components of different trust or criticality levels require **freedom from interference** — the guarantee that one module cannot corrupt the state of another. In practice this means:
 
-- An ASIL-B rated component shall not be able to corrupt the memory of an ASIL-D component
+- A higher-criticality component shall not be corruptible by a lower-criticality one
 - An untrusted third-party library shall be contained so it cannot reach outside its sandbox
-- Modules at different security or safety levels shall have provable isolation boundaries
+- Modules at different trust levels shall have provable isolation boundaries
 
 This isolation is typically achieved through hardware mechanisms (MMU, MPU) or hypervisors. While effective, these approaches are:
 
@@ -65,10 +65,10 @@ memory.grow instruction adds pages at runtime up to the declared maximum.
 ```{req} Compile-Time Memory Sizing
 :id: REQ_MEM_COMPILE_TIME_SIZE
 :status: open
-:tags: memory, no_std, const-generic
-The maximum memory size shall be fixed at compile time via a const generic parameter
-(MAX_PAGES). No heap allocation is permitted for memory backing storage. The entire
-backing array shall be statically sized.
+:tags: memory, no_std, static-sizing
+The maximum memory size for each module shall be fixed at compile time. No heap
+allocation is permitted for memory backing storage. All memory shall be statically
+sized.
 ```
 
 ```{req} Bounds-Checked Memory Access
@@ -84,9 +84,8 @@ an error (WasmTrap::OutOfBounds), never panic or invoke undefined behavior.
 :id: REQ_MEM_GROW_NO_ALLOC
 :status: open
 :tags: memory, memory.grow, no_std
-memory.grow shall not perform heap allocation. Growth is a counter increment plus
-zero-fill of new pages within the pre-allocated backing array. Returns previous
-page count on success, -1 on failure.
+memory.grow shall not perform heap allocation. New pages shall be zero-initialized
+within pre-allocated storage. Returns previous page count on success, -1 on failure.
 ```
 
 ### 4.2 Module Representation
@@ -104,9 +103,9 @@ This distinction is the primary mechanism for spatial isolation.
 :id: REQ_MOD_GLOBALS
 :status: open
 :tags: modules, globals
-Mutable Wasm globals shall be represented as typed struct fields in a generated
-Globals struct. Immutable globals shall be Rust const items. No dynamic lookup
-or enum indirection.
+Mutable Wasm globals shall have statically typed, per-instance storage. Immutable
+globals shall be compile-time constants. Global access shall be resolved statically,
+with no dynamic lookup.
 ```
 
 ```{req} Indirect Call Table
@@ -124,35 +123,35 @@ validate the type signature before dispatch.
 :id: REQ_CAP_IMPORTS
 :status: open
 :tags: imports, traits, capabilities
-Wasm module imports shall become Rust trait bounds on a generic host parameter.
-Each group of related imports maps to one trait. If a module does not import a
-capability, the trait bound shall not exist — no code path to call it.
+Wasm module imports shall be statically checked capabilities. Related imports
+shall be grouped into discrete capability sets. If a module does not import a
+capability, no code path to invoke it shall exist.
 ```
 
 ```{req} Exports as Trait Implementations
 :id: REQ_CAP_EXPORTS
 :status: open
 :tags: exports, traits
-Wasm module exports shall become trait implementations on the transpiled module
-struct. This enables inter-module linking via trait composition.
+Wasm module exports shall be exposed as statically typed interfaces on the
+transpiled module. This shall enable inter-module linking via interface composition.
 ```
 
 ```{req} Zero-Cost Dispatch
 :id: REQ_CAP_ZERO_COST
 :status: open
 :tags: traits, dispatch, performance
-All capability dispatch shall use monomorphization (no vtables, no trait objects
-in the hot path). If a module does not import a capability, zero code for that
-capability is generated.
+Capability dispatch shall incur zero runtime overhead compared to direct function
+calls. If a module does not import a capability, no code for that capability shall
+be generated.
 ```
 
 ```{req} WASI Support via Standard Traits
 :id: REQ_CAP_WASI
 :status: open
 :tags: wasi, imports, traits
-WASI (WebAssembly System Interface) support shall be implemented as a standard
-set of traits (WasiFd, WasiPath, WasiClock, WasiRandom, etc.) shipped by
-herkos-runtime. The host implements whichever subset it supports.
+WASI (WebAssembly System Interface) support shall be provided as a standard set
+of capability interfaces shipped with the runtime. The host provides whichever
+subset it supports.
 ```
 
 ### 4.4 Transpilation
@@ -161,26 +160,25 @@ herkos-runtime. The host implements whichever subset it supports.
 :id: REQ_TRANS_FUNCTIONS
 :status: open
 :tags: transpilation, functions
-Each Wasm function shall be transpiled to a Rust function. Module state (memory,
-globals, table) is threaded through as parameters. Capabilities become trait bounds
-on a generic host parameter.
+Each Wasm function shall be transpiled to a Rust function with explicit access to
+module state (memory, globals, table) and granted capabilities.
 ```
 
 ```{req} Control Flow Mapping
 :id: REQ_TRANS_CONTROL_FLOW
 :status: open
 :tags: transpilation, control-flow
-Wasm control flow (block, loop, if, br, br_if, br_table) shall map to Rust control
-flow structures using labeled blocks and breaks. No goto or unsafe control flow.
+Wasm control flow (block, loop, if, br, br_if, br_table) shall map to safe Rust
+control flow structures. No goto or unsafe control flow.
 ```
 
 ```{req} Safe Indirect Call Dispatch
 :id: REQ_TRANS_INDIRECT_CALLS
 :status: open
 :tags: transpilation, indirect-calls, safety
-Indirect calls (call_indirect) shall use static match dispatch over function indices,
-not function pointers, vtables, or dynamic dispatch. The match enumerates all
-functions matching the expected type signature. 100% safe Rust.
+Indirect calls (call_indirect) shall be dispatched using only safe Rust — no
+function pointers, no unsafe dispatch. The dispatch mechanism shall validate type
+signatures and enumerate only functions matching the expected type.
 ```
 
 ```{req} Structural Type Equivalence
@@ -189,7 +187,7 @@ functions matching the expected type signature. 100% safe Rust.
 :tags: transpilation, types
 Type checks in call_indirect shall use structural equivalence: two type indices
 match if they have identical parameter and result types, regardless of index.
-The transpiler shall build a canonical type index mapping at transpile time.
+Type equivalence shall be resolved at transpile time.
 ```
 
 ```{req} Self-Contained Output
@@ -206,8 +204,7 @@ only Result<T, WasmTrap> for error handling.
 :status: open
 :tags: transpilation, determinism
 Generated output shall be identical regardless of CPU, thread count, execution order,
-or random seed. No non-deterministic collection types (e.g., HashMap iteration order).
-Enables reproducible builds and auditable output.
+or random seed. Enables reproducible builds and auditable output.
 ```
 
 ### 4.5 Error Handling
@@ -216,9 +213,10 @@ Enables reproducible builds and auditable output.
 :id: REQ_ERR_TRAPS
 :status: open
 :tags: error-handling, traps
-Wasm traps shall map to a WasmTrap enum returned as Result::Err. Trap types:
-OutOfBounds, DivisionByZero, IntegerOverflow, Unreachable, IndirectCallTypeMismatch,
-TableOutOfBounds, UndefinedElement. No exceptions, no panics, no unwinding.
+Wasm traps shall be reported as typed, structured errors. The following trap
+categories shall be distinguished: out-of-bounds memory access, division by zero,
+integer overflow, unreachable code, indirect call type mismatch, table out-of-bounds,
+and undefined table element. No exceptions, no panics, no unwinding.
 ```
 
 ### 4.6 Platform Constraints
@@ -229,7 +227,7 @@ TableOutOfBounds, UndefinedElement. No exceptions, no panics, no unwinding.
 :tags: no_std, embedded
 herkos-runtime and all transpiled output shall be #![no_std]. No heap allocation
 without the optional alloc feature gate. No panics, no format!, no String in the
-runtime or generated code. Enables embedded and safety-critical targets.
+runtime or generated code. Enables resource-constrained and embedded targets.
 ```
 
 ## 5. Non-Functional Requirements
@@ -249,19 +247,19 @@ guaranteed.
 ```{req} Freedom from Interference
 :id: REQ_FREEDOM_FROM_INTERFERENCE
 :status: open
-:tags: isolation, safety-critical, iso26262
-No module at a lower criticality level (e.g., ASIL-B) can corrupt the state of a
-module at a higher criticality level (e.g., ASIL-D), per ISO 26262 Part 6 and
-IEC 61508. Enforced via spatial isolation (memory ownership) and capability
-enforcement (trait bounds).
+:tags: isolation, freedom-from-interference
+No module shall be able to corrupt the state of another module. This property
+— commonly known as "freedom from interference" — shall be enforced via spatial
+isolation and capability enforcement. Note: herkos is not qualified to any
+safety standard. It provides an isolation mechanism, not a certified safety case.
 ```
 
 ```{req} Spatial Isolation via Memory Ownership
 :id: REQ_ISOLATION_SPATIAL
 :status: open
 :tags: isolation, memory, type-system
-Each module shall operate on its own IsolatedMemory instance. The Rust type system
-shall structurally prevent any cross-module memory access — there shall be no pointer,
+Each module shall operate on its own isolated memory. The type system shall
+structurally prevent any cross-module memory access — there shall be no pointer,
 offset, or API that allows one module to reach another module's linear memory.
 ```
 
@@ -269,9 +267,9 @@ offset, or API that allows one module to reach another module's linear memory.
 :id: REQ_ISOLATION_CAPABILITY
 :status: open
 :tags: isolation, capabilities
-Capabilities shall be enforced via Rust trait bounds on the host parameter. A module
-can only perform operations that it was explicitly granted at instantiation. Missing
-capabilities shall cause compile errors, not runtime failures.
+Capabilities shall be statically enforced at compile time. A module can only perform
+operations that it was explicitly granted at instantiation. Missing capabilities
+shall cause compile errors, not runtime failures.
 ```
 
 ### 5.2 Determinism
@@ -308,9 +306,8 @@ modules.
 :id: REQ_PERF_MONO_BLOAT
 :status: open
 :tags: performance, monomorphization, binary-size
-The runtime and transpiler shall apply the outline pattern (generic shell, non-generic
-core) to prevent binary size explosion from monomorphization. Binary size shall be
-a tracked metric.
+The runtime and transpiler shall mitigate binary size explosion from generic code
+specialization. Binary size shall be a tracked metric.
 ```
 
 ### 5.4 Security

@@ -918,21 +918,21 @@ IR building and code generation are embarrassingly parallel — each function is
                   │  Parse   │  (sequential)
                   └────┬─────┘
                        │
-         ┌─────────────┼─────────────┐
-         ▼             ▼             ▼
+         ┌─────────────┼───────────┐
+         ▼             ▼           ▼
     ┌──────────┐ ┌──────────┐ ┌──────────┐
     │ IR Build │ │ IR Build │ │ IR Build │  (parallel)
     │ func_0   │ │ func_1   │ │ func_N   │
     └────┬─────┘ └────┬─────┘ └────┬─────┘
-         │             │             │
-         ▼             ▼             ▼
+         │            │            │
+         ▼            ▼            ▼
     ┌──────────┐ ┌──────────┐ ┌──────────┐
     │ Codegen  │ │ Codegen  │ │ Codegen  │  (parallel)
     │ func_0   │ │ func_1   │ │ func_N   │
     └────┬─────┘ └────┬─────┘ └────┬─────┘
-         │             │             │
-         └─────────────┼─────────────┘
-                       ▼
+         │            │            │
+         └────────────┼────────────┘
+                      ▼
                   ┌──────────┐
                   │ Assemble │  (sequential)
                   └──────────┘
@@ -958,7 +958,7 @@ Activation heuristic: use `rayon` parallel iterators when the module has 20+ fun
 
 - **Memory corruption**: buffer overflows, use-after-free — prevented by bounds-checked access and Rust's ownership system
 - **Unauthorized resource access**: files, network, system calls — prevented by trait-based capability enforcement
-- **Cross-module interference**: freedom from interference per ISO 26262 Part 6 — enforced by memory ownership isolation
+- **Cross-module interference**: freedom from interference — enforced by memory ownership isolation
 - **ROP attacks**: no function pointers in generated code — all dispatch is static match
 
 ### 7.2 Not Protected Against (current scope)
