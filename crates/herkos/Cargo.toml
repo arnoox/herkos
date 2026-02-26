@@ -9,6 +9,7 @@ homepage = "https://github.com/arnoox/herkos"
 authors = ["herkos contributors"]
 keywords = ["webassembly", "wasm", "transpiler", "rust", "isolation"]
 categories = ["wasm", "development-tools::build-utils"]
+readme = "../../README.md"
 
 [dependencies]
 wasmparser = { workspace = true }
