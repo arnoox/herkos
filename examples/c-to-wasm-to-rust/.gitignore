@@ -2,3 +2,4 @@
 fibonacci.wasm
 src/fibonacci_wasm.rs
 target/
+Cargo.lock
