@@ -21,7 +21,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install system dependencies
-        run: sudo apt-get install -y clang lld
+        run: sudo apt-get install -y clang lld wabt
 
       - name: Install kani-verifier
         run: cargo install --locked kani-verifier && cargo kani setup
