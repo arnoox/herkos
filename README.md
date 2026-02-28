@@ -16,11 +16,11 @@ herkos transpiles WebAssembly modules into safe Rust code, offering type-system-
 Running untrusted or unsafe-language code usually requires hardware isolation (processes, hypervisors, MMU/MPU). That's the right tool for many jobs — but sometimes it's overkill: a small plugin, a single C library, a microcontroller with no MMU. For those cases, herkos offers a lighter-weight approach: transpile Wasm to safe Rust, so the compiler itself enforces spatial isolation.
 
 ```
-                                Compile-time isolation
-                               ┌──────────────────────┐
-  C / C++ / Rust    ──────▶    │   .wasm   ──herkos──▶│   Safe Rust    ──rustc──▶   Binary
-  (unsafe code)      clang/    │                      │   (no unsafe)              (isolated)
-                     rustc     └──────────────────────┘
+                                      Compile-Time Isolation
+                               ┌────────────────────────────────────┐
+  C / C++ / Rust    ──────▶    │   .wasm   ──herkos──▶  Safe Rust   │   ──rustc──▶   Binary
+  (unsafe code)      clang/    │                        (no unsafe) │               (isolated)
+                     rustc     └────────────────────────────────────┘
 ```
 
 This enables:
