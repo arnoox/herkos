@@ -21,7 +21,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install system dependencies
-        run: sudo apt-get install -y clang lld
+        run: sudo apt-get install -y clang lld wabt
 
       - name: Install kani-verifier
         run: cargo install --locked kani-verifier && cargo kani setup
@@ -40,3 +40,6 @@ jobs:
 
       - name: Example (C → Wasm → Rust)
         run: ./examples/c-to-wasm-to-rust/run.sh
+
+      - name: Example (Inter-Module Lending)
+        run: ./examples/inter-module-lending/run.sh
