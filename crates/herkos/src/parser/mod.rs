@@ -152,6 +152,9 @@ pub struct ParsedModule {
     /// Number of imported globals (these occupy indices 0..N-1 in the
     /// global index space, before local globals).
     pub num_imported_globals: u32,
+
+    /// Wasm binary version from the module header.
+    pub wasm_version: u16,
 }
 
 /// A single function in the module.
@@ -309,13 +312,15 @@ pub fn parse_wasm(wasm_bytes: &[u8]) -> Result<ParsedModule> {
     let mut imports = Vec::new();
     let mut num_imported_functions: u32 = 0;
     let mut num_imported_globals: u32 = 0;
+    let mut wasm_version: u16 = 1;
 
     for payload in parser.parse_all(wasm_bytes) {
         let payload = payload.context("parsing wasm payload")?;
 
         match payload {
-            // TODO(for later milestones): get the version info and provide it a least as a rust comment in the generated code.
-            Payload::Version { .. } => {}
+            Payload::Version { num, .. } => {
+                wasm_version = num;
+            }
 
             Payload::TypeSection(reader) => {
                 for rec_group in reader {
@@ -470,6 +475,7 @@ pub fn parse_wasm(wasm_bytes: &[u8]) -> Result<ParsedModule> {
         imports,
         num_imported_functions,
         num_imported_globals,
+        wasm_version,
     })
 }
 
