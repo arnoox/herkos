@@ -118,6 +118,24 @@ fn process_rust_e2e_files(
         return Ok(Vec::new());
     }
 
+    // Copy common include files to OUT_DIR so include!() paths resolve
+    // when rustc compiles the copied sources.
+    let common_dir = rust_dir.join("common");
+    if common_dir.exists() {
+        let out_common = out_dir.join("common");
+        fs::create_dir_all(&out_common).context("failed to create common/ in OUT_DIR")?;
+        for entry in fs::read_dir(&common_dir).context("failed to read data/rust/common/")? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_file() {
+                let dest = out_common.join(path.file_name().unwrap());
+                fs::copy(&path, &dest).with_context(|| {
+                    format!("failed to copy {} to OUT_DIR/common/", path.display())
+                })?;
+            }
+        }
+    }
+
     let mut entries = collect_files_with_ext(rust_dir, "rs")?;
     entries.sort();
     eprintln!(
