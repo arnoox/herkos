@@ -878,6 +878,8 @@ pub struct ModuleInfo {
     pub imported_globals: Vec<ImportedGlobalDef>,
     /// All IR functions in the module.
     pub ir_functions: Vec<IrFunction>,
+    /// Wasm binary version from the module header.
+    pub wasm_version: u16,
 }
 
 impl ModuleInfo {
