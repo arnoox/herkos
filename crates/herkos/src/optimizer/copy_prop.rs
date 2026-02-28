@@ -437,7 +437,7 @@ fn forward_propagate_one(block: &mut IrBlock, global_uses: &HashMap<VarId, usize
                 .enumerate()
                 .filter(|(_, i)| count_uses_of(i, v_dst) > 0)
                 .map(|(rel, _)| assign_idx + 1 + rel)
-                .last()
+                .next_back()
                 .unwrap_or(assign_idx) // unreachable: local_uses_after > 0
         };
 
@@ -515,7 +515,9 @@ fn replace_uses_of(instr: &mut IrInstr, old: VarId, new: VarId) {
                 sub(a);
             }
         }
-        IrInstr::CallIndirect { table_idx, args, .. } => {
+        IrInstr::CallIndirect {
+            table_idx, args, ..
+        } => {
             sub(table_idx);
             for a in args {
                 sub(a);
@@ -1015,7 +1017,11 @@ mod tests {
             },
         ));
         eliminate(&mut func);
-        assert_eq!(func.blocks[0].instructions.len(), 0, "Assign should be removed");
+        assert_eq!(
+            func.blocks[0].instructions.len(),
+            0,
+            "Assign should be removed"
+        );
         match &func.blocks[0].terminator {
             IrTerminator::Return { value: Some(v) } => assert_eq!(*v, VarId(0)),
             other => panic!("expected Return(v0), got {other:?}"),
@@ -1052,7 +1058,10 @@ mod tests {
         assert_eq!(func.blocks[0].instructions.len(), 1);
         assert!(matches!(
             func.blocks[0].instructions[0],
-            IrInstr::Assign { dest: VarId(10), src: VarId(0) }
+            IrInstr::Assign {
+                dest: VarId(10),
+                src: VarId(0)
+            }
         ));
     }
 
@@ -1189,7 +1198,12 @@ mod tests {
         let instrs = &func.blocks[0].instructions;
         assert_eq!(instrs.len(), 1, "both Assigns should be removed");
         match &instrs[0] {
-            IrInstr::BinOp { lhs, rhs, op: BinOp::I32GeS, .. } => {
+            IrInstr::BinOp {
+                lhs,
+                rhs,
+                op: BinOp::I32GeS,
+                ..
+            } => {
                 assert_eq!(*lhs, VarId(1), "lhs should be v1");
                 assert_eq!(*rhs, VarId(0), "rhs should be v0");
             }
@@ -1259,7 +1273,11 @@ mod tests {
 
         let instrs = &func.blocks[0].instructions;
         // Only the 3 BinOps remain; all 4 Assigns are gone.
-        assert_eq!(instrs.len(), 3, "all 4 Assigns should be removed, leaving 3 BinOps");
+        assert_eq!(
+            instrs.len(),
+            3,
+            "all 4 Assigns should be removed, leaving 3 BinOps"
+        );
 
         // v23 = BinOp(I32LtS, v1, v0)
         match &instrs[0] {
