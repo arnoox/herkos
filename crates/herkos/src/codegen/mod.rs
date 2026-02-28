@@ -217,6 +217,7 @@ mod tests {
             func_imports: Vec::new(),
             imported_globals: Vec::new(),
             ir_functions: Vec::new(),
+            wasm_version: 1,
         };
         let code =
             function::generate_function_with_info(&backend, &ir_func, "add", &info, true).unwrap();
@@ -267,6 +268,7 @@ mod tests {
             func_imports: Vec::new(),
             imported_globals: Vec::new(),
             ir_functions: Vec::new(),
+            wasm_version: 1,
         };
         let code =
             function::generate_function_with_info(&backend, &ir_func, "noop", &info, true).unwrap();
@@ -372,6 +374,7 @@ mod tests {
             func_imports: Vec::new(),
             imported_globals: Vec::new(),
             ir_functions: Vec::new(),
+            wasm_version: 1,
         };
         let code = function::generate_function_with_info(&backend, &ir_func, "add64", &info, true)
             .unwrap();
@@ -435,6 +438,7 @@ mod tests {
             func_imports: Vec::new(),
             imported_globals: Vec::new(),
             ir_functions: Vec::new(),
+            wasm_version: 1,
         };
         let code =
             function::generate_function_with_info(&backend, &ir_func, "eq64", &info, true).unwrap();
@@ -491,6 +495,7 @@ mod tests {
             func_imports: Vec::new(),
             imported_globals: Vec::new(),
             ir_functions: vec![ir_func],
+            wasm_version: 1,
         };
 
         let backend = SafeBackend::new();
@@ -556,6 +561,7 @@ mod tests {
             func_imports: Vec::new(),
             imported_globals: Vec::new(),
             ir_functions: vec![ir_func],
+            wasm_version: 1,
         };
 
         let backend = SafeBackend::new();
@@ -622,6 +628,7 @@ mod tests {
             func_imports: Vec::new(),
             imported_globals: Vec::new(),
             ir_functions: vec![ir_func],
+            wasm_version: 1,
         };
 
         let backend = SafeBackend::new();

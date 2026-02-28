@@ -1,10 +1,8 @@
 [workspace]
 resolver = "2"
-members = [
-    "crates/herkos-runtime",
-    "crates/herkos",
-    "crates/herkos-tests",
-]
+members = ["crates/herkos-runtime", "crates/herkos", "crates/herkos-tests"]
+
+exclude = ["examples/c-to-wasm-to-rust", "examples/inter-module-lending"]
 
 [workspace.dependencies]
 anyhow = "1"

@@ -21,7 +21,7 @@ pub fn generate_module_with_info<B: Backend>(backend: &B, info: &ModuleInfo) -> 
 
 /// Generate a module wrapper with Globals struct, constructor, and export methods.
 fn generate_wrapper_module<B: Backend>(backend: &B, info: &ModuleInfo) -> Result<String> {
-    let mut rust_code = rust_code_preamble();
+    let mut rust_code = rust_code_preamble(info);
     let has_mut_globals = info.has_mutable_globals();
 
     if info.has_memory {
@@ -64,7 +64,7 @@ fn generate_wrapper_module<B: Backend>(backend: &B, info: &ModuleInfo) -> Result
         ));
     }
 
-    // Constructor (standalone for backwards compatibility)
+    // Constructor (standalone free function)
     rust_code.push_str(&generate_constructor(backend, info, has_mut_globals)?);
     rust_code.push('\n');
 

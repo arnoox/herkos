@@ -11,28 +11,15 @@ struct Cli {
     /// Input WebAssembly binary (.wasm)
     input: PathBuf,
 
-    /// Code generation backend
-    #[arg(long, default_value = "safe", value_parser = ["safe", "verified", "hybrid"])]
-    mode: String,
-
     /// Output Rust source file
     #[arg(long, short)]
     output: Option<PathBuf>,
-
-    /// Override maximum memory pages when the Wasm module declares no maximum
-    #[arg(long, default_value = "256")]
-    max_pages: usize,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    eprintln!(
-        "herkos: transpiling {} (mode={}, max_pages={})",
-        cli.input.display(),
-        cli.mode,
-        cli.max_pages,
-    );
+    eprintln!("herkos: transpiling {}", cli.input.display(),);
 
     // Read WASM file
     let wasm_bytes =
@@ -40,8 +27,8 @@ fn main() -> Result<()> {
 
     // Configure transpilation options
     let options = TranspileOptions {
-        mode: cli.mode.clone(),
-        max_pages: cli.max_pages,
+        mode: "safe".to_string(),
+        max_pages: 256,
     };
 
     // Transpile using library function
@@ -68,7 +55,7 @@ mod tests {
     #[test]
     fn cli_parses_defaults() {
         let cli = Cli::parse_from(["herkos", "input.wasm"]);
-        assert_eq!(cli.mode, "safe");
-        assert_eq!(cli.max_pages, 256);
+        assert_eq!(cli.input, PathBuf::from("input.wasm"));
+        assert!(cli.output.is_none());
     }
 }

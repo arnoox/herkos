@@ -51,6 +51,7 @@ pub(super) fn assemble_module_metadata(
         func_imports,
         imported_globals,
         ir_functions,
+        wasm_version: parsed.wasm_version,
     })
 }
 

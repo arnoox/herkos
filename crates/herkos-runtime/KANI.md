@@ -127,5 +127,5 @@ mod proofs {
 
 - [Kani Tutorial](https://model-checking.github.io/kani/kani-tutorial.html)
 - [Kani Rust Book](https://model-checking.github.io/kani/)
-- [SPECIFICATION.md §9.4](../../SPECIFICATION.md) — Contract-based verification design
-- [SPECIFICATION.md §11.3](../../SPECIFICATION.md) — Runtime verification requirements
+- [FUTURE.md §4](../../docs/FUTURE.md) — Contract-based verification design
+- [SPECIFICATION.md §3.2](../../docs/SPECIFICATION.md) — Runtime architecture
