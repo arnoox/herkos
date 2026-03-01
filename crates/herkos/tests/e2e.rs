@@ -102,9 +102,8 @@ fn test_constant_arithmetic() -> Result<()> {
     println!("Generated Rust code:\n{}", rust_code);
 
     assert!(rust_code.contains("pub fn func_0"));
-    assert!(rust_code.contains("10i32"));
-    assert!(rust_code.contains("20i32"));
-    assert!(rust_code.contains("wrapping_add"));
+    // Constant folding: 10 + 20 is folded to 30 at compile time.
+    assert!(rust_code.contains("30i32"));
     assert!(rust_code.contains("return Ok("));
 
     Ok(())

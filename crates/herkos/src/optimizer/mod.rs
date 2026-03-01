@@ -13,6 +13,7 @@ use anyhow::Result;
 pub(crate) mod utils;
 
 // ── Passes ───────────────────────────────────────────────────────────────────
+mod const_prop;
 mod copy_prop;
 mod dead_blocks;
 mod empty_blocks;
@@ -25,6 +26,7 @@ pub fn optimize_ir(module_info: ModuleInfo) -> Result<ModuleInfo> {
         empty_blocks::eliminate(func);
         merge_blocks::eliminate(func);
         dead_blocks::eliminate(func)?;
+        const_prop::eliminate(func);
         copy_prop::eliminate(func);
     }
     Ok(module_info)
