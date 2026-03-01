@@ -41,8 +41,12 @@
 //! new forward opportunities), then the forward pass runs.  After both passes
 //! settle, dead variables are pruned from `IrFunction::locals`.
 
-use crate::ir::{IrBlock, IrFunction, IrInstr, IrTerminator, VarId};
-use std::collections::{HashMap, HashSet};
+use super::utils::{
+    build_global_use_count, count_uses_of, count_uses_of_terminator, for_each_use, instr_dest,
+    prune_dead_locals, replace_uses_of, replace_uses_of_terminator, set_instr_dest,
+};
+use crate::ir::{IrBlock, IrFunction, IrInstr, VarId};
+use std::collections::HashMap;
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
@@ -93,29 +97,6 @@ pub fn eliminate(func: &mut IrFunction) {
 
     // Prune locals that are no longer referenced anywhere.
     prune_dead_locals(func);
-}
-
-// ── Global use-count ──────────────────────────────────────────────────────────
-
-/// Counts how many times each variable is *read* across the entire function
-/// (all blocks, all instructions, all terminators).
-///
-/// This is used for the single-use check in `coalesce_one`: a variable is safe
-/// to coalesce only when its global read-count is exactly 1, ensuring it is not
-/// read in any other block.
-fn build_global_use_count(func: &IrFunction) -> HashMap<VarId, usize> {
-    let mut counts: HashMap<VarId, usize> = HashMap::new();
-    for block in &func.blocks {
-        for instr in &block.instructions {
-            for_each_use(instr, |v| {
-                *counts.entry(v).or_insert(0) += 1;
-            });
-        }
-        for_each_use_terminator(&block.terminator, |v| {
-            *counts.entry(v).or_insert(0) += 1;
-        });
-    }
-    counts
 }
 
 // ── Core coalescing logic ─────────────────────────────────────────────────────
@@ -201,167 +182,6 @@ fn coalesce_one(block: &mut IrBlock, global_uses: &HashMap<VarId, usize>) -> boo
     }
 
     false
-}
-
-// ── Dead-local pruning ────────────────────────────────────────────────────────
-
-/// Remove from `func.locals` any variable that no longer appears in any
-/// instruction or terminator of any block.
-fn prune_dead_locals(func: &mut IrFunction) {
-    // Collect all variables still referenced anywhere in the function.
-    let mut live: HashSet<VarId> = HashSet::new();
-
-    for block in &func.blocks {
-        for instr in &block.instructions {
-            for_each_use(instr, |v| {
-                live.insert(v);
-            });
-            if let Some(dest) = instr_dest(instr) {
-                live.insert(dest);
-            }
-        }
-        for_each_use_terminator(&block.terminator, |v| {
-            live.insert(v);
-        });
-        // Terminators that reference block IDs don't reference variables, but
-        // the BranchIf condition and BranchTable index are already handled above.
-    }
-
-    // Keep params unconditionally; prune locals that are not in `live`.
-    func.locals.retain(|(var, _)| live.contains(var));
-}
-
-// ── Instruction helpers ───────────────────────────────────────────────────────
-
-/// Calls `f` with every variable read by `instr`.
-fn for_each_use<F: FnMut(VarId)>(instr: &IrInstr, mut f: F) {
-    match instr {
-        IrInstr::Const { .. } => {}
-        IrInstr::BinOp { lhs, rhs, .. } => {
-            f(*lhs);
-            f(*rhs);
-        }
-        IrInstr::UnOp { operand, .. } => {
-            f(*operand);
-        }
-        IrInstr::Load { addr, .. } => {
-            f(*addr);
-        }
-        IrInstr::Store { addr, value, .. } => {
-            f(*addr);
-            f(*value);
-        }
-        IrInstr::Call { args, .. } => {
-            for a in args {
-                f(*a);
-            }
-        }
-        IrInstr::CallImport { args, .. } => {
-            for a in args {
-                f(*a);
-            }
-        }
-        IrInstr::CallIndirect {
-            table_idx, args, ..
-        } => {
-            f(*table_idx);
-            for a in args {
-                f(*a);
-            }
-        }
-        IrInstr::Assign { src, .. } => {
-            f(*src);
-        }
-        IrInstr::GlobalGet { .. } => {}
-        IrInstr::GlobalSet { value, .. } => {
-            f(*value);
-        }
-        IrInstr::MemorySize { .. } => {}
-        IrInstr::MemoryGrow { delta, .. } => {
-            f(*delta);
-        }
-        IrInstr::MemoryCopy { dst, src, len } => {
-            f(*dst);
-            f(*src);
-            f(*len);
-        }
-        IrInstr::Select {
-            val1,
-            val2,
-            condition,
-            ..
-        } => {
-            f(*val1);
-            f(*val2);
-            f(*condition);
-        }
-    }
-}
-
-/// Calls `f` with every variable read by a block terminator.
-fn for_each_use_terminator<F: FnMut(VarId)>(term: &IrTerminator, mut f: F) {
-    match term {
-        IrTerminator::Return { value: Some(v) } => {
-            f(*v);
-        }
-        IrTerminator::Return { value: None }
-        | IrTerminator::Jump { .. }
-        | IrTerminator::Unreachable => {}
-        IrTerminator::BranchIf { condition, .. } => {
-            f(*condition);
-        }
-        IrTerminator::BranchTable { index, .. } => {
-            f(*index);
-        }
-    }
-}
-
-/// Returns the variable written by `instr`, or `None` for side-effect-only instructions.
-fn instr_dest(instr: &IrInstr) -> Option<VarId> {
-    match instr {
-        IrInstr::Const { dest, .. }
-        | IrInstr::BinOp { dest, .. }
-        | IrInstr::UnOp { dest, .. }
-        | IrInstr::Load { dest, .. }
-        | IrInstr::Assign { dest, .. }
-        | IrInstr::GlobalGet { dest, .. }
-        | IrInstr::MemorySize { dest }
-        | IrInstr::MemoryGrow { dest, .. }
-        | IrInstr::Select { dest, .. } => Some(*dest),
-
-        IrInstr::Call { dest, .. }
-        | IrInstr::CallImport { dest, .. }
-        | IrInstr::CallIndirect { dest, .. } => *dest,
-
-        IrInstr::Store { .. } | IrInstr::GlobalSet { .. } | IrInstr::MemoryCopy { .. } => None,
-    }
-}
-
-/// Redirects the destination variable of `instr` to `new_dest`.
-///
-/// Only called when `instr_dest(instr)` is `Some(_)`, i.e. the instruction
-/// produces a value.  Instructions without a dest are left unchanged.
-fn set_instr_dest(instr: &mut IrInstr, new_dest: VarId) {
-    match instr {
-        IrInstr::Const { dest, .. }
-        | IrInstr::BinOp { dest, .. }
-        | IrInstr::UnOp { dest, .. }
-        | IrInstr::Load { dest, .. }
-        | IrInstr::Assign { dest, .. }
-        | IrInstr::GlobalGet { dest, .. }
-        | IrInstr::MemorySize { dest }
-        | IrInstr::MemoryGrow { dest, .. }
-        | IrInstr::Select { dest, .. } => {
-            *dest = new_dest;
-        }
-        IrInstr::Call { dest, .. }
-        | IrInstr::CallImport { dest, .. }
-        | IrInstr::CallIndirect { dest, .. } => {
-            *dest = Some(new_dest);
-        }
-        // No dest — unreachable given precondition, but harmless to ignore.
-        IrInstr::Store { .. } | IrInstr::GlobalSet { .. } | IrInstr::MemoryCopy { .. } => {}
-    }
 }
 
 // ── Forward propagation ───────────────────────────────────────────────────────
@@ -458,121 +278,6 @@ fn forward_propagate_one(block: &mut IrBlock, global_uses: &HashMap<VarId, usize
         return true;
     }
     false
-}
-
-// ── Use-count helpers ─────────────────────────────────────────────────────────
-
-/// Count how many times `var` appears as an operand (read) in `instr`.
-fn count_uses_of(instr: &IrInstr, var: VarId) -> usize {
-    let mut count = 0usize;
-    for_each_use(instr, |v| {
-        if v == var {
-            count += 1;
-        }
-    });
-    count
-}
-
-/// Count how many times `var` appears as an operand in `term`.
-fn count_uses_of_terminator(term: &IrTerminator, var: VarId) -> usize {
-    let mut count = 0usize;
-    for_each_use_terminator(term, |v| {
-        if v == var {
-            count += 1;
-        }
-    });
-    count
-}
-
-// ── Mutable use-replacement helpers ──────────────────────────────────────────
-
-/// Replace every read-occurrence of `old` with `new` in `instr`.
-/// Only touches operand (source) slots; the destination slot is never modified.
-fn replace_uses_of(instr: &mut IrInstr, old: VarId, new: VarId) {
-    let sub = |v: &mut VarId| {
-        if *v == old {
-            *v = new;
-        }
-    };
-    match instr {
-        IrInstr::Const { .. } => {}
-        IrInstr::BinOp { lhs, rhs, .. } => {
-            sub(lhs);
-            sub(rhs);
-        }
-        IrInstr::UnOp { operand, .. } => {
-            sub(operand);
-        }
-        IrInstr::Load { addr, .. } => {
-            sub(addr);
-        }
-        IrInstr::Store { addr, value, .. } => {
-            sub(addr);
-            sub(value);
-        }
-        IrInstr::Call { args, .. } | IrInstr::CallImport { args, .. } => {
-            for a in args {
-                sub(a);
-            }
-        }
-        IrInstr::CallIndirect {
-            table_idx, args, ..
-        } => {
-            sub(table_idx);
-            for a in args {
-                sub(a);
-            }
-        }
-        IrInstr::Assign { src, .. } => {
-            sub(src);
-        }
-        IrInstr::GlobalGet { .. } => {}
-        IrInstr::GlobalSet { value, .. } => {
-            sub(value);
-        }
-        IrInstr::MemorySize { .. } => {}
-        IrInstr::MemoryGrow { delta, .. } => {
-            sub(delta);
-        }
-        IrInstr::MemoryCopy { dst, src, len } => {
-            sub(dst);
-            sub(src);
-            sub(len);
-        }
-        IrInstr::Select {
-            val1,
-            val2,
-            condition,
-            ..
-        } => {
-            sub(val1);
-            sub(val2);
-            sub(condition);
-        }
-    }
-}
-
-/// Replace every read-occurrence of `old` with `new` in `term`.
-fn replace_uses_of_terminator(term: &mut IrTerminator, old: VarId, new: VarId) {
-    let sub = |v: &mut VarId| {
-        if *v == old {
-            *v = new;
-        }
-    };
-    match term {
-        IrTerminator::Return { value: Some(v) } => {
-            sub(v);
-        }
-        IrTerminator::Return { value: None }
-        | IrTerminator::Jump { .. }
-        | IrTerminator::Unreachable => {}
-        IrTerminator::BranchIf { condition, .. } => {
-            sub(condition);
-        }
-        IrTerminator::BranchTable { index, .. } => {
-            sub(index);
-        }
-    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

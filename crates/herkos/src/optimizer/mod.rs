@@ -9,6 +9,9 @@
 use crate::ir::ModuleInfo;
 use anyhow::Result;
 
+// ── Shared utilities ─────────────────────────────────────────────────────────
+pub(crate) mod utils;
+
 // ── Passes ───────────────────────────────────────────────────────────────────
 mod copy_prop;
 mod dead_blocks;

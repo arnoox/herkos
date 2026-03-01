@@ -10,41 +10,9 @@
 //!
 //! After merging, absorbed blocks are removed from `func.blocks`.
 
+use super::utils::build_predecessors;
 use crate::ir::{BlockId, IrFunction, IrTerminator};
 use std::collections::{HashMap, HashSet};
-
-/// Returns the successor block IDs for a terminator.
-fn terminator_successors(term: &IrTerminator) -> Vec<BlockId> {
-    match term {
-        IrTerminator::Return { .. } | IrTerminator::Unreachable => vec![],
-        IrTerminator::Jump { target } => vec![*target],
-        IrTerminator::BranchIf {
-            if_true, if_false, ..
-        } => vec![*if_true, *if_false],
-        IrTerminator::BranchTable {
-            targets, default, ..
-        } => targets
-            .iter()
-            .chain(std::iter::once(default))
-            .copied()
-            .collect(),
-    }
-}
-
-/// Build a map from each block ID to the set of *distinct* predecessor block IDs.
-fn build_predecessors(func: &IrFunction) -> HashMap<BlockId, HashSet<BlockId>> {
-    let mut preds: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
-    // Ensure every block has an entry (even if no predecessors).
-    for block in &func.blocks {
-        preds.entry(block.id).or_default();
-    }
-    for block in &func.blocks {
-        for succ in terminator_successors(&block.terminator) {
-            preds.entry(succ).or_default().insert(block.id);
-        }
-    }
-    preds
-}
 
 /// Merge single-predecessor blocks reached via unconditional `Jump`.
 ///

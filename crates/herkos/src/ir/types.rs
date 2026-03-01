@@ -383,7 +383,7 @@ impl fmt::Display for IrValue {
 }
 
 /// Binary operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinOp {
     // i32 operations
     I32Add,
@@ -479,7 +479,7 @@ pub enum BinOp {
 }
 
 /// Unary operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnOp {
     // i32 unary
     I32Clz,    // Count leading zeros
