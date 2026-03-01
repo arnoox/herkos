@@ -345,7 +345,7 @@ pub enum IrTerminator {
 }
 
 /// Constant value in the IR.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum IrValue {
     I32(i32),
     I64(i64),
@@ -383,7 +383,7 @@ impl fmt::Display for IrValue {
 }
 
 /// Binary operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinOp {
     // i32 operations
     I32Add,
@@ -479,7 +479,7 @@ pub enum BinOp {
 }
 
 /// Unary operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnOp {
     // i32 unary
     I32Clz,    // Count leading zeros
