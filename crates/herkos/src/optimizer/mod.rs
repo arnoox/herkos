@@ -18,6 +18,7 @@ mod copy_prop;
 mod dead_blocks;
 mod dead_instrs;
 mod empty_blocks;
+mod licm;
 mod local_cse;
 mod merge_blocks;
 
@@ -32,6 +33,11 @@ pub fn optimize_ir(module_info: ModuleInfo) -> Result<ModuleInfo> {
         copy_prop::eliminate(func);
         local_cse::eliminate(func);
         dead_instrs::eliminate(func);
+
+        // Loop optimization
+        licm::eliminate(func);
+        dead_instrs::eliminate(func);
+        copy_prop::eliminate(func);
     }
     Ok(module_info)
 }
