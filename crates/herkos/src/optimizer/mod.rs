@@ -16,6 +16,7 @@ pub(crate) mod utils;
 mod const_prop;
 mod copy_prop;
 mod dead_blocks;
+mod dead_instrs;
 mod empty_blocks;
 mod merge_blocks;
 
@@ -28,6 +29,7 @@ pub fn optimize_ir(module_info: ModuleInfo) -> Result<ModuleInfo> {
         dead_blocks::eliminate(func)?;
         const_prop::eliminate(func);
         copy_prop::eliminate(func);
+        dead_instrs::eliminate(func);
     }
     Ok(module_info)
 }
