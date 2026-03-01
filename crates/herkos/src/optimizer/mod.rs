@@ -18,6 +18,7 @@ mod copy_prop;
 mod dead_blocks;
 mod dead_instrs;
 mod empty_blocks;
+mod local_cse;
 mod merge_blocks;
 
 /// Optimizes the IR representation by running all passes in order.
@@ -29,6 +30,7 @@ pub fn optimize_ir(module_info: ModuleInfo) -> Result<ModuleInfo> {
         dead_blocks::eliminate(func)?;
         const_prop::eliminate(func);
         copy_prop::eliminate(func);
+        local_cse::eliminate(func);
         dead_instrs::eliminate(func);
     }
     Ok(module_info)
