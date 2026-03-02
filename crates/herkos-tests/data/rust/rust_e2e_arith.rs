@@ -10,13 +10,11 @@ pub extern "C" fn add_i32(a: i32, b: i32) -> i32 {
     a.wrapping_add(b)
 }
 
+include!("common/sum_recursive.rs");
+
 #[no_mangle]
 pub extern "C" fn sum_recursive(n: i32) -> i32 {
-    if n <= 0 {
-        0
-    } else {
-        n + sum_recursive(n - 1)
-    }
+    sum_recursive_impl(n)
 }
 
 include!("common/fibo.rs");
