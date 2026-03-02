@@ -29,9 +29,14 @@ pub fn optimize_ir(module_info: ModuleInfo) -> Result<ModuleInfo> {
         empty_blocks::eliminate(func);
         merge_blocks::eliminate(func);
         dead_blocks::eliminate(func)?;
+
+        // Value optimizations
         const_prop::eliminate(func);
         copy_prop::eliminate(func);
+
+        // Redundancy elimination
         local_cse::eliminate(func);
+        copy_prop::eliminate(func);
         dead_instrs::eliminate(func);
 
         // Loop optimization
