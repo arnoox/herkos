@@ -194,6 +194,147 @@ pub fn i64_rem_u(lhs: i64, rhs: i64) -> WasmResult<i64> {
         .ok_or(WasmTrap::DivisionByZero)
 }
 
+// ── Wasm float min/max/nearest ────────────────────────────────────────────────
+
+/// Wasm `f32.min`: propagates NaN (unlike Rust's `f32::min` which ignores it).
+/// Also preserves the Wasm rule `min(-0.0, +0.0) = -0.0`.
+pub fn wasm_min_f32(a: f32, b: f32) -> f32 {
+    if a.is_nan() || b.is_nan() {
+        return f32::NAN;
+    }
+    if a == 0.0 && b == 0.0 {
+        return if a.is_sign_negative() { a } else { b };
+    }
+    if a <= b {
+        a
+    } else {
+        b
+    }
+}
+
+/// Wasm `f32.max`: propagates NaN. `max(-0.0, +0.0) = +0.0`.
+pub fn wasm_max_f32(a: f32, b: f32) -> f32 {
+    if a.is_nan() || b.is_nan() {
+        return f32::NAN;
+    }
+    if a == 0.0 && b == 0.0 {
+        return if a.is_sign_positive() { a } else { b };
+    }
+    if a >= b {
+        a
+    } else {
+        b
+    }
+}
+
+/// Wasm `f64.min`: propagates NaN. `min(-0.0, +0.0) = -0.0`.
+pub fn wasm_min_f64(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        return f64::NAN;
+    }
+    if a == 0.0 && b == 0.0 {
+        return if a.is_sign_negative() { a } else { b };
+    }
+    if a <= b {
+        a
+    } else {
+        b
+    }
+}
+
+/// Wasm `f64.max`: propagates NaN. `max(-0.0, +0.0) = +0.0`.
+pub fn wasm_max_f64(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        return f64::NAN;
+    }
+    if a == 0.0 && b == 0.0 {
+        return if a.is_sign_positive() { a } else { b };
+    }
+    if a >= b {
+        a
+    } else {
+        b
+    }
+}
+
+/// Wasm `f32.nearest` — round to nearest even (banker's rounding).
+///
+/// Uses `as i32` for truncation-toward-zero (safe since we guard against values >= 2^23,
+/// which have no fractional bits). Avoids `f32::round`/`f32::trunc`
+/// which are not available in `no_std` without `libm`.
+pub fn wasm_nearest_f32(v: f32) -> f32 {
+    if v.is_nan() || v.is_infinite() || v == 0.0 {
+        return v;
+    }
+    // Floats >= 2^23 have no fractional bits — already an integer.
+    const NO_FRAC: f32 = 8_388_608.0; // 2^23
+    if v >= NO_FRAC || v <= -NO_FRAC {
+        return v;
+    }
+    let trunc_i = v as i32; // truncates toward zero; safe since |v| < 2^23
+    let trunc_f = trunc_i as f32;
+    let frac = v - trunc_f; // in (-1.0, 1.0), same sign as v
+    if frac > 0.5 {
+        (trunc_i + 1) as f32
+    } else if frac < -0.5 {
+        (trunc_i - 1) as f32
+    } else if frac == 0.5 {
+        // Tie: round to even (trunc_i is the floor for positive v).
+        if trunc_i % 2 == 0 {
+            trunc_f
+        } else {
+            (trunc_i + 1) as f32
+        }
+    } else if frac == -0.5 {
+        // Tie: round to even. copysign preserves -0.0 when trunc_i == 0.
+        if trunc_i % 2 == 0 {
+            f32::copysign(trunc_f, v)
+        } else {
+            (trunc_i - 1) as f32
+        }
+    } else {
+        trunc_f
+    }
+}
+
+/// Wasm `f64.nearest` — round to nearest even (banker's rounding).
+///
+/// Uses `as i64` for truncation-toward-zero (safe since we guard against values >= 2^52,
+/// which have no fractional bits). Avoids `f64::round`/`f64::trunc`
+/// which are not available in `no_std` without `libm`.
+pub fn wasm_nearest_f64(v: f64) -> f64 {
+    if v.is_nan() || v.is_infinite() || v == 0.0 {
+        return v;
+    }
+    // Floats >= 2^52 have no fractional bits — already an integer.
+    const NO_FRAC: f64 = 4_503_599_627_370_496.0; // 2^52
+    if v >= NO_FRAC || v <= -NO_FRAC {
+        return v;
+    }
+    let trunc_i = v as i64; // truncates toward zero; safe since |v| < 2^52
+    let trunc_f = trunc_i as f64;
+    let frac = v - trunc_f;
+    if frac > 0.5 {
+        (trunc_i + 1) as f64
+    } else if frac < -0.5 {
+        (trunc_i - 1) as f64
+    } else if frac == 0.5 {
+        if trunc_i % 2 == 0 {
+            trunc_f
+        } else {
+            (trunc_i + 1) as f64
+        }
+    } else if frac == -0.5 {
+        if trunc_i % 2 == 0 {
+            f64::copysign(trunc_f, v)
+        } else {
+            (trunc_i - 1) as f64
+        }
+    } else {
+        trunc_f
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

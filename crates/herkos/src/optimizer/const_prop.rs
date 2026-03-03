@@ -27,6 +27,11 @@
 
 use super::utils::instr_dest;
 use crate::ir::{BinOp, IrFunction, IrInstr, IrValue, UnOp, VarId};
+use herkos_runtime::{
+    i32_trunc_f32_s, i32_trunc_f32_u, i32_trunc_f64_s, i32_trunc_f64_u, i64_trunc_f32_s,
+    i64_trunc_f32_u, i64_trunc_f64_s, i64_trunc_f64_u, wasm_max_f32, wasm_max_f64, wasm_min_f32,
+    wasm_min_f64, wasm_nearest_f32, wasm_nearest_f64,
+};
 use std::collections::HashMap;
 
 // ── Public entry point ────────────────────────────────────────────────────────
@@ -280,8 +285,11 @@ fn try_eval_binop(op: BinOp, lhs: IrValue, rhs: IrValue) -> Option<IrValue> {
         (BinOp::F32Sub, IrValue::F32(a), IrValue::F32(b)) => Some(IrValue::F32(a - b)),
         (BinOp::F32Mul, IrValue::F32(a), IrValue::F32(b)) => Some(IrValue::F32(a * b)),
         (BinOp::F32Div, IrValue::F32(a), IrValue::F32(b)) => Some(IrValue::F32(a / b)),
-        (BinOp::F32Min, IrValue::F32(a), IrValue::F32(b)) => Some(IrValue::F32(a.min(b))),
-        (BinOp::F32Max, IrValue::F32(a), IrValue::F32(b)) => Some(IrValue::F32(a.max(b))),
+        // Wasm f32.min/max: if either operand is NaN the result is NaN.
+        // Rust's f32::min/max ignores NaN (returns the other operand), which
+        // violates the Wasm spec.
+        (BinOp::F32Min, IrValue::F32(a), IrValue::F32(b)) => Some(IrValue::F32(wasm_min_f32(a, b))),
+        (BinOp::F32Max, IrValue::F32(a), IrValue::F32(b)) => Some(IrValue::F32(wasm_max_f32(a, b))),
         (BinOp::F32Copysign, IrValue::F32(a), IrValue::F32(b)) => Some(IrValue::F32(a.copysign(b))),
 
         // f32 comparisons (result is i32)
@@ -309,8 +317,9 @@ fn try_eval_binop(op: BinOp, lhs: IrValue, rhs: IrValue) -> Option<IrValue> {
         (BinOp::F64Sub, IrValue::F64(a), IrValue::F64(b)) => Some(IrValue::F64(a - b)),
         (BinOp::F64Mul, IrValue::F64(a), IrValue::F64(b)) => Some(IrValue::F64(a * b)),
         (BinOp::F64Div, IrValue::F64(a), IrValue::F64(b)) => Some(IrValue::F64(a / b)),
-        (BinOp::F64Min, IrValue::F64(a), IrValue::F64(b)) => Some(IrValue::F64(a.min(b))),
-        (BinOp::F64Max, IrValue::F64(a), IrValue::F64(b)) => Some(IrValue::F64(a.max(b))),
+        // Wasm f64.min/max: if either operand is NaN the result is NaN.
+        (BinOp::F64Min, IrValue::F64(a), IrValue::F64(b)) => Some(IrValue::F64(wasm_min_f64(a, b))),
+        (BinOp::F64Max, IrValue::F64(a), IrValue::F64(b)) => Some(IrValue::F64(wasm_max_f64(a, b))),
         (BinOp::F64Copysign, IrValue::F64(a), IrValue::F64(b)) => Some(IrValue::F64(a.copysign(b))),
 
         // f64 comparisons (result is i32)
@@ -381,62 +390,14 @@ fn try_eval_unop(op: UnOp, val: IrValue) -> Option<IrValue> {
         (UnOp::I64ExtendI32U, IrValue::I32(v)) => Some(IrValue::I64((v as u32) as i64)),
 
         // ── Float → integer (trapping) — do NOT fold on NaN/overflow ──
-        (UnOp::I32TruncF32S, IrValue::F32(v)) => {
-            if v.is_nan() || !(-2147483648.0f32..2147483648.0f32).contains(&v) {
-                None
-            } else {
-                Some(IrValue::I32(v as i32))
-            }
-        }
-        (UnOp::I32TruncF32U, IrValue::F32(v)) => {
-            if v.is_nan() || v >= 4294967296.0f32 || v <= -1.0f32 {
-                None
-            } else {
-                Some(IrValue::I32(v as u32 as i32))
-            }
-        }
-        (UnOp::I32TruncF64S, IrValue::F64(v)) => {
-            if v.is_nan() || !(-2147483648.0f64..2147483648.0f64).contains(&v) {
-                None
-            } else {
-                Some(IrValue::I32(v as i32))
-            }
-        }
-        (UnOp::I32TruncF64U, IrValue::F64(v)) => {
-            if v.is_nan() || v >= 4294967296.0f64 || v <= -1.0f64 {
-                None
-            } else {
-                Some(IrValue::I32(v as u32 as i32))
-            }
-        }
-        (UnOp::I64TruncF32S, IrValue::F32(v)) => {
-            if v.is_nan() || !(-9223372036854775808.0f32..9223372036854775808.0f32).contains(&v) {
-                None
-            } else {
-                Some(IrValue::I64(v as i64))
-            }
-        }
-        (UnOp::I64TruncF32U, IrValue::F32(v)) => {
-            if v.is_nan() || v >= 18446744073709551616.0f32 || v <= -1.0f32 {
-                None
-            } else {
-                Some(IrValue::I64(v as u64 as i64))
-            }
-        }
-        (UnOp::I64TruncF64S, IrValue::F64(v)) => {
-            if v.is_nan() || !(-9223372036854775808.0f64..9223372036854775808.0f64).contains(&v) {
-                None
-            } else {
-                Some(IrValue::I64(v as i64))
-            }
-        }
-        (UnOp::I64TruncF64U, IrValue::F64(v)) => {
-            if v.is_nan() || v >= 18446744073709551616.0f64 || v <= -1.0f64 {
-                None
-            } else {
-                Some(IrValue::I64(v as u64 as i64))
-            }
-        }
+        (UnOp::I32TruncF32S, IrValue::F32(v)) => i32_trunc_f32_s(v).ok().map(IrValue::I32),
+        (UnOp::I32TruncF32U, IrValue::F32(v)) => i32_trunc_f32_u(v).ok().map(IrValue::I32),
+        (UnOp::I32TruncF64S, IrValue::F64(v)) => i32_trunc_f64_s(v).ok().map(IrValue::I32),
+        (UnOp::I32TruncF64U, IrValue::F64(v)) => i32_trunc_f64_u(v).ok().map(IrValue::I32),
+        (UnOp::I64TruncF32S, IrValue::F32(v)) => i64_trunc_f32_s(v).ok().map(IrValue::I64),
+        (UnOp::I64TruncF32U, IrValue::F32(v)) => i64_trunc_f32_u(v).ok().map(IrValue::I64),
+        (UnOp::I64TruncF64S, IrValue::F64(v)) => i64_trunc_f64_s(v).ok().map(IrValue::I64),
+        (UnOp::I64TruncF64U, IrValue::F64(v)) => i64_trunc_f64_u(v).ok().map(IrValue::I64),
 
         // ── Integer → float conversions ─────────────────────────────────
         (UnOp::F32ConvertI32S, IrValue::I32(v)) => Some(IrValue::F32(v as f32)),
@@ -460,45 +421,6 @@ fn try_eval_unop(op: UnOp, val: IrValue) -> Option<IrValue> {
 
         // Type mismatch — don't fold.
         _ => None,
-    }
-}
-
-// ── Wasm "nearest" semantics ──────────────────────────────────────────────────
-
-/// Wasm `f32.nearest` — round to nearest even (banker's rounding).
-fn wasm_nearest_f32(v: f32) -> f32 {
-    if v.is_nan() || v.is_infinite() || v == 0.0 {
-        return v;
-    }
-    let rounded = v.round();
-    // When exactly between two integers, round to even.
-    if (v - rounded).abs() == 0.5 {
-        let truncated = v.trunc();
-        if truncated % 2.0 == 0.0 {
-            truncated
-        } else {
-            rounded
-        }
-    } else {
-        rounded
-    }
-}
-
-/// Wasm `f64.nearest` — round to nearest even (banker's rounding).
-fn wasm_nearest_f64(v: f64) -> f64 {
-    if v.is_nan() || v.is_infinite() || v == 0.0 {
-        return v;
-    }
-    let rounded = v.round();
-    if (v - rounded).abs() == 0.5 {
-        let truncated = v.trunc();
-        if truncated % 2.0 == 0.0 {
-            truncated
-        } else {
-            rounded
-        }
-    } else {
-        rounded
     }
 }
 
@@ -1218,5 +1140,72 @@ mod tests {
             try_eval_binop(BinOp::I32RemU, IrValue::I32(10), IrValue::I32(3)),
             Some(IrValue::I32(1))
         );
+    }
+
+    // ── Wasm f32/f64 min/max NaN semantics ──────────────────────────────
+
+    #[test]
+    fn f32_min_nan_propagates() {
+        // Wasm: f32.min(NaN, 1.0) = NaN  (Rust's f32::min returns 1.0 — wrong)
+        let result = wasm_min_f32(f32::NAN, 1.0);
+        assert!(result.is_nan(), "f32.min(NaN, 1.0) must return NaN");
+
+        let result = wasm_min_f32(1.0, f32::NAN);
+        assert!(result.is_nan(), "f32.min(1.0, NaN) must return NaN");
+    }
+
+    #[test]
+    fn f32_max_nan_propagates() {
+        let result = wasm_max_f32(f32::NAN, 1.0);
+        assert!(result.is_nan(), "f32.max(NaN, 1.0) must return NaN");
+
+        let result = wasm_max_f32(1.0, f32::NAN);
+        assert!(result.is_nan(), "f32.max(1.0, NaN) must return NaN");
+    }
+
+    #[test]
+    fn f32_min_negative_zero() {
+        // Wasm: f32.min(-0.0, +0.0) = -0.0
+        let result = wasm_min_f32(-0.0f32, 0.0f32);
+        assert!(
+            result.is_sign_negative(),
+            "f32.min(-0.0, +0.0) must return -0.0"
+        );
+
+        let result = wasm_min_f32(0.0f32, -0.0f32);
+        assert!(
+            result.is_sign_negative(),
+            "f32.min(+0.0, -0.0) must return -0.0"
+        );
+    }
+
+    #[test]
+    fn f32_max_positive_zero() {
+        // Wasm: f32.max(-0.0, +0.0) = +0.0
+        let result = wasm_max_f32(-0.0f32, 0.0f32);
+        assert!(
+            result.is_sign_positive(),
+            "f32.max(-0.0, +0.0) must return +0.0"
+        );
+    }
+
+    #[test]
+    fn f64_min_nan_propagates() {
+        let result = wasm_min_f64(f64::NAN, 1.0);
+        assert!(result.is_nan(), "f64.min(NaN, 1.0) must return NaN");
+    }
+
+    #[test]
+    fn f64_max_nan_propagates() {
+        let result = wasm_max_f64(f64::NAN, 1.0);
+        assert!(result.is_nan(), "f64.max(NaN, 1.0) must return NaN");
+    }
+
+    #[test]
+    fn f32_min_max_normal_values() {
+        assert_eq!(wasm_min_f32(1.0, 2.0), 1.0);
+        assert_eq!(wasm_max_f32(1.0, 2.0), 2.0);
+        assert_eq!(wasm_min_f64(3.0, 4.0), 3.0);
+        assert_eq!(wasm_max_f64(3.0, 4.0), 4.0);
     }
 }

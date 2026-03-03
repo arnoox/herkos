@@ -359,6 +359,7 @@ dependencies = [
  "anyhow",
  "clap",
  "heck",
+ "herkos-runtime",
  "wasmparser 0.227.1",
  "wat",
 ]

@@ -26,7 +26,8 @@ mod ops;
 pub use ops::{
     i32_div_s, i32_div_u, i32_rem_s, i32_rem_u, i32_trunc_f32_s, i32_trunc_f32_u, i32_trunc_f64_s,
     i32_trunc_f64_u, i64_div_s, i64_div_u, i64_rem_s, i64_rem_u, i64_trunc_f32_s, i64_trunc_f32_u,
-    i64_trunc_f64_s, i64_trunc_f64_u,
+    i64_trunc_f64_s, i64_trunc_f64_u, wasm_max_f32, wasm_max_f64, wasm_min_f32, wasm_min_f64,
+    wasm_nearest_f32, wasm_nearest_f64,
 };
 
 /// Wasm execution errors — no panics, no unwinding.

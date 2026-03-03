@@ -7,7 +7,7 @@
 //! upcoming optimization passes (const_prop, dead_instrs, local_cse, licm).
 #![allow(dead_code)]
 
-use crate::ir::{BlockId, IrFunction, IrInstr, IrTerminator, VarId};
+use crate::ir::{BinOp, BlockId, IrFunction, IrInstr, IrTerminator, UnOp, VarId};
 use std::collections::{HashMap, HashSet};
 
 // ── Terminator successors ────────────────────────────────────────────────────
@@ -347,20 +347,44 @@ pub fn prune_dead_locals(func: &mut IrFunction) {
 /// Returns `true` if the instruction is side-effect-free and can be safely
 /// removed when its result is unused.
 ///
-/// Instructions that may trap (Load, MemoryGrow), modify external state
-/// (Store, GlobalSet, MemoryCopy), or have unknown effects (Call*) are
-/// considered side-effectful and must be retained even if unused.
+/// Instructions that may trap (Load, MemoryGrow, integer div/rem, float-to-int
+/// truncation), modify external state (Store, GlobalSet, MemoryCopy), or have
+/// unknown effects (Call*) are considered side-effectful and must be retained
+/// even if their result is unused — removing them would suppress a Wasm trap.
 pub fn is_side_effect_free(instr: &IrInstr) -> bool {
-    matches!(
-        instr,
+    match instr {
+        // Integer division and remainder trap on divisor == 0 (and i*::MIN / -1
+        // for signed division). Must be preserved even when the result is dead.
+        IrInstr::BinOp { op, .. } => !matches!(
+            op,
+            BinOp::I32DivS
+                | BinOp::I32DivU
+                | BinOp::I32RemS
+                | BinOp::I32RemU
+                | BinOp::I64DivS
+                | BinOp::I64DivU
+                | BinOp::I64RemS
+                | BinOp::I64RemU
+        ),
+        // Float-to-integer truncations trap on NaN or out-of-range inputs.
+        IrInstr::UnOp { op, .. } => !matches!(
+            op,
+            UnOp::I32TruncF32S
+                | UnOp::I32TruncF32U
+                | UnOp::I32TruncF64S
+                | UnOp::I32TruncF64U
+                | UnOp::I64TruncF32S
+                | UnOp::I64TruncF32U
+                | UnOp::I64TruncF64S
+                | UnOp::I64TruncF64U
+        ),
         IrInstr::Const { .. }
-            | IrInstr::BinOp { .. }
-            | IrInstr::UnOp { .. }
-            | IrInstr::Assign { .. }
-            | IrInstr::Select { .. }
-            | IrInstr::GlobalGet { .. }
-            | IrInstr::MemorySize { .. }
-    )
+        | IrInstr::Assign { .. }
+        | IrInstr::Select { .. }
+        | IrInstr::GlobalGet { .. }
+        | IrInstr::MemorySize { .. } => true,
+        _ => false,
+    }
 }
 
 // ── Rewrite terminator block targets ─────────────────────────────────────────
@@ -470,6 +494,72 @@ mod tests {
             offset: 0,
             width: crate::ir::MemoryAccessWidth::Full,
             sign: None,
+        }));
+    }
+
+    #[test]
+    fn trapping_binops_not_side_effect_free() {
+        // Integer div/rem must NOT be classified as side-effect-free because they
+        // can trap at runtime (division by zero, i*::MIN / -1 for signed div).
+        for op in [
+            BinOp::I32DivS,
+            BinOp::I32DivU,
+            BinOp::I32RemS,
+            BinOp::I32RemU,
+            BinOp::I64DivS,
+            BinOp::I64DivU,
+            BinOp::I64RemS,
+            BinOp::I64RemU,
+        ] {
+            let instr = IrInstr::BinOp {
+                dest: VarId(0),
+                op,
+                lhs: VarId(1),
+                rhs: VarId(2),
+            };
+            assert!(
+                !is_side_effect_free(&instr),
+                "{op:?} should NOT be side-effect-free"
+            );
+        }
+        // Non-trapping BinOps remain side-effect-free.
+        assert!(is_side_effect_free(&IrInstr::BinOp {
+            dest: VarId(0),
+            op: BinOp::I32Mul,
+            lhs: VarId(1),
+            rhs: VarId(2),
+        }));
+    }
+
+    #[test]
+    fn trapping_unops_not_side_effect_free() {
+        use crate::ir::UnOp;
+        // Float-to-integer truncations trap on NaN or out-of-range values.
+        for op in [
+            UnOp::I32TruncF32S,
+            UnOp::I32TruncF32U,
+            UnOp::I32TruncF64S,
+            UnOp::I32TruncF64U,
+            UnOp::I64TruncF32S,
+            UnOp::I64TruncF32U,
+            UnOp::I64TruncF64S,
+            UnOp::I64TruncF64U,
+        ] {
+            let instr = IrInstr::UnOp {
+                dest: VarId(0),
+                op,
+                operand: VarId(1),
+            };
+            assert!(
+                !is_side_effect_free(&instr),
+                "{op:?} should NOT be side-effect-free"
+            );
+        }
+        // Non-trapping UnOp remains side-effect-free.
+        assert!(is_side_effect_free(&IrInstr::UnOp {
+            dest: VarId(0),
+            op: UnOp::I32Clz,
+            operand: VarId(1),
         }));
     }
 
