@@ -69,7 +69,11 @@ pub fn eliminate(func: &mut IrFunction) {
 
         // Perform merges. We collect the target block data first to avoid borrow
         // conflicts on func.blocks.
-        let absorbed: HashSet<usize> = merges.iter().map(|(_, t)| *t).collect();
+        let absorbed_sorted = {
+            let mut absorbed: Vec<usize> = merges.iter().map(|(_, t)| *t).collect();
+            absorbed.sort_unstable_by(|a, b| b.cmp(a));
+            absorbed
+        };
 
         for (pred_idx, target_idx) in &merges {
             // Take target block's data out.
@@ -84,8 +88,6 @@ pub fn eliminate(func: &mut IrFunction) {
         }
 
         // Remove absorbed blocks (iterate in reverse to preserve indices).
-        let mut absorbed_sorted: Vec<usize> = absorbed.into_iter().collect();
-        absorbed_sorted.sort_unstable_by(|a, b| b.cmp(a));
         for idx in absorbed_sorted {
             func.blocks.remove(idx);
         }

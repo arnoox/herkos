@@ -67,12 +67,7 @@ pub fn for_each_use<F: FnMut(VarId)>(instr: &IrInstr, mut f: F) {
             f(*addr);
             f(*value);
         }
-        IrInstr::Call { args, .. } => {
-            for a in args {
-                f(*a);
-            }
-        }
-        IrInstr::CallImport { args, .. } => {
+        IrInstr::Call { args, .. } | IrInstr::CallImport { args, .. } => {
             for a in args {
                 f(*a);
             }
@@ -391,33 +386,26 @@ pub fn is_side_effect_free(instr: &IrInstr) -> bool {
 
 /// Rewrite all block-ID references in a terminator from `old` to `new`.
 pub fn rewrite_terminator_target(term: &mut IrTerminator, old: BlockId, new: BlockId) {
-    match term {
-        IrTerminator::Jump { target } => {
-            if *target == old {
-                *target = new;
-            }
+    let replace = |b: &mut BlockId| {
+        if *b == old {
+            *b = new;
         }
+    };
+    match term {
+        IrTerminator::Jump { target } => replace(target),
         IrTerminator::BranchIf {
             if_true, if_false, ..
         } => {
-            if *if_true == old {
-                *if_true = new;
-            }
-            if *if_false == old {
-                *if_false = new;
-            }
+            replace(if_true);
+            replace(if_false);
         }
         IrTerminator::BranchTable {
             targets, default, ..
         } => {
             for t in targets.iter_mut() {
-                if *t == old {
-                    *t = new;
-                }
+                replace(t);
             }
-            if *default == old {
-                *default = new;
-            }
+            replace(default);
         }
         IrTerminator::Return { .. } | IrTerminator::Unreachable => {}
     }

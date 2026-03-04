@@ -101,9 +101,16 @@ pub fn eliminate(func: &mut IrFunction) {
                     _ => {}
                 }
 
-                // If this instruction defines a variable but we didn't fold it to
-                // a constant, invalidate any stale entry. This is critical for
-                // non-SSA variables that are redefined (e.g., loop accumulators).
+                // Invalidate stale entries for variables that were defined but not
+                // folded to a constant. This is required because the IR is not in
+                // strict SSA form: `LocalSet`/`LocalTee` reuse the same `VarId` for
+                // every write to a Wasm local, so the same variable can be defined
+                // more than once within a block (e.g., a loop accumulator). Without
+                // this eviction, a constant recorded from an earlier definition would
+                // silently propagate past a later non-constant redefinition.
+                // See: https://github.com/arnoox/herkos/issues/14
+                // When that issue is fixed (strict SSA + phi nodes), each variable
+                // will have exactly one definition and this guard becomes dead code.
                 if !folded {
                     if let Some(dest) = instr_dest(instr) {
                         known.remove(&dest);

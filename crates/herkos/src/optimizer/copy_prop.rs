@@ -56,7 +56,7 @@ pub fn eliminate(func: &mut IrFunction) {
     //
     // We rebuild the global use-count map before each round because a successful
     // coalescing removes one Assign (changing use counts), so the previous map is
-    // stale.  We break out of the per-block scan as soon as any block changes and
+    // stale. We break out of the per-block scan as soon as any block changes and
     // restart the outer loop so we always work from a fresh global count.
     loop {
         let global_uses = build_global_use_count(func);
@@ -145,10 +145,16 @@ fn coalesce_one(block: &mut IrBlock, global_uses: &HashMap<VarId, usize>) -> boo
         // v_src must be defined by an instruction in this block.
         let def_idx = match def_site.get(&v_src) {
             Some(&i) => i,
-            None => continue,
+            None => continue, // v_src is not defined in this block, so can't coalesce
         };
 
         // The def must precede the Assign.
+        //
+        // NOTE: `def_idx >= assign_idx` can occur in practice because the IR is not in
+        // strict SSA form — `LocalSet`/`LocalTee` reuse the same `VarId` for every write
+        // to a Wasm local, so a single block can contain multiple definitions of the same
+        // variable. This makes `def_site` unreliable when there are two defs and the one
+        // recorded happens to come after the `Assign`. See issue #14 for the full fix.
         if def_idx >= assign_idx {
             continue;
         }
@@ -159,6 +165,14 @@ fn coalesce_one(block: &mut IrBlock, global_uses: &HashMap<VarId, usize>) -> boo
         // Rationale: after redirect, I_def writes to v_dst at def_idx.  Any
         // intervening read would see the new value instead of the old one (wrong).
         // Any intervening write would clobber the value before it can be used (wrong).
+        //
+        // NOTE: in strict SSA form this entire check would be unnecessary. Each variable
+        // is defined exactly once, so v_dst cannot be written again between def_idx and
+        // assign_idx (case 2), and nothing in that window would read v_dst either since
+        // it was just born and its only consumer is the Assign at assign_idx (case 1).
+        // This check exists solely because of the quasi-SSA problem described in
+        // issue #14, where LocalSet/LocalTee reuse the same VarId across multiple writes.
+        // See issue #14 for the full fix.
         let conflict = block.instructions[def_idx + 1..assign_idx].iter().any(|i| {
             let mut found = false;
             for_each_use(i, |v| {

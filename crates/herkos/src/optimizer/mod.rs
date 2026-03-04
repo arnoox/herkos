@@ -25,7 +25,11 @@ mod merge_blocks;
 pub fn optimize_ir(module_info: ModuleInfo) -> Result<ModuleInfo> {
     let mut module_info = module_info;
     for func in &mut module_info.ir_functions {
+        // Empty block optimizations
         empty_blocks::eliminate(func);
+        dead_blocks::eliminate(func)?;
+
+        // Control flow optimizations
         merge_blocks::eliminate(func);
         dead_blocks::eliminate(func)?;
 
