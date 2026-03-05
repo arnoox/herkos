@@ -315,6 +315,17 @@ pub enum IrInstr {
         val2: VarId,
         condition: VarId,
     },
+
+    /// SSA phi node: at a join point, select the reaching definition based on which
+    /// predecessor block was taken. `srcs` maps predecessor BlockId to the VarId that
+    /// holds the value of the local at the end of that predecessor.
+    ///
+    /// Phi nodes are inserted during IR construction and lowered (converted to Assign
+    /// instructions in predecessor blocks) before codegen.
+    Phi {
+        dest: VarId,
+        srcs: Vec<(BlockId, VarId)>,
+    },
 }
 
 /// Block terminator — how control flow exits a basic block.
