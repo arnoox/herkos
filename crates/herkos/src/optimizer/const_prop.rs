@@ -8,15 +8,28 @@
 //! - **Folds** `BinOp(Const, Const)` and `UnOp(Const)` into `Const` when the
 //!   result is statically computable.
 //!
-//! ## Algorithm (block-local)
+//! ## Algorithm
 //!
-//! 1. Maintain `HashMap<VarId, IrValue>` of known constants per block.
-//! 2. Walk instructions in order:
+//! Each iteration of the outer fixpoint loop:
+//!
+//! 1. Build a **global constant map**: variables that have exactly one definition
+//!    across the entire function and that definition is a `Const` instruction.
+//!    These are safe to treat as constants in any block that uses them (SSA
+//!    single-definition guarantee ensures the value is the same everywhere).
+//!
+//! 2. For each block, maintain a `HashMap<VarId, IrValue>` of known constants,
+//!    **seeded** with the global constant map. Walk instructions in order:
 //!    - `Const { dest, value }` → record `dest → value`
 //!    - `Assign { dest, src }` where src is known → replace with `Const`, record
 //!    - `BinOp { dest, op, lhs, rhs }` where both known → fold via `try_eval_binop`
 //!    - `UnOp { dest, op, operand }` where operand known → fold via `try_eval_unop`
-//! 3. Run to fixpoint (across all blocks).
+//!
+//! 3. Run to fixpoint.
+//!
+//! The global constant seed is what enables cross-block propagation: after
+//! const_prop converts a local `Assign` to a `Const` in block B0, the next
+//! outer-loop iteration sees that new `Const` definition in the global map and
+//! can fold `Assign(that_var)` instructions in dominated blocks B1, B2, etc.
 //!
 //! ## Safety
 //!
@@ -36,12 +49,44 @@ use std::collections::HashMap;
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
+/// Variables with exactly one definition across the function that is a `Const`
+/// instruction. These can be treated as constants in any block that uses them.
+fn build_global_const_map(func: &IrFunction) -> HashMap<VarId, IrValue> {
+    // Count total definitions per variable (any instruction with a dest).
+    let mut total_defs: HashMap<VarId, usize> = HashMap::new();
+    let mut const_defs: HashMap<VarId, IrValue> = HashMap::new();
+
+    for block in &func.blocks {
+        for instr in &block.instructions {
+            if let Some(dest) = super::utils::instr_dest(instr) {
+                *total_defs.entry(dest).or_insert(0) += 1;
+                if let IrInstr::Const { dest, value } = instr {
+                    const_defs.insert(*dest, *value);
+                }
+            }
+        }
+    }
+
+    // Only include variables whose sole definition is a Const instruction.
+    const_defs
+        .into_iter()
+        .filter(|(v, _)| total_defs.get(v).copied().unwrap_or(0) == 1)
+        .collect()
+}
+
 /// Run constant propagation and folding to fixpoint.
 pub fn eliminate(func: &mut IrFunction) {
     loop {
+        // Seed each block's known-constants map with variables that are defined
+        // exactly once as a Const across the whole function. This enables
+        // cross-block propagation: after a block-local fold turns an Assign into
+        // a Const in one block, the next outer iteration seeds that constant into
+        // all other blocks that use the variable.
+        let global_consts = build_global_const_map(func);
+
         let mut changed = false;
         for block in &mut func.blocks {
-            let mut known: HashMap<VarId, IrValue> = HashMap::new();
+            let mut known: HashMap<VarId, IrValue> = global_consts.clone();
 
             for instr in &mut block.instructions {
                 // Track whether we recorded a known constant for this instruction's dest.
@@ -980,12 +1025,16 @@ mod tests {
         }
     }
 
-    // ── Multi-block: constants are block-local ──────────────────────────
+    // ── Multi-block: single-definition constants propagate cross-block ──
 
     #[test]
-    fn constant_does_not_leak_across_blocks() {
-        // B0: v0 = 5; Jump(B1)
-        // B1: v1 = Assign(v0) — v0 is NOT known in B1's local map
+    fn single_def_const_propagates_cross_block() {
+        // B0: v0 = Const(5); Jump(B1)
+        // B1: v1 = Assign(v0)
+        //
+        // v0 has exactly one definition (a Const) across the function.
+        // The global-constant seed therefore includes v0 → 5, so the Assign
+        // in B1 is folded to Const(5).
         let mut func = make_func(vec![
             IrBlock {
                 id: BlockId(0),
@@ -1005,10 +1054,59 @@ mod tests {
             },
         ]);
         eliminate(&mut func);
-        // The Assign in B1 should NOT be folded because v0 is not known in B1.
+        // The Assign in B1 should be folded: v0 is a single-definition global constant.
         assert!(
-            matches!(&func.blocks[1].instructions[0], IrInstr::Assign { .. }),
-            "Assign must remain — constant is block-local"
+            matches!(
+                &func.blocks[1].instructions[0],
+                IrInstr::Const {
+                    dest: VarId(1),
+                    value: IrValue::I32(5)
+                }
+            ),
+            "Assign should be folded to Const(5) via global constant propagation; got: {:?}",
+            &func.blocks[1].instructions[0]
+        );
+    }
+
+    #[test]
+    fn multi_def_var_not_treated_as_global_const() {
+        // v0 is defined twice (Const in B0, Assign in B1) — must NOT be in
+        // global_const_map, so v1 = Assign(v0) in B2 is NOT folded.
+        //
+        // B0: v0 = Const(5); Jump(B1)
+        // B1: v0 = Assign(v2); Jump(B2)   ← second def of v0
+        // B2: v1 = Assign(v0)              ← must remain
+        let mut func = make_func(vec![
+            IrBlock {
+                id: BlockId(0),
+                instructions: vec![IrInstr::Const {
+                    dest: VarId(0),
+                    value: IrValue::I32(5),
+                }],
+                terminator: IrTerminator::Jump { target: BlockId(1) },
+            },
+            IrBlock {
+                id: BlockId(1),
+                instructions: vec![IrInstr::Assign {
+                    dest: VarId(0), // second definition of v0
+                    src: VarId(2),
+                }],
+                terminator: IrTerminator::Jump { target: BlockId(2) },
+            },
+            IrBlock {
+                id: BlockId(2),
+                instructions: vec![IrInstr::Assign {
+                    dest: VarId(1),
+                    src: VarId(0),
+                }],
+                terminator: IrTerminator::Return { value: None },
+            },
+        ]);
+        eliminate(&mut func);
+        // v0 has 2 definitions → NOT a global constant → Assign in B2 must remain.
+        assert!(
+            matches!(&func.blocks[2].instructions[0], IrInstr::Assign { .. }),
+            "Assign must remain — v0 has multiple definitions"
         );
     }
 
