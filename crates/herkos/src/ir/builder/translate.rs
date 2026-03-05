@@ -14,39 +14,31 @@ impl IrBuilder {
         match op {
             // Constants
             Operator::I32Const { value } => {
-                let dest = self.new_var();
-                self.emit(IrInstr::Const {
-                    dest,
-                    value: IrValue::I32(*value),
-                });
-                self.value_stack.push(dest);
+                let v = IrValue::I32(*value);
+                let _def = self.new_var();
+                let use_v = self.emit_def(_def, |d| IrInstr::Const { dest: d, value: v });
+                self.value_stack.push(use_v);
             }
 
             Operator::I64Const { value } => {
-                let dest = self.new_var();
-                self.emit(IrInstr::Const {
-                    dest,
-                    value: IrValue::I64(*value),
-                });
-                self.value_stack.push(dest);
+                let v = IrValue::I64(*value);
+                let _def = self.new_var();
+                let use_v = self.emit_def(_def, |d| IrInstr::Const { dest: d, value: v });
+                self.value_stack.push(use_v);
             }
 
             Operator::F32Const { value } => {
-                let dest = self.new_var();
-                self.emit(IrInstr::Const {
-                    dest,
-                    value: IrValue::F32(f32::from_bits(value.bits())),
-                });
-                self.value_stack.push(dest);
+                let v = IrValue::F32(f32::from_bits(value.bits()));
+                let _def = self.new_var();
+                let use_v = self.emit_def(_def, |d| IrInstr::Const { dest: d, value: v });
+                self.value_stack.push(use_v);
             }
 
             Operator::F64Const { value } => {
-                let dest = self.new_var();
-                self.emit(IrInstr::Const {
-                    dest,
-                    value: IrValue::F64(f64::from_bits(value.bits())),
-                });
-                self.value_stack.push(dest);
+                let v = IrValue::F64(f64::from_bits(value.bits()));
+                let _def = self.new_var();
+                let use_v = self.emit_def(_def, |d| IrInstr::Const { dest: d, value: v });
+                self.value_stack.push(use_v);
             }
 
             // Local variable access
@@ -58,14 +50,17 @@ impl IrBuilder {
                     .ok_or_else(|| {
                         anyhow::anyhow!("local.get: local index {} out of range", local_index)
                     })?;
-                // Emit a copy rather than pushing the local's VarId directly.
-                // If we push the local's VarId, a later local.tee/local.set that
+                // Emit a copy rather than pushing the local's UseVar directly.
+                // If we push the local's UseVar, a later local.tee/local.set that
                 // overwrites the same local will corrupt any already-pushed reference
                 // to it, because the backend emits sequential mutable assignments.
                 // A fresh variable captures the value at this point in time.
-                let dest = self.new_var();
-                self.emit(IrInstr::Assign { dest, src });
-                self.value_stack.push(dest);
+                let _def = self.new_var();
+                let use_v = self.emit_def(_def, |d| IrInstr::Assign {
+                    dest: d,
+                    src: src.var_id(),
+                });
+                self.value_stack.push(use_v);
             }
 
             Operator::LocalSet { local_index } => {
@@ -81,10 +76,13 @@ impl IrBuilder {
                 }
 
                 // Allocate a fresh dest to satisfy SSA single-definition rule.
-                let dest = self.new_var();
-                self.emit(IrInstr::Assign { dest, src: value });
+                let _def = self.new_var();
+                let use_v = self.emit_def(_def, |d| IrInstr::Assign {
+                    dest: d,
+                    src: value.var_id(),
+                });
                 // Update the local mapping so subsequent reads see the new value.
-                self.local_vars[idx] = dest;
+                self.local_vars[idx] = use_v;
             }
 
             Operator::LocalTee { local_index } => {
@@ -101,21 +99,25 @@ impl IrBuilder {
                 }
 
                 // Allocate a fresh dest to satisfy SSA single-definition rule.
-                let dest = self.new_var();
-                self.emit(IrInstr::Assign { dest, src: value });
+                let _def = self.new_var();
+                let use_v = self.emit_def(_def, |d| IrInstr::Assign {
+                    dest: d,
+                    src: value.var_id(),
+                });
                 // Update the local mapping so subsequent reads see the new value.
-                self.local_vars[idx] = dest;
+                self.local_vars[idx] = use_v;
                 // Value stays on stack (already there via .last())
             }
 
             // Global variable access
             Operator::GlobalGet { global_index } => {
-                let dest = self.new_var();
-                self.emit(IrInstr::GlobalGet {
-                    dest,
-                    index: GlobalIdx::new(*global_index as usize),
+                let idx = GlobalIdx::new(*global_index as usize);
+                let _def = self.new_var();
+                let use_v = self.emit_def(_def, |d| IrInstr::GlobalGet {
+                    dest: d,
+                    index: idx,
                 });
-                self.value_stack.push(dest);
+                self.value_stack.push(use_v);
             }
 
             Operator::GlobalSet { global_index } => {
@@ -123,9 +125,9 @@ impl IrBuilder {
                     .value_stack
                     .pop()
                     .ok_or_else(|| anyhow::anyhow!("Stack underflow for global.set"))?;
-                self.emit(IrInstr::GlobalSet {
+                self.emit_void(IrInstr::GlobalSet {
                     index: GlobalIdx::new(*global_index as usize),
-                    value,
+                    value: value.var_id(),
                 });
             }
 
@@ -310,7 +312,7 @@ impl IrBuilder {
                             // 1. Fall-through from then-body (if reachable)
                             // 2. Any `br` inside then-body that targeted end_block
                             // 3. Implicit else block (with pre-if locals = locals_at_entry)
-                            let mut preds: Vec<(BlockId, Vec<VarId>)> = Vec::new();
+                            let mut preds: Vec<(BlockId, Vec<UseVar>)> = Vec::new();
                             if !self.dead_code {
                                 preds.push((self.current_block, self.local_vars.clone()));
                             }
@@ -319,9 +321,9 @@ impl IrBuilder {
                             // Assign result if needed (then-branch fall-through)
                             if let Some(result_var) = frame.result_var {
                                 if let Some(stack_value) = self.value_stack.pop() {
-                                    self.emit(IrInstr::Assign {
-                                        dest: result_var,
-                                        src: stack_value,
+                                    self.emit_void(IrInstr::Assign {
+                                        dest: result_var.var_id(),
+                                        src: stack_value.var_id(),
                                     });
                                 }
                             }
@@ -369,7 +371,7 @@ impl IrBuilder {
                             // 1. then-branch fall-through (saved as then_pred_info in Else frame)
                             // 2. else-branch fall-through (current block, if reachable)
                             // 3. Any `br` from either branch targeting end_block (branch_incoming)
-                            let mut preds: Vec<(BlockId, Vec<VarId>)> = Vec::new();
+                            let mut preds: Vec<(BlockId, Vec<UseVar>)> = Vec::new();
                             if let Some((then_block, then_locals)) = frame.then_pred_info.clone() {
                                 preds.push((then_block, then_locals));
                             }
@@ -381,9 +383,9 @@ impl IrBuilder {
                             // Assign result if needed (else-branch fall-through)
                             if let Some(result_var) = frame.result_var {
                                 if let Some(stack_value) = self.value_stack.pop() {
-                                    self.emit(IrInstr::Assign {
-                                        dest: result_var,
-                                        src: stack_value,
+                                    self.emit_void(IrInstr::Assign {
+                                        dest: result_var.var_id(),
+                                        src: stack_value.var_id(),
                                     });
                                 }
                             }
@@ -411,7 +413,7 @@ impl IrBuilder {
                             // Then fall through to end_block.
 
                             // Collect fall-through predecessor BEFORE switching blocks.
-                            let mut preds: Vec<(BlockId, Vec<VarId>)> =
+                            let mut preds: Vec<(BlockId, Vec<UseVar>)> =
                                 frame.branch_incoming.clone();
                             if !self.dead_code {
                                 preds.push((self.current_block, self.local_vars.clone()));
@@ -420,9 +422,9 @@ impl IrBuilder {
                             // Assign result if needed (loop fall-through)
                             if let Some(result_var) = frame.result_var {
                                 if let Some(stack_value) = self.value_stack.pop() {
-                                    self.emit(IrInstr::Assign {
-                                        dest: result_var,
-                                        src: stack_value,
+                                    self.emit_void(IrInstr::Assign {
+                                        dest: result_var.var_id(),
+                                        src: stack_value.var_id(),
                                     });
                                 }
                             }
@@ -452,7 +454,7 @@ impl IrBuilder {
                         super::core::ControlKind::Block => {
                             // === BLOCK END ===
                             // Collect fall-through predecessor BEFORE switching blocks.
-                            let mut preds: Vec<(BlockId, Vec<VarId>)> =
+                            let mut preds: Vec<(BlockId, Vec<UseVar>)> =
                                 frame.branch_incoming.clone();
                             if !self.dead_code {
                                 preds.push((self.current_block, self.local_vars.clone()));
@@ -462,9 +464,9 @@ impl IrBuilder {
                             if let Some(result_var) = frame.result_var {
                                 if let Some(stack_value) = self.value_stack.pop() {
                                     // Normal case: block fell through with a result value
-                                    self.emit(IrInstr::Assign {
-                                        dest: result_var,
-                                        src: stack_value,
+                                    self.emit_void(IrInstr::Assign {
+                                        dest: result_var.var_id(),
+                                        src: stack_value.var_id(),
                                     });
                                 }
                                 // Empty stack: block ended with br/return (dead code after)
@@ -641,9 +643,9 @@ impl IrBuilder {
 
             // === Memory size and grow ===
             Operator::MemorySize { mem: 0, .. } => {
-                let dest = self.new_var();
-                self.emit(IrInstr::MemorySize { dest });
-                self.value_stack.push(dest);
+                let _def = self.new_var();
+                let use_v = self.emit_def(_def, |d| IrInstr::MemorySize { dest: d });
+                self.value_stack.push(use_v);
             }
 
             Operator::MemoryGrow { mem: 0, .. } => {
@@ -651,9 +653,12 @@ impl IrBuilder {
                     .value_stack
                     .pop()
                     .ok_or_else(|| anyhow::anyhow!("Stack underflow for memory.grow"))?;
-                let dest = self.new_var();
-                self.emit(IrInstr::MemoryGrow { dest, delta });
-                self.value_stack.push(dest);
+                let _def = self.new_var();
+                let use_v = self.emit_def(_def, |d| IrInstr::MemoryGrow {
+                    dest: d,
+                    delta: delta.var_id(),
+                });
+                self.value_stack.push(use_v);
             }
 
             // Control flow
@@ -766,7 +771,8 @@ impl IrBuilder {
                 let condition = self
                     .value_stack
                     .pop()
-                    .ok_or_else(|| anyhow::anyhow!("Stack underflow for if condition"))?;
+                    .ok_or_else(|| anyhow::anyhow!("Stack underflow for if condition"))?
+                    .var_id();
 
                 // === STEP 2: Pre-allocate all three blocks ===
                 // We create all blocks upfront so we can reference them in the BranchIf.
@@ -835,9 +841,9 @@ impl IrBuilder {
                 let result_var = if_frame.result_var;
                 if let Some(result_var) = result_var {
                     if let Some(stack_value) = self.value_stack.pop() {
-                        self.emit(IrInstr::Assign {
-                            dest: result_var,
-                            src: stack_value,
+                        self.emit_void(IrInstr::Assign {
+                            dest: result_var.var_id(),
+                            src: stack_value.var_id(),
                         });
                     }
                 }
@@ -913,7 +919,8 @@ impl IrBuilder {
                 let condition = self
                     .value_stack
                     .pop()
-                    .ok_or_else(|| anyhow::anyhow!("Stack underflow for br_if"))?;
+                    .ok_or_else(|| anyhow::anyhow!("Stack underflow for br_if"))?
+                    .var_id();
 
                 let depth = *relative_depth as usize;
                 let frame_idx =
@@ -956,7 +963,8 @@ impl IrBuilder {
                 let index = self
                     .value_stack
                     .pop()
-                    .ok_or_else(|| anyhow::anyhow!("Stack underflow for br_table"))?;
+                    .ok_or_else(|| anyhow::anyhow!("Stack underflow for br_table"))?
+                    .var_id();
 
                 // Collect all depths (table entries + default), deduplicate by frame_idx
                 // to avoid recording the same predecessor block twice for the same target.
@@ -1013,7 +1021,14 @@ impl IrBuilder {
                 let args =
                     self.pop_call_args(param_count, &format!("call to func_{}", func_idx))?;
 
-                let dest = callee_return_type.map(|_| self.new_var());
+                // For optional-result calls we use new_pre_alloc_var: the dest is
+                // defined by the call instruction itself, not via emit_def.
+                let (dest_id, dest_use) = if callee_return_type.is_some() {
+                    let (id, u) = self.new_pre_alloc_var();
+                    (Some(id), Some(u))
+                } else {
+                    (None, None)
+                };
 
                 // Check if this is a call to an imported function or a local function
                 if func_idx < self.num_imported_functions {
@@ -1024,8 +1039,8 @@ impl IrBuilder {
                             anyhow::anyhow!("Call: import index {} out of range", import_idx)
                         })?;
 
-                    self.emit(IrInstr::CallImport {
-                        dest,
+                    self.emit_void(IrInstr::CallImport {
+                        dest: dest_id,
                         import_idx: ImportIdx::new(import_idx),
                         module_name,
                         func_name,
@@ -1034,15 +1049,15 @@ impl IrBuilder {
                 } else {
                     // Call to local function - convert to local index
                     let local_func_idx = func_idx - self.num_imported_functions;
-                    self.emit(IrInstr::Call {
-                        dest,
+                    self.emit_void(IrInstr::Call {
+                        dest: dest_id,
                         func_idx: LocalFuncIdx::new(local_func_idx),
                         args,
                     });
                 }
 
-                if let Some(d) = dest {
-                    self.value_stack.push(d);
+                if let Some(u) = dest_use {
+                    self.value_stack.push(u);
                 }
             }
 
@@ -1060,9 +1075,13 @@ impl IrBuilder {
                     })?;
 
                 // Pop table element index (on top of stack)
-                let table_idx_var = self.value_stack.pop().ok_or_else(|| {
-                    anyhow::anyhow!("Stack underflow for call_indirect table index")
-                })?;
+                let table_idx_var = self
+                    .value_stack
+                    .pop()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Stack underflow for call_indirect table index")
+                    })?
+                    .var_id();
 
                 // Pop arguments
                 let args = self.pop_call_args(
@@ -1070,16 +1089,21 @@ impl IrBuilder {
                     &format!("call_indirect type {}", type_idx_usize),
                 )?;
 
-                let dest = callee_return_type.map(|_| self.new_var());
-                self.emit(IrInstr::CallIndirect {
-                    dest,
+                let (dest_id, dest_use) = if callee_return_type.is_some() {
+                    let (id, u) = self.new_pre_alloc_var();
+                    (Some(id), Some(u))
+                } else {
+                    (None, None)
+                };
+                self.emit_void(IrInstr::CallIndirect {
+                    dest: dest_id,
                     type_idx: TypeIdx::new(*type_index as usize),
                     table_idx: table_idx_var,
                     args,
                 });
 
-                if let Some(d) = dest {
-                    self.value_stack.push(d);
+                if let Some(u) = dest_use {
+                    self.value_stack.push(u);
                 }
             }
 
@@ -1107,14 +1131,14 @@ impl IrBuilder {
                     .value_stack
                     .pop()
                     .ok_or_else(|| anyhow::anyhow!("stack underflow in Select (val1)"))?;
-                let dest = self.new_var();
-                self.emit(IrInstr::Select {
-                    dest,
-                    val1,
-                    val2,
-                    condition,
+                let _def = self.new_var();
+                let use_v = self.emit_def(_def, |d| IrInstr::Select {
+                    dest: d,
+                    val1: val1.var_id(),
+                    val2: val2.var_id(),
+                    condition: condition.var_id(),
                 });
-                self.value_stack.push(dest);
+                self.value_stack.push(use_v);
             }
 
             // === Bulk memory operations ===
@@ -1135,7 +1159,11 @@ impl IrBuilder {
                     .value_stack
                     .pop()
                     .ok_or_else(|| anyhow::anyhow!("Stack underflow for memory.copy (dst)"))?;
-                self.emit(IrInstr::MemoryCopy { dst, src, len });
+                self.emit_void(IrInstr::MemoryCopy {
+                    dst: dst.var_id(),
+                    src: src.var_id(),
+                    len: len.var_id(),
+                });
             }
 
             _ => bail!("Unsupported operator: {:?}", op),
@@ -1152,7 +1180,8 @@ impl IrBuilder {
             Some(
                 self.value_stack
                     .pop()
-                    .ok_or_else(|| anyhow::anyhow!("stack underflow in return"))?,
+                    .ok_or_else(|| anyhow::anyhow!("stack underflow in return"))?
+                    .var_id(),
             )
         };
         self.terminate(IrTerminator::Return { value });
@@ -1174,9 +1203,13 @@ impl IrBuilder {
             .pop()
             .ok_or_else(|| anyhow::anyhow!("stack underflow in binop (lhs)"))?;
         let dest = self.new_var();
-
-        self.emit(IrInstr::BinOp { dest, op, lhs, rhs });
-        self.value_stack.push(dest);
+        let use_v = self.emit_def(dest, |v| IrInstr::BinOp {
+            dest: v,
+            op,
+            lhs: lhs.var_id(),
+            rhs: rhs.var_id(),
+        });
+        self.value_stack.push(use_v);
 
         Ok(())
     }
@@ -1192,9 +1225,12 @@ impl IrBuilder {
             .pop()
             .ok_or_else(|| anyhow::anyhow!("stack underflow in unop (operand)"))?;
         let dest = self.new_var();
-
-        self.emit(IrInstr::UnOp { dest, op, operand });
-        self.value_stack.push(dest);
+        let use_v = self.emit_def(dest, |v| IrInstr::UnOp {
+            dest: v,
+            op,
+            operand: operand.var_id(),
+        });
+        self.value_stack.push(use_v);
 
         Ok(())
     }
@@ -1223,17 +1259,15 @@ impl IrBuilder {
             .pop()
             .ok_or_else(|| anyhow::anyhow!("stack underflow in load (addr)"))?;
         let dest = self.new_var();
-
-        self.emit(IrInstr::Load {
-            dest,
+        let use_v = self.emit_def(dest, |v| IrInstr::Load {
+            dest: v,
             ty,
-            addr,
+            addr: addr.var_id(),
             offset: offset as u32,
             width,
             sign,
         });
-
-        self.value_stack.push(dest);
+        self.value_stack.push(use_v);
         Ok(())
     }
 
@@ -1251,9 +1285,14 @@ impl IrBuilder {
         }
         let mut args = Vec::with_capacity(param_count);
         for _ in 0..param_count {
-            args.push(self.value_stack.pop().ok_or_else(|| {
-                anyhow::anyhow!("stack underflow collecting {} arguments", context)
-            })?);
+            args.push(
+                self.value_stack
+                    .pop()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("stack underflow collecting {} arguments", context)
+                    })?
+                    .var_id(),
+            );
         }
         args.reverse();
         Ok(args)
@@ -1280,10 +1319,10 @@ impl IrBuilder {
             .pop()
             .ok_or_else(|| anyhow::anyhow!("stack underflow in store (addr)"))?;
 
-        self.emit(IrInstr::Store {
+        self.emit_void(IrInstr::Store {
             ty,
-            addr,
-            value,
+            addr: addr.var_id(),
+            value: value.var_id(),
             offset: offset as u32,
             width,
         });

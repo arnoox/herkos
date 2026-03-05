@@ -221,7 +221,7 @@ pub(super) struct ControlFrame {
     /// ```
     ///
     /// If result_var is None, the structure produces no value.
-    pub(super) result_var: Option<VarId>,
+    pub(super) result_var: Option<UseVar>,
 
     /// Snapshot of `local_vars` at the time this frame was pushed.
     ///
@@ -230,28 +230,28 @@ pub(super) struct ControlFrame {
     ///   the else branch starts with the same local state as the then branch.
     /// - **If frames (no else)**: The implicit else path uses these as phi sources.
     /// - **Loop frames**: Pre-loop local values; used as the entry predecessor for loop phis.
-    pub(super) locals_at_entry: Vec<VarId>,
+    pub(super) locals_at_entry: Vec<UseVar>,
 
     /// Forward branches that target this frame's `end_block`.
     /// Each entry is `(predecessor_block, local_vars_snapshot_at_branch_time)`.
     ///
     /// Populated by `Br`/`BrIf`/`BrTable` instructions that resolve to this frame's end.
     /// Not used for Loop frames (backward branches go to `IrBuilder::phi_patches` instead).
-    pub(super) branch_incoming: Vec<(BlockId, Vec<VarId>)>,
+    pub(super) branch_incoming: Vec<(BlockId, Vec<UseVar>)>,
 
     /// For Else frames only: info about the then-branch fall-through.
     ///
     /// Set when `Operator::Else` is processed and the If frame is converted to Else.
     /// Contains `(then_end_block, local_vars_at_then_end)`.
     /// Used to compute phis at the `end_block` join point.
-    pub(super) then_pred_info: Option<(BlockId, Vec<VarId>)>,
+    pub(super) then_pred_info: Option<(BlockId, Vec<UseVar>)>,
 
     /// For Loop frames only: pre-allocated phi VarIds (one per Wasm local).
     ///
     /// At push time, `local_vars[i]` is updated to `loop_phi_vars[i]` for all i.
     /// This ensures all code inside the loop already references the phi vars.
     /// Phi sources are filled in at `End` of the loop from `IrBuilder::phi_patches`.
-    pub(super) loop_phi_vars: Vec<VarId>,
+    pub(super) loop_phi_vars: Vec<UseVar>,
 
     /// For Loop frames only: the block immediately before the loop header.
     ///
@@ -305,15 +305,15 @@ pub struct IrBuilder {
     pub(super) next_block_id: u32,
 
     /// Wasm value stack (now SSA variables instead of actual values)
-    pub(super) value_stack: Vec<VarId>,
+    pub(super) value_stack: Vec<UseVar>,
 
     /// Control flow stack for nested blocks/loops/if
     pub(super) control_stack: Vec<ControlFrame>,
 
-    /// Mapping from Wasm local index → VarId.
+    /// Mapping from Wasm local index → UseVar.
     /// Populated at the start of each `translate_function` call.
     /// Indices 0..param_count-1 are parameters; param_count.. are declared locals.
-    pub(super) local_vars: Vec<VarId>,
+    pub(super) local_vars: Vec<UseVar>,
 
     /// Callee function signatures: (param_count, return_type) per function index.
     /// Set at the start of each `translate_function` call.
@@ -346,7 +346,7 @@ pub struct IrBuilder {
     /// header (backward edge), we record the current values of all loop phi vars here
     /// instead of directly mutating the phi instructions. Consumed at `End` of each
     /// Loop frame by `emit_loop_phis()`.
-    pub(super) phi_patches: Vec<(VarId, BlockId, VarId)>,
+    pub(super) phi_patches: Vec<(UseVar, BlockId, UseVar)>,
 }
 
 impl IrBuilder {
@@ -373,11 +373,42 @@ impl IrBuilder {
         }
     }
 
-    /// Allocate a new SSA variable.
-    pub(super) fn new_var(&mut self) -> VarId {
+    /// Allocate a new SSA variable definition token.
+    ///
+    /// Returns a [`DefVar`] that must be consumed by exactly one call to
+    /// [`emit_def`] or [`emit_phi_def`]. The compiler will reject any attempt
+    /// to emit the same variable twice.
+    pub(super) fn new_var(&mut self) -> DefVar {
         let id = VarId(self.next_var_id);
         self.next_var_id += 1;
-        id
+        DefVar(id)
+    }
+
+    /// Emit an instruction that produces a value.
+    ///
+    /// Consumes `dest` (enforcing single-definition) and returns a [`UseVar`]
+    /// that can be read any number of times. The closure receives the raw
+    /// [`VarId`] to embed in the [`IrInstr`].
+    pub(super) fn emit_def(&mut self, dest: DefVar, f: impl FnOnce(VarId) -> IrInstr) -> UseVar {
+        let id = dest.into_var_id();
+        self.emit_void(f(id));
+        UseVar(id)
+    }
+
+    /// Allocate a variable for phi pre-allocation or function parameters.
+    ///
+    /// Returns both the raw [`VarId`] (for use in [`IrInstr`] dest fields that are
+    /// assembled and prepended to non-current blocks) and a [`UseVar`] for later
+    /// reading. Unlike [`new_var`]+[`emit_def`], this does **not** enforce
+    /// single-definition at compile time — use it only for:
+    /// - Function entry parameters/locals (implicitly defined by the call)
+    /// - `push_control` result_var (phi convergence slot assigned by each branch)
+    /// - Loop phi pre-allocation (emitted later by `emit_loop_phis`)
+    /// - `insert_phis_at_join` (phi dests inserted into non-current blocks)
+    pub(super) fn new_pre_alloc_var(&mut self) -> (VarId, UseVar) {
+        let id = VarId(self.next_var_id);
+        self.next_var_id += 1;
+        (id, UseVar(id))
     }
 
     /// Allocate a new basic block.
@@ -387,8 +418,8 @@ impl IrBuilder {
         id
     }
 
-    /// Emit an instruction to the current block.
-    pub(super) fn emit(&mut self, instr: IrInstr) {
+    /// Emit an instruction (with no result, or whose result is already embedded) to the current block.
+    pub(super) fn emit_void(&mut self, instr: IrInstr) {
         if let Some(block) = self.blocks.iter_mut().find(|b| b.id == self.current_block) {
             block.instructions.push(instr);
         } else {
@@ -433,16 +464,18 @@ impl IrBuilder {
         self.func_imports = module_ctx.func_imports.clone();
 
         // Allocate VarIds for all locals (params first, then declared locals).
-        // This ensures local_index maps directly to the correct VarId.
-        let mut local_index_to_var: Vec<VarId> = Vec::new();
+        // This ensures local_index maps directly to the correct UseVar.
+        // Parameters and zero-initialized locals are implicitly defined at function entry
+        // (not via emit_def), so we use new_pre_alloc_var to get both VarId and UseVar.
+        let mut local_index_to_var: Vec<UseVar> = Vec::new();
 
         // Allocate variables for parameters
         let param_vars: Vec<(VarId, WasmType)> = params
             .iter()
             .map(|(_, ty)| {
-                let var = self.new_var();
-                local_index_to_var.push(var);
-                (var, *ty)
+                let (var_id, use_var) = self.new_pre_alloc_var();
+                local_index_to_var.push(use_var);
+                (var_id, *ty)
             })
             .collect();
 
@@ -450,9 +483,9 @@ impl IrBuilder {
         let mut func_locals: Vec<(VarId, WasmType)> = Vec::new();
         for vt in locals {
             let ty = WasmType::from_wasmparser(*vt);
-            let var = self.new_var();
-            local_index_to_var.push(var);
-            func_locals.push((var, ty));
+            let (var_id, use_var) = self.new_pre_alloc_var();
+            local_index_to_var.push(use_var);
+            func_locals.push((var_id, ty));
         }
 
         self.local_vars = local_index_to_var;
@@ -503,9 +536,12 @@ impl IrBuilder {
         else_block: Option<BlockId>,
         result_type: Option<WasmType>,
     ) {
-        // Allocate a result variable if block has result type
+        // Allocate a result variable if block has result type.
+        // result_var is a phi convergence slot assigned by multiple branches —
+        // use new_pre_alloc_var to get UseVar directly.
         let result_var = if result_type.is_some() {
-            Some(self.new_var())
+            let (_, use_var) = self.new_pre_alloc_var();
+            Some(use_var)
         } else {
             None
         };
@@ -515,7 +551,9 @@ impl IrBuilder {
 
         // For Loop frames: pre-allocate phi vars for all locals and immediately substitute.
         let (loop_phi_vars, pre_loop_block) = if kind == ControlKind::Loop {
-            let phi_vars: Vec<VarId> = (0..self.local_vars.len()).map(|_| self.new_var()).collect();
+            let phi_vars: Vec<UseVar> = (0..self.local_vars.len())
+                .map(|_| self.new_pre_alloc_var().1)
+                .collect();
             // Update local_vars so code inside the loop uses phi vars.
             self.local_vars.clone_from(&phi_vars);
             let pre_loop = self.current_block;
@@ -624,9 +662,9 @@ impl IrBuilder {
         let pred_block = self.current_block;
         // Clone to avoid borrow conflict (local_vars is also in self)
         let phi_vars = self.control_stack[frame_idx].loop_phi_vars.clone();
-        for (local_idx, phi_var) in phi_vars.iter().enumerate() {
+        for (local_idx, &phi_var) in phi_vars.iter().enumerate() {
             let src_var = self.local_vars[local_idx];
-            self.phi_patches.push((*phi_var, pred_block, src_var));
+            self.phi_patches.push((phi_var, pred_block, src_var));
         }
     }
 
@@ -641,7 +679,7 @@ impl IrBuilder {
     pub(super) fn insert_phis_at_join(
         &mut self,
         join_block: BlockId,
-        predecessors: &[(BlockId, Vec<VarId>)],
+        predecessors: &[(BlockId, Vec<UseVar>)],
     ) {
         let num_locals = self.local_vars.len();
         if predecessors.is_empty() || num_locals == 0 {
@@ -658,13 +696,18 @@ impl IrBuilder {
                 .iter()
                 .all(|(_, locals)| locals[local_idx] == first_var);
             if !all_same {
-                let dest = self.new_var();
+                // Use new_pre_alloc_var because the phi dest is inserted into a
+                // non-current block — we can't go through emit_def here.
+                let (dest_id, dest_use) = self.new_pre_alloc_var();
                 let srcs: Vec<(BlockId, VarId)> = predecessors
                     .iter()
-                    .map(|(bid, locals)| (*bid, locals[local_idx]))
+                    .map(|(bid, locals)| (*bid, locals[local_idx].var_id()))
                     .collect();
-                new_locals[local_idx] = dest;
-                phi_instrs.push(IrInstr::Phi { dest, srcs });
+                new_locals[local_idx] = dest_use;
+                phi_instrs.push(IrInstr::Phi {
+                    dest: dest_id,
+                    srcs,
+                });
             } else {
                 // All predecessors agree on this local — no phi needed, but we still
                 // update local_vars to the canonical value. This ensures correctness
@@ -706,14 +749,14 @@ impl IrBuilder {
         // Entry from before the loop
         if let Some(pre_block) = frame.pre_loop_block {
             for (local_idx, phi_src) in phi_srcs.iter_mut().enumerate() {
-                phi_src.push((pre_block, frame.locals_at_entry[local_idx]));
+                phi_src.push((pre_block, frame.locals_at_entry[local_idx].var_id()));
             }
         }
 
         // Backward branch sources from phi_patches
         for &(phi_dest, pred_block, src_var) in &self.phi_patches {
             if let Some(local_idx) = frame.loop_phi_vars.iter().position(|v| *v == phi_dest) {
-                phi_srcs[local_idx].push((pred_block, src_var));
+                phi_srcs[local_idx].push((pred_block, src_var.var_id()));
             }
         }
 
@@ -726,7 +769,7 @@ impl IrBuilder {
         for (local_idx, &phi_var) in frame.loop_phi_vars.iter().enumerate() {
             let srcs = std::mem::take(&mut phi_srcs[local_idx]);
             phi_instrs.push(IrInstr::Phi {
-                dest: phi_var,
+                dest: phi_var.var_id(),
                 srcs,
             });
         }

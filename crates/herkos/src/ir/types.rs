@@ -12,6 +12,44 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VarId(pub u32);
 
+/// One-time-use definition token for an SSA variable.
+///
+/// Returned by [`IrBuilder::new_var()`] and consumed by [`IrBuilder::emit_def()`].
+/// Non-`Copy`/non-`Clone` so that the borrow checker enforces single-definition:
+/// attempting to emit the same variable twice is a compile-time error.
+///
+/// ```compile_fail
+/// let v = builder.new_var();
+/// let _ = builder.emit_def(v, |id| IrInstr::Const { dest: id, value: IrValue::I32(1) });
+/// let _ = builder.emit_def(v, |id| IrInstr::Const { dest: id, value: IrValue::I32(2) }); // error: use of moved value
+/// ```
+#[must_use = "DefVar must be emitted exactly once via emit_def or emit_phi_def"]
+#[derive(Debug)]
+pub struct DefVar(pub(super) VarId);
+
+impl DefVar {
+    /// Consume this token and return the underlying [`VarId`].
+    /// Used internally by emit methods to build [`IrInstr`] with the correct dest.
+    pub(super) fn into_var_id(self) -> VarId {
+        self.0
+    }
+}
+
+/// Multi-use read token for an already-defined SSA variable.
+///
+/// Obtained from [`IrBuilder::emit_def()`] or [`IrBuilder::emit_phi_def()`].
+/// `Copy + Clone` because a variable may be read any number of times.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UseVar(pub(super) VarId);
+
+impl UseVar {
+    /// Return the underlying [`VarId`].
+    /// Used internally when building [`IrInstr`] source fields.
+    pub(super) fn var_id(self) -> VarId {
+        self.0
+    }
+}
+
 /// Generic index type with a phantom tag to distinguish different index spaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Idx<TAG> {
