@@ -28,22 +28,28 @@ mod merge_blocks;
 pub fn optimize_ir(module_info: LoweredModuleInfo) -> Result<LoweredModuleInfo> {
     let mut module_info = module_info;
     for func in &mut module_info.ir_functions {
-        // Empty block optimizations
-        empty_blocks::eliminate(func);
-        dead_blocks::eliminate(func)?;
+        // Two structural passes: dead_instrs may have emptied blocks that
+        // lower_phis had populated with now-dead assignments (e.g. loop-exit
+        // locals that were never used after the join block). Re-run structural
+        // cleanup to remove those passthrough blocks.
+        for _ in 0..2 {
+            // Empty block optimizations
+            empty_blocks::eliminate(func);
+            dead_blocks::eliminate(func)?;
 
-        // Control flow optimizations
-        merge_blocks::eliminate(func);
-        dead_blocks::eliminate(func)?;
+            // Control flow optimizations
+            merge_blocks::eliminate(func);
+            dead_blocks::eliminate(func)?;
 
-        // Value optimizations
-        const_prop::eliminate(func);
-        copy_prop::eliminate(func);
+            // Value optimizations
+            const_prop::eliminate(func);
+            copy_prop::eliminate(func);
 
-        // Redundancy elimination
-        local_cse::eliminate(func);
-        copy_prop::eliminate(func);
-        dead_instrs::eliminate(func);
+            // Redundancy elimination
+            local_cse::eliminate(func);
+            copy_prop::eliminate(func);
+            dead_instrs::eliminate(func);
+        }
     }
     Ok(module_info)
 }

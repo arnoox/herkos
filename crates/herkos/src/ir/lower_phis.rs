@@ -32,6 +32,43 @@
 //!      the block's terminator.
 //!    - Remove the `Phi` instruction from the join block.
 //!
+//! ## Example
+//!
+//! Given an `if/else` that produces a value, the SSA IR contains a phi at the
+//! merge block:
+//!
+//! ```text
+//! block0 (entry):
+//!   v0 = i32.const 1
+//!   v1 = i32.const 2
+//!   br_if v_cond → block1, block2
+//!
+//! block1 (then):
+//!   br → block3
+//!
+//! block2 (else):
+//!   br → block3
+//!
+//! block3 (merge):
+//!   v2 = phi [(block1, v0), (block2, v1)]   ← SSA phi
+//!   ...use v2...
+//! ```
+//!
+//! After lowering, the phi is removed and each predecessor gets an assignment:
+//!
+//! ```text
+//! block1 (then):
+//!   v2 = v0                                  ← inserted before terminator
+//!   br → block3
+//!
+//! block2 (else):
+//!   v2 = v1                                  ← inserted before terminator
+//!   br → block3
+//!
+//! block3 (merge):
+//!   ...use v2...                             ← phi gone; v2 already set
+//! ```
+//!
 //! ## Why predecessor assignments?
 //!
 //! A phi at a join point conceptually says "take the value from whichever
@@ -50,13 +87,24 @@ pub fn lower(module_info: ModuleInfo) -> super::LoweredModuleInfo {
     let mut module_info = module_info;
     for func in &mut module_info.ir_functions {
         lower_func(func);
+        debug_assert!(
+            func.blocks
+                .iter()
+                .flat_map(|b| &b.instructions)
+                .all(|i| !matches!(i, IrInstr::Phi { .. })),
+            "lower_phis: phi instructions remain after lowering — bug in lower_func"
+        );
     }
     super::LoweredModuleInfo(module_info)
 }
 
 /// Lower all `IrInstr::Phi` nodes in a single function.
 fn lower_func(func: &mut IrFunction) {
-    // Collect the set of live block IDs (blocks still present after dead-block elimination).
+    // Collect the set of live block IDs present in the IR right now.
+    // Note: lower_phis runs before the optimizer, so no optimizer dead-block
+    // elimination has happened yet. This pruning handles blocks that were never
+    // emitted (e.g. code after `unreachable` in the IR builder) — their block
+    // IDs may still appear as phi sources even though the blocks were dropped.
     let live_blocks: HashSet<BlockId> = func.blocks.iter().map(|b| b.id).collect();
 
     // Step 1: Prune phi sources that refer to removed (dead) predecessor blocks.
@@ -73,6 +121,23 @@ fn lower_func(func: &mut IrFunction) {
     // A phi is trivial when — after removing self-references — all remaining
     // sources point to the same VarId.  We iterate because simplifying one phi
     // may allow another that referenced it to become trivial.
+    //
+    // Example — loop-invariant variable (self-reference only):
+    //
+    //   v1 = phi [(block0, v0), (block2, v1)]
+    //        ^^^^^^^^^^^^^^^^^^  pre-loop value
+    //                            ^^^^^^^^^^^ back-edge (self-ref, ignored)
+    //
+    //   → all non-self sources resolve to v0  → trivial
+    //   → simplified to: v1 = v0
+    //
+    // Example — chain: simplifying v2 unlocks v3:
+    //
+    //   v2 = phi [(block0, v0), (block1, v0)]   ← both sources same → trivial
+    //   v3 = phi [(block0, v2), (block1, v2)]   ← after v2→v0: both v0 → trivial
+    //
+    //   pass 1: v2 → Assign { dest: v2, src: v0 }
+    //   pass 2: v3 → Assign { dest: v3, src: v0 }
     loop {
         let mut changed = false;
         for block in &mut func.blocks {
