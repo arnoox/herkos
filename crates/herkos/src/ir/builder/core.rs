@@ -222,6 +222,42 @@ pub(super) struct ControlFrame {
     ///
     /// If result_var is None, the structure produces no value.
     pub(super) result_var: Option<VarId>,
+
+    /// Snapshot of `local_vars` at the time this frame was pushed.
+    ///
+    /// Uses:
+    /// - **Else frames**: `Operator::Else` restores `local_vars` to this snapshot so
+    ///   the else branch starts with the same local state as the then branch.
+    /// - **If frames (no else)**: The implicit else path uses these as phi sources.
+    /// - **Loop frames**: Pre-loop local values; used as the entry predecessor for loop phis.
+    pub(super) locals_at_entry: Vec<VarId>,
+
+    /// Forward branches that target this frame's `end_block`.
+    /// Each entry is `(predecessor_block, local_vars_snapshot_at_branch_time)`.
+    ///
+    /// Populated by `Br`/`BrIf`/`BrTable` instructions that resolve to this frame's end.
+    /// Not used for Loop frames (backward branches go to `IrBuilder::phi_patches` instead).
+    pub(super) branch_incoming: Vec<(BlockId, Vec<VarId>)>,
+
+    /// For Else frames only: info about the then-branch fall-through.
+    ///
+    /// Set when `Operator::Else` is processed and the If frame is converted to Else.
+    /// Contains `(then_end_block, local_vars_at_then_end)`.
+    /// Used to compute phis at the `end_block` join point.
+    pub(super) then_pred_info: Option<(BlockId, Vec<VarId>)>,
+
+    /// For Loop frames only: pre-allocated phi VarIds (one per Wasm local).
+    ///
+    /// At push time, `local_vars[i]` is updated to `loop_phi_vars[i]` for all i.
+    /// This ensures all code inside the loop already references the phi vars.
+    /// Phi sources are filled in at `End` of the loop from `IrBuilder::phi_patches`.
+    pub(super) loop_phi_vars: Vec<VarId>,
+
+    /// For Loop frames only: the block immediately before the loop header.
+    ///
+    /// This block terminates with a `Jump` to `start_block` (the loop header).
+    /// Used as the entry predecessor when emitting loop phi nodes.
+    pub(super) pre_loop_block: Option<BlockId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -294,6 +330,23 @@ pub struct IrBuilder {
     /// Function import details: (module_name, func_name) for each imported function.
     /// Indexed by import_idx (0..num_imported_functions-1).
     pub(super) func_imports: Vec<(String, String)>,
+
+    /// True when the current insertion point is unreachable code.
+    ///
+    /// Set to `true` by `Br`, `BrTable`, `Return`, and `Unreachable` instructions.
+    /// Cleared by `start_real_block()`.
+    ///
+    /// When `dead_code` is true, emitted instructions are discarded and branches
+    /// are NOT recorded as phi predecessors.
+    pub(super) dead_code: bool,
+
+    /// Deferred loop phi sources from backward branches.
+    ///
+    /// Each entry is `(phi_dest, pred_block, src_var)`. When a `Br` targets a loop
+    /// header (backward edge), we record the current values of all loop phi vars here
+    /// instead of directly mutating the phi instructions. Consumed at `End` of each
+    /// Loop frame by `emit_loop_phis()`.
+    pub(super) phi_patches: Vec<(VarId, BlockId, VarId)>,
 }
 
 impl IrBuilder {
@@ -315,6 +368,8 @@ impl IrBuilder {
             type_signatures: Vec::new(),
             num_imported_functions: 0,
             func_imports: Vec::new(),
+            dead_code: false,
+            phi_patches: Vec::new(),
         }
     }
 
@@ -370,6 +425,8 @@ impl IrBuilder {
         self.next_block_id = 0;
         self.current_block = BlockId(0);
         self.local_vars.clear();
+        self.dead_code = false;
+        self.phi_patches.clear();
         self.func_signatures = module_ctx.func_signatures.clone();
         self.type_signatures = module_ctx.type_signatures.clone();
         self.num_imported_functions = module_ctx.num_imported_functions;
@@ -434,6 +491,10 @@ impl IrBuilder {
     }
 
     /// Push a control frame onto the control stack.
+    ///
+    /// For Loop frames, pre-allocates phi VarIds for all locals and immediately updates
+    /// `self.local_vars[i]` to the phi vars. This ensures that all code inside the loop
+    /// body reads/writes through the phi vars, making backward-branch phi sources correct.
     pub(super) fn push_control(
         &mut self,
         kind: ControlKind,
@@ -449,6 +510,20 @@ impl IrBuilder {
             None
         };
 
+        // Snapshot local state at frame entry (before any phi-var substitution).
+        let locals_at_entry = self.local_vars.clone();
+
+        // For Loop frames: pre-allocate phi vars for all locals and immediately substitute.
+        let (loop_phi_vars, pre_loop_block) = if kind == ControlKind::Loop {
+            let phi_vars: Vec<VarId> = (0..self.local_vars.len()).map(|_| self.new_var()).collect();
+            // Update local_vars so code inside the loop uses phi vars.
+            self.local_vars.clone_from(&phi_vars);
+            let pre_loop = self.current_block;
+            (phi_vars, Some(pre_loop))
+        } else {
+            (Vec::new(), None)
+        };
+
         self.control_stack.push(ControlFrame {
             kind,
             start_block,
@@ -456,6 +531,11 @@ impl IrBuilder {
             else_block,
             result_type,
             result_var,
+            locals_at_entry,
+            branch_incoming: Vec::new(),
+            then_pred_info: None,
+            loop_phi_vars,
+            pre_loop_block,
         });
     }
 
@@ -503,6 +583,159 @@ impl IrBuilder {
             instructions: Vec::new(),
             terminator: IrTerminator::Unreachable,
         });
+    }
+
+    /// Start a new reachable block: creates the block and clears `dead_code`.
+    ///
+    /// Use this instead of `start_block` whenever the new block is a real join point
+    /// reachable from live code (e.g., after If/Else/End, or after BrIf fallthrough).
+    pub(super) fn start_real_block(&mut self, block_id: BlockId) {
+        self.dead_code = false;
+        self.start_block(block_id);
+    }
+
+    /// Record a forward branch to a non-loop frame.
+    ///
+    /// Saves `(current_block, local_vars_snapshot)` in the target frame's `branch_incoming`.
+    /// No-op if `dead_code` is set (unreachable branches are not phi predecessors).
+    ///
+    /// `frame_idx` is the index into `self.control_stack`.
+    pub(super) fn record_forward_branch(&mut self, frame_idx: usize) {
+        if self.dead_code {
+            return;
+        }
+        let pred_block = self.current_block;
+        let locals_snap = self.local_vars.clone();
+        self.control_stack[frame_idx]
+            .branch_incoming
+            .push((pred_block, locals_snap));
+    }
+
+    /// Record a backward branch to a loop frame (adds to `phi_patches`).
+    ///
+    /// For each loop phi var, records `(phi_var, current_block, current_local_value)`.
+    /// No-op if `dead_code` is set.
+    ///
+    /// `frame_idx` is the index into `self.control_stack` for the Loop frame.
+    pub(super) fn record_loop_back_branch(&mut self, frame_idx: usize) {
+        if self.dead_code {
+            return;
+        }
+        let pred_block = self.current_block;
+        // Clone to avoid borrow conflict (local_vars is also in self)
+        let phi_vars = self.control_stack[frame_idx].loop_phi_vars.clone();
+        for (local_idx, phi_var) in phi_vars.iter().enumerate() {
+            let src_var = self.local_vars[local_idx];
+            self.phi_patches.push((*phi_var, pred_block, src_var));
+        }
+    }
+
+    /// Insert SSA phi nodes at a join block for locals with differing predecessor values.
+    ///
+    /// For each local index, if any predecessor provides a different VarId for that local,
+    /// a `IrInstr::Phi` node is inserted at the beginning of `join_block` and
+    /// `self.local_vars[i]` is updated to the phi dest.
+    ///
+    /// Phis are inserted in local-index order at the very start of the block's instruction
+    /// list, before any instructions already in the block.
+    pub(super) fn insert_phis_at_join(
+        &mut self,
+        join_block: BlockId,
+        predecessors: &[(BlockId, Vec<VarId>)],
+    ) {
+        let num_locals = self.local_vars.len();
+        if predecessors.is_empty() || num_locals == 0 {
+            return;
+        }
+
+        // Collect phis to insert: allocate dest vars before touching self.blocks.
+        let mut phi_instrs: Vec<IrInstr> = Vec::new();
+        let mut new_locals = self.local_vars.clone();
+
+        for local_idx in 0..num_locals {
+            let first_var = predecessors[0].1[local_idx];
+            let all_same = predecessors
+                .iter()
+                .all(|(_, locals)| locals[local_idx] == first_var);
+            if !all_same {
+                let dest = self.new_var();
+                let srcs: Vec<(BlockId, VarId)> = predecessors
+                    .iter()
+                    .map(|(bid, locals)| (*bid, locals[local_idx]))
+                    .collect();
+                new_locals[local_idx] = dest;
+                phi_instrs.push(IrInstr::Phi { dest, srcs });
+            } else {
+                // All predecessors agree on this local — no phi needed, but we still
+                // update local_vars to the canonical value. This ensures correctness
+                // when arriving from dead code (where local_vars may be stale).
+                new_locals[local_idx] = first_var;
+            }
+        }
+
+        self.local_vars = new_locals;
+
+        if !phi_instrs.is_empty() {
+            if let Some(block) = self.blocks.iter_mut().find(|b| b.id == join_block) {
+                let old = std::mem::take(&mut block.instructions);
+                block.instructions = phi_instrs;
+                block.instructions.extend(old);
+            }
+        }
+    }
+
+    /// Emit phi instructions for a loop frame into its header block.
+    ///
+    /// Called at `End` of a Loop frame (after `pop_control`). Inserts `IrInstr::Phi`
+    /// at the start of `frame.start_block` for each local. Sources come from:
+    /// 1. The pre-loop predecessor (`frame.pre_loop_block`, `frame.locals_at_entry`).
+    /// 2. All backward branches recorded in `self.phi_patches` for this loop's phi vars.
+    ///
+    /// Consumes the relevant entries from `self.phi_patches`.
+    /// Trivial phis (all sources are the same var, or the only non-self source) are left
+    /// for the `lower_phis` pass to eliminate.
+    pub(super) fn emit_loop_phis(&mut self, frame: &ControlFrame) {
+        debug_assert_eq!(frame.kind, ControlKind::Loop);
+        let num_locals = frame.loop_phi_vars.len();
+        if num_locals == 0 {
+            return;
+        }
+
+        let mut phi_srcs: Vec<Vec<(BlockId, VarId)>> = vec![Vec::new(); num_locals];
+
+        // Entry from before the loop
+        if let Some(pre_block) = frame.pre_loop_block {
+            for (local_idx, phi_src) in phi_srcs.iter_mut().enumerate() {
+                phi_src.push((pre_block, frame.locals_at_entry[local_idx]));
+            }
+        }
+
+        // Backward branch sources from phi_patches
+        for &(phi_dest, pred_block, src_var) in &self.phi_patches {
+            if let Some(local_idx) = frame.loop_phi_vars.iter().position(|v| *v == phi_dest) {
+                phi_srcs[local_idx].push((pred_block, src_var));
+            }
+        }
+
+        // Consume the processed patches
+        self.phi_patches
+            .retain(|&(phi_dest, _, _)| !frame.loop_phi_vars.contains(&phi_dest));
+
+        // Build phi instructions and prepend to loop header
+        let mut phi_instrs: Vec<IrInstr> = Vec::new();
+        for (local_idx, &phi_var) in frame.loop_phi_vars.iter().enumerate() {
+            let srcs = std::mem::take(&mut phi_srcs[local_idx]);
+            phi_instrs.push(IrInstr::Phi {
+                dest: phi_var,
+                srcs,
+            });
+        }
+
+        if let Some(block) = self.blocks.iter_mut().find(|b| b.id == frame.start_block) {
+            let old = std::mem::take(&mut block.instructions);
+            block.instructions = phi_instrs;
+            block.instructions.extend(old);
+        }
     }
 }
 

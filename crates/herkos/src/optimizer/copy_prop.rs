@@ -149,12 +149,8 @@ fn coalesce_one(block: &mut IrBlock, global_uses: &HashMap<VarId, usize>) -> boo
         };
 
         // The def must precede the Assign.
-        //
-        // NOTE: `def_idx >= assign_idx` can occur in practice because the IR is not in
-        // strict SSA form — `LocalSet`/`LocalTee` reuse the same `VarId` for every write
-        // to a Wasm local, so a single block can contain multiple definitions of the same
-        // variable. This makes `def_site` unreliable when there are two defs and the one
-        // recorded happens to come after the `Assign`. See issue #14 for the full fix.
+        // In strict SSA form each variable is defined exactly once, so this check
+        // is always satisfied — but kept as a safety guard.
         if def_idx >= assign_idx {
             continue;
         }
@@ -166,13 +162,10 @@ fn coalesce_one(block: &mut IrBlock, global_uses: &HashMap<VarId, usize>) -> boo
         // intervening read would see the new value instead of the old one (wrong).
         // Any intervening write would clobber the value before it can be used (wrong).
         //
-        // NOTE: in strict SSA form this entire check would be unnecessary. Each variable
-        // is defined exactly once, so v_dst cannot be written again between def_idx and
-        // assign_idx (case 2), and nothing in that window would read v_dst either since
-        // it was just born and its only consumer is the Assign at assign_idx (case 1).
-        // This check exists solely because of the quasi-SSA problem described in
-        // issue #14, where LocalSet/LocalTee reuse the same VarId across multiple writes.
-        // See issue #14 for the full fix.
+        // In strict SSA form v_dst has exactly one definition (this Assign), so it
+        // cannot be written between the two indices. It also cannot be read before its
+        // definition (the Assign), so the check is effectively a no-op. Kept as a
+        // guard against any future relaxation of the invariant.
         let conflict = block.instructions[def_idx + 1..assign_idx].iter().any(|i| {
             let mut found = false;
             for_each_use(i, |v| {

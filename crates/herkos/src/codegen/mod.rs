@@ -165,7 +165,7 @@ impl<'a, B: Backend> CodeGenerator<'a, B> {
     /// Generate a complete Rust module from IR with full module info.
     ///
     /// This is the main entry point. It generates a module wrapper structure.
-    pub fn generate_module_with_info(&self, info: &ModuleInfo) -> Result<String> {
+    pub fn generate_module_with_info(&self, info: &LoweredModuleInfo) -> Result<String> {
         module::generate_module_with_info(self.backend, info)
     }
 }
@@ -500,7 +500,8 @@ mod tests {
 
         let backend = SafeBackend::new();
         let codegen = CodeGenerator::new(&backend);
-        let code = codegen.generate_module_with_info(&info).unwrap();
+        let lowered = crate::ir::lower_phis::lower(info);
+        let code = codegen.generate_module_with_info(&lowered).unwrap();
 
         println!("Generated wrapper code:\n{}", code);
 
@@ -566,7 +567,8 @@ mod tests {
 
         let backend = SafeBackend::new();
         let codegen = CodeGenerator::new(&backend);
-        let code = codegen.generate_module_with_info(&info).unwrap();
+        let lowered = crate::ir::lower_phis::lower(info);
+        let code = codegen.generate_module_with_info(&lowered).unwrap();
 
         println!("Generated wrapper code:\n{}", code);
 
@@ -633,7 +635,8 @@ mod tests {
 
         let backend = SafeBackend::new();
         let codegen = CodeGenerator::new(&backend);
-        let code = codegen.generate_module_with_info(&info).unwrap();
+        let lowered = crate::ir::lower_phis::lower(info);
+        let code = codegen.generate_module_with_info(&lowered).unwrap();
 
         println!("Generated code with immutable global:\n{}", code);
 

@@ -106,6 +106,7 @@ pub fn for_each_use<F: FnMut(VarId)>(instr: &IrInstr, mut f: F) {
             f(*val2);
             f(*condition);
         }
+        IrInstr::Phi { .. } => unreachable!("Phi nodes must be lowered before optimization"),
     }
 }
 
@@ -147,6 +148,8 @@ pub fn instr_dest(instr: &IrInstr) -> Option<VarId> {
         | IrInstr::CallIndirect { dest, .. } => *dest,
 
         IrInstr::Store { .. } | IrInstr::GlobalSet { .. } | IrInstr::MemoryCopy { .. } => None,
+
+        IrInstr::Phi { .. } => unreachable!("Phi nodes must be lowered before optimization"),
     }
 }
 
@@ -174,6 +177,8 @@ pub fn set_instr_dest(instr: &mut IrInstr, new_dest: VarId) {
         }
         // No dest — unreachable given precondition, but harmless to ignore.
         IrInstr::Store { .. } | IrInstr::GlobalSet { .. } | IrInstr::MemoryCopy { .. } => {}
+
+        IrInstr::Phi { .. } => unreachable!("Phi nodes must be lowered before optimization"),
     }
 }
 
@@ -266,6 +271,7 @@ pub fn replace_uses_of(instr: &mut IrInstr, old: VarId, new: VarId) {
             sub(val2);
             sub(condition);
         }
+        IrInstr::Phi { .. } => unreachable!("Phi nodes must be lowered before optimization"),
     }
 }
 
@@ -378,6 +384,7 @@ pub fn is_side_effect_free(instr: &IrInstr) -> bool {
         | IrInstr::Select { .. }
         | IrInstr::GlobalGet { .. }
         | IrInstr::MemorySize { .. } => true,
+        IrInstr::Phi { .. } => unreachable!("Phi nodes must be lowered before optimization"),
         _ => false,
     }
 }

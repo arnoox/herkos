@@ -6,7 +6,7 @@
 //! Each optimization is a self-contained sub-module. The top-level
 //! [`optimize_ir`] function runs all passes in order.
 
-use crate::ir::ModuleInfo;
+use crate::ir::LoweredModuleInfo;
 use anyhow::Result;
 
 // ── Shared utilities ─────────────────────────────────────────────────────────
@@ -22,7 +22,10 @@ mod local_cse;
 mod merge_blocks;
 
 /// Optimizes the IR representation by running all passes in order.
-pub fn optimize_ir(module_info: ModuleInfo) -> Result<ModuleInfo> {
+///
+/// Expects a [`LoweredModuleInfo`] — i.e. phi nodes have already been lowered
+/// by [`crate::ir::lower_phis::lower`] before calling this function.
+pub fn optimize_ir(module_info: LoweredModuleInfo) -> Result<LoweredModuleInfo> {
     let mut module_info = module_info;
     for func in &mut module_info.ir_functions {
         // Empty block optimizations

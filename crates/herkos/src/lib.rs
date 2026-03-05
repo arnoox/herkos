@@ -14,7 +14,7 @@ pub use anyhow::{Context, Result};
 use backend::SafeBackend;
 use codegen::CodeGenerator;
 use ir::builder::build_module_info;
-use ir::ModuleInfo;
+use ir::{lower_phis, LoweredModuleInfo};
 use optimizer::optimize_ir;
 use parser::parse_wasm;
 
@@ -65,6 +65,11 @@ pub fn transpile(wasm_bytes: &[u8], options: &TranspileOptions) -> Result<String
     let module_info =
         build_module_info(&parsed, options).context("failed to build module metadata")?;
 
+    // SSA destruction: lower phi nodes to predecessor assignments.
+    // Must run before the optimizer so that all block-elimination passes
+    // operate on phi-free IR.
+    let module_info = lower_phis::lower(module_info);
+
     // Optimize the IR
     let module_info = optimize_ir(module_info)?;
 
@@ -75,7 +80,7 @@ pub fn transpile(wasm_bytes: &[u8], options: &TranspileOptions) -> Result<String
 }
 
 /// Generates Rust source code from IR and module metadata.
-fn generate_rust_code(module_info: &ModuleInfo) -> Result<String> {
+fn generate_rust_code(module_info: &LoweredModuleInfo) -> Result<String> {
     let backend = SafeBackend::new();
     let codegen = CodeGenerator::new(&backend);
 

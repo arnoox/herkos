@@ -8,7 +8,7 @@
 use crate::ir::{BinOp, IrFunction, IrInstr, IrValue, UnOp, VarId};
 use std::collections::HashMap;
 
-use super::utils::{instr_dest, prune_dead_locals};
+use super::utils::prune_dead_locals;
 
 // ── Value key ────────────────────────────────────────────────────────────────
 
@@ -76,15 +76,6 @@ fn is_commutative(op: &BinOp) -> bool {
     )
 }
 
-/// Returns `true` if `var` appears as an operand (not dest) in `key`.
-fn key_uses_var(key: &ValueKey, var: VarId) -> bool {
-    match key {
-        ValueKey::BinOp { lhs, rhs, .. } => *lhs == var || *rhs == var,
-        ValueKey::UnOp { operand, .. } => *operand == var,
-        ValueKey::Const(_) => false,
-    }
-}
-
 /// Build a `ValueKey` for a `BinOp`, normalizing operand order for commutative ops.
 fn binop_key(op: BinOp, lhs: VarId, rhs: VarId) -> ValueKey {
     let (lhs, rhs) = if is_commutative(&op) && lhs.0 > rhs.0 {
@@ -106,23 +97,8 @@ pub fn eliminate(func: &mut IrFunction) {
         let mut value_map: HashMap<ValueKey, VarId> = HashMap::new();
 
         for instr in &mut block.instructions {
-            // Invalidate stale CSE entries BEFORE doing the lookup or insertion.
-            //
-            // The IR is not in strict SSA form — loop accumulators and Wasm locals
-            // can be redefined within a block. Without this, CSE could incorrectly
-            // reuse a result computed with the *old* value of a variable.
-            //
-            // We remove:
-            // - Any key whose operands include `defined_var` (the computation used
-            //   the old value; after the redefinition it would be wrong).
-            // - Any entry whose `first_result` is `defined_var` (that variable no
-            //   longer holds the expression it was recorded with).
-            if let Some(defined_var) = instr_dest(instr) {
-                value_map.retain(|key, first_result| {
-                    !key_uses_var(key, defined_var) && *first_result != defined_var
-                });
-            }
-
+            // In strict SSA form each variable is defined exactly once, so there
+            // is no need to invalidate cached CSE entries on redefinition.
             match instr {
                 IrInstr::Const { dest, value } => {
                     let key = ValueKey::Const(ConstKey::from(*value));
@@ -469,22 +445,18 @@ mod tests {
         );
     }
 
+    /// In strict SSA form every variable is defined exactly once within a block,
+    /// so (v0 + v1) always refers to the same computation and can be CSE'd.
     #[test]
-    fn operand_redefinition_invalidates_cse() {
-        // v2 = v0 + v1           ← first occurrence; recorded in value_map
-        // v0 = Const(99)         ← v0 is REDEFINED; must invalidate (Add, v0, v1) → v2
-        // v3 = v0 + v1           ← v0 is now 99; this is a DIFFERENT computation
-        //                          and must NOT be CSE'd to Assign(v3, v2)
+    fn ssa_unique_defs_allow_cse() {
+        // v2 = v0 + v1    ← first occurrence
+        // v3 = v0 + v1    ← identical keys with same VarIds → should be eliminated
         let instrs = vec![
             IrInstr::BinOp {
                 dest: VarId(2),
                 op: BinOp::I32Add,
                 lhs: VarId(0),
                 rhs: VarId(1),
-            },
-            IrInstr::Const {
-                dest: VarId(0),
-                value: IrValue::I32(99),
             },
             IrInstr::BinOp {
                 dest: VarId(3),
@@ -498,47 +470,16 @@ mod tests {
         func.locals = vec![(VarId(2), WasmType::I32), (VarId(3), WasmType::I32)];
         eliminate(&mut func);
 
-        // v3 must remain a BinOp, NOT an Assign to v2.
+        // v3 should be eliminated to Assign(v3, v2).
         assert!(
-            matches!(func.blocks[0].instructions[2], IrInstr::BinOp { .. }),
-            "v3 = v0 + v1 must not be CSE'd to v2 after v0 is redefined"
-        );
-    }
-
-    #[test]
-    fn result_redefinition_invalidates_cse() {
-        // v2 = v0 + v1           ← recorded: (Add, v0, v1) → v2
-        // v2 = Const(5)          ← v2 is REDEFINED; must remove (Add, v0, v1) → v2
-        //                          from value_map (v2 no longer holds that computation)
-        // v3 = v0 + v1           ← the "canonical" v2 has changed; must NOT be
-        //                          CSE'd to Assign(v3, v2)
-        let instrs = vec![
-            IrInstr::BinOp {
-                dest: VarId(2),
-                op: BinOp::I32Add,
-                lhs: VarId(0),
-                rhs: VarId(1),
-            },
-            IrInstr::Const {
-                dest: VarId(2),
-                value: IrValue::I32(5),
-            },
-            IrInstr::BinOp {
-                dest: VarId(3),
-                op: BinOp::I32Add,
-                lhs: VarId(0),
-                rhs: VarId(1),
-            },
-        ];
-
-        let mut func = make_func(vec![make_block(0, instrs)]);
-        func.locals = vec![(VarId(2), WasmType::I32), (VarId(3), WasmType::I32)];
-        eliminate(&mut func);
-
-        // v3 must remain a BinOp; v2 no longer holds (v0 + v1).
-        assert!(
-            matches!(func.blocks[0].instructions[2], IrInstr::BinOp { .. }),
-            "v3 = v0 + v1 must not be CSE'd to v2 after v2 itself is redefined"
+            matches!(
+                func.blocks[0].instructions[1],
+                IrInstr::Assign {
+                    dest: VarId(3),
+                    src: VarId(2)
+                }
+            ),
+            "duplicate (v0 + v1) should be CSE'd to Assign in strict SSA"
         );
     }
 
