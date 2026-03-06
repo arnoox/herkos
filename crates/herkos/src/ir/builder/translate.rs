@@ -15,29 +15,29 @@ impl IrBuilder {
             // Constants
             Operator::I32Const { value } => {
                 let v = IrValue::I32(*value);
-                let _def = self.new_var();
-                let use_v = self.emit_def(_def, |d| IrInstr::Const { dest: d, value: v });
+                let def = self.new_var();
+                let use_v = self.emit_def(def, |d| IrInstr::Const { dest: d, value: v });
                 self.value_stack.push(use_v);
             }
 
             Operator::I64Const { value } => {
                 let v = IrValue::I64(*value);
-                let _def = self.new_var();
-                let use_v = self.emit_def(_def, |d| IrInstr::Const { dest: d, value: v });
+                let def = self.new_var();
+                let use_v = self.emit_def(def, |d| IrInstr::Const { dest: d, value: v });
                 self.value_stack.push(use_v);
             }
 
             Operator::F32Const { value } => {
                 let v = IrValue::F32(f32::from_bits(value.bits()));
-                let _def = self.new_var();
-                let use_v = self.emit_def(_def, |d| IrInstr::Const { dest: d, value: v });
+                let def = self.new_var();
+                let use_v = self.emit_def(def, |d| IrInstr::Const { dest: d, value: v });
                 self.value_stack.push(use_v);
             }
 
             Operator::F64Const { value } => {
                 let v = IrValue::F64(f64::from_bits(value.bits()));
-                let _def = self.new_var();
-                let use_v = self.emit_def(_def, |d| IrInstr::Const { dest: d, value: v });
+                let def = self.new_var();
+                let use_v = self.emit_def(def, |d| IrInstr::Const { dest: d, value: v });
                 self.value_stack.push(use_v);
             }
 
@@ -55,8 +55,8 @@ impl IrBuilder {
                 // overwrites the same local will corrupt any already-pushed reference
                 // to it, because the backend emits sequential mutable assignments.
                 // A fresh variable captures the value at this point in time.
-                let _def = self.new_var();
-                let use_v = self.emit_def(_def, |d| IrInstr::Assign {
+                let def = self.new_var();
+                let use_v = self.emit_def(def, |d| IrInstr::Assign {
                     dest: d,
                     src: src.var_id(),
                 });
@@ -76,8 +76,8 @@ impl IrBuilder {
                 }
 
                 // Allocate a fresh dest to satisfy SSA single-definition rule.
-                let _def = self.new_var();
-                let use_v = self.emit_def(_def, |d| IrInstr::Assign {
+                let def = self.new_var();
+                let use_v = self.emit_def(def, |d| IrInstr::Assign {
                     dest: d,
                     src: value.var_id(),
                 });
@@ -99,8 +99,8 @@ impl IrBuilder {
                 }
 
                 // Allocate a fresh dest to satisfy SSA single-definition rule.
-                let _def = self.new_var();
-                let use_v = self.emit_def(_def, |d| IrInstr::Assign {
+                let def = self.new_var();
+                let use_v = self.emit_def(def, |d| IrInstr::Assign {
                     dest: d,
                     src: value.var_id(),
                 });
@@ -112,8 +112,8 @@ impl IrBuilder {
             // Global variable access
             Operator::GlobalGet { global_index } => {
                 let idx = GlobalIdx::new(*global_index as usize);
-                let _def = self.new_var();
-                let use_v = self.emit_def(_def, |d| IrInstr::GlobalGet {
+                let def = self.new_var();
+                let use_v = self.emit_def(def, |d| IrInstr::GlobalGet {
                     dest: d,
                     index: idx,
                 });
@@ -643,8 +643,8 @@ impl IrBuilder {
 
             // === Memory size and grow ===
             Operator::MemorySize { mem: 0, .. } => {
-                let _def = self.new_var();
-                let use_v = self.emit_def(_def, |d| IrInstr::MemorySize { dest: d });
+                let def = self.new_var();
+                let use_v = self.emit_def(def, |d| IrInstr::MemorySize { dest: d });
                 self.value_stack.push(use_v);
             }
 
@@ -653,8 +653,8 @@ impl IrBuilder {
                     .value_stack
                     .pop()
                     .ok_or_else(|| anyhow::anyhow!("Stack underflow for memory.grow"))?;
-                let _def = self.new_var();
-                let use_v = self.emit_def(_def, |d| IrInstr::MemoryGrow {
+                let def = self.new_var();
+                let use_v = self.emit_def(def, |d| IrInstr::MemoryGrow {
                     dest: d,
                     delta: delta.var_id(),
                 });
@@ -1131,8 +1131,8 @@ impl IrBuilder {
                     .value_stack
                     .pop()
                     .ok_or_else(|| anyhow::anyhow!("stack underflow in Select (val1)"))?;
-                let _def = self.new_var();
-                let use_v = self.emit_def(_def, |d| IrInstr::Select {
+                let def = self.new_var();
+                let use_v = self.emit_def(def, |d| IrInstr::Select {
                     dest: d,
                     val1: val1.var_id(),
                     val2: val2.var_id(),
