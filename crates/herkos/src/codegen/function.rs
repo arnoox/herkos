@@ -327,10 +327,7 @@ fn detect_inlined_cmp(
 
     // Find the defining instruction in this block.
     for (i, instr) in block.instructions.iter().enumerate() {
-        if let IrInstr::BinOp {
-            dest, op, lhs, rhs,
-        } = instr
-        {
+        if let IrInstr::BinOp { dest, op, lhs, rhs } = instr {
             if *dest == condition && op.is_comparison() {
                 // Safety: verify no instruction after this one redefines
                 // lhs or rhs. If they do, inlining at branch-time would see

@@ -112,7 +112,10 @@ fn fold_one(func: &mut IrFunction, global_uses: &HashMap<VarId, usize>) -> bool 
             }
             VarDef::NeZero(inner) => {
                 // ne(x, 0) != 0 ≡ x != 0, so just use x
-                if let IrTerminator::BranchIf { condition: cond, .. } = &mut block.terminator {
+                if let IrTerminator::BranchIf {
+                    condition: cond, ..
+                } = &mut block.terminator
+                {
                     *cond = *inner;
                 }
                 return true;
