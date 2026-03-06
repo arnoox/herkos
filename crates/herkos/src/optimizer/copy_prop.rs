@@ -52,6 +52,15 @@ use std::collections::HashMap;
 
 /// Eliminate single-use Assign copies and prune now-dead locals.
 pub fn eliminate(func: &mut IrFunction) {
+    // ── Global (cross-block) copy propagation ────────────────────────────────
+    //
+    // In SSA form every `Assign { dest, src }` is a global fact: `dest` is
+    // defined exactly once and always equals `src`.  We collect all Assigns,
+    // build a substitution map chasing chains to their root, and rewrite every
+    // use across the entire function.  The now-dead Assign instructions are
+    // left for dead_instrs to clean up (or the backward pass below).
+    global_copy_prop(func);
+
     // ── Backward pass: redirect I_def dest through single-use Assigns ────────
     //
     // We rebuild the global use-count map before each round because a successful
@@ -97,6 +106,103 @@ pub fn eliminate(func: &mut IrFunction) {
 
     // Prune locals that are no longer referenced anywhere.
     prune_dead_locals(func);
+}
+
+// ── Global (cross-block) copy propagation ─────────────────────────────────────
+
+/// Replaces every use of an Assign's `dest` with its `src`, chasing chains.
+///
+/// In SSA form, `Assign { dest, src }` means `dest == src` globally.  We
+/// collect all such pairs, resolve transitive chains (e.g. `v25 → v24 → v19`
+/// stops at `v19` if `v19` is not itself an Assign dest), and rewrite all
+/// variable reads across every block.
+fn global_copy_prop(func: &mut IrFunction) {
+    // Step 0: count definitions per variable. Only variables defined exactly
+    // once (true SSA) are safe for global substitution.  Function parameters
+    // count as one definition each.
+    let mut def_count: HashMap<VarId, usize> = HashMap::new();
+    for (param_var, _) in &func.params {
+        *def_count.entry(*param_var).or_insert(0) += 1;
+    }
+    for block in &func.blocks {
+        for instr in &block.instructions {
+            if let Some(dest) = instr_dest(instr) {
+                *def_count.entry(dest).or_insert(0) += 1;
+            }
+        }
+    }
+
+    // Step 1: collect Assign { dest, src } pairs where dest has exactly one def.
+    let mut copy_map: HashMap<VarId, VarId> = HashMap::new();
+    for block in &func.blocks {
+        for instr in &block.instructions {
+            if let IrInstr::Assign { dest, src } = instr {
+                // Both dest and src must have at most one definition.
+                // dest must have exactly 1 (this Assign). src must have 0
+                // (function parameter) or 1 (another instruction). If src has
+                // multiple definitions, replacing uses of dest with src could
+                // pick up a wrong definition.
+                let dest_ok = def_count.get(dest).copied() == Some(1);
+                let src_ok = def_count.get(src).copied().unwrap_or(0) <= 1;
+                if dest != src && dest_ok && src_ok {
+                    copy_map.insert(*dest, *src);
+                }
+            }
+        }
+    }
+
+    if copy_map.is_empty() {
+        return;
+    }
+
+    // Step 2: chase chains to find the root for each key.
+    // E.g. if v25 → v24 and v24 → v19, then v25's root is v19.
+    let resolved: HashMap<VarId, VarId> = copy_map
+        .keys()
+        .map(|&var| {
+            let mut root = var;
+            // Follow the chain with a depth limit to avoid infinite loops
+            // (shouldn't happen in well-formed SSA, but defensive).
+            let mut steps = 0;
+            while let Some(&next) = copy_map.get(&root) {
+                root = next;
+                steps += 1;
+                if steps > copy_map.len() {
+                    break; // cycle guard
+                }
+            }
+            (var, root)
+        })
+        .filter(|(var, root)| var != root)
+        .collect();
+
+    if resolved.is_empty() {
+        return;
+    }
+
+    // Step 3: rewrite all uses across the entire function.
+    for block in &mut func.blocks {
+        for instr in &mut block.instructions {
+            for (&old, &new) in &resolved {
+                replace_uses_of(instr, old, new);
+            }
+        }
+        for (&old, &new) in &resolved {
+            replace_uses_of_terminator(&mut block.terminator, old, new);
+        }
+    }
+
+    // Remove Assign instructions whose dest was resolved (they're now dead:
+    // all uses of their dest have been rewritten to the root).
+    for block in &mut func.blocks {
+        block.instructions.retain(|instr| {
+            if let IrInstr::Assign { dest, .. } = instr {
+                !resolved.contains_key(dest)
+            } else {
+                true
+            }
+        });
+    }
 }
 
 // ── Core coalescing logic ─────────────────────────────────────────────────────
@@ -336,7 +442,8 @@ mod tests {
 
     #[test]
     fn const_assign_coalesced() {
-        // v7 = Const(2); v1 = Assign(v7)  →  v1 = Const(2)
+        // v7 = Const(2); v1 = Assign(v7)
+        // Global copy prop: v1→v7, removes Assign. Result: v7 = Const(2).
         let mut func = make_func(single_block(
             vec![
                 IrInstr::Const {
@@ -357,7 +464,7 @@ mod tests {
             IrInstr::Const {
                 dest,
                 value: IrValue::I32(2),
-            } => assert_eq!(*dest, VarId(1), "dest should be redirected to v1"),
+            } => assert_eq!(*dest, VarId(7), "producer v7 survives"),
             other => panic!("expected Const, got {other:?}"),
         }
     }
@@ -366,7 +473,8 @@ mod tests {
 
     #[test]
     fn binop_assign_coalesced() {
-        // v16 = v4 + v3; v5 = Assign(v16)  →  v5 = v4 + v3
+        // v16 = v4 + v3; v5 = Assign(v16)
+        // Global copy prop: v5→v16, removes Assign. Result: v16 = v4 + v3.
         let mut func = make_func(single_block(
             vec![
                 IrInstr::BinOp {
@@ -386,7 +494,7 @@ mod tests {
         let block = &func.blocks[0];
         assert_eq!(block.instructions.len(), 1);
         match &block.instructions[0] {
-            IrInstr::BinOp { dest, .. } => assert_eq!(*dest, VarId(5)),
+            IrInstr::BinOp { dest, .. } => assert_eq!(*dest, VarId(16)),
             other => panic!("expected BinOp, got {other:?}"),
         }
     }
@@ -394,8 +502,11 @@ mod tests {
     // ── Multi-use src: must NOT coalesce ─────────────────────────────────
 
     #[test]
-    fn multi_use_src_not_coalesced() {
-        // v7 = Const(2); v1 = Assign(v7); v2 = Assign(v7)  — v7 used twice
+    fn multi_use_src_global_prop_removes_both() {
+        // v7 = Const(2); v1 = Assign(v7); v2 = Assign(v7)
+        // Global copy prop: v1→v7, v2→v7, removes both Assigns.
+        // (Backward pass can't coalesce because v7 has 2 uses, but global
+        // copy prop works by rewriting uses of v1/v2 to v7.)
         let mut func = make_func(single_block(
             vec![
                 IrInstr::Const {
@@ -414,45 +525,50 @@ mod tests {
             ret_none(),
         ));
         eliminate(&mut func);
-        // Nothing should change: v7 has 2 uses.
-        assert_eq!(func.blocks[0].instructions.len(), 3);
+        assert_eq!(func.blocks[0].instructions.len(), 1);
+        match &func.blocks[0].instructions[0] {
+            IrInstr::Const { dest, .. } => assert_eq!(*dest, VarId(7)),
+            other => panic!("expected Const, got {other:?}"),
+        }
     }
 
     // ── Intervening read of v_dst: must NOT coalesce ──────────────────────
 
     #[test]
     fn intervening_read_of_dst_blocks_coalesce() {
-        // v5 = v4 + v3
-        // v3 = Assign(v4)   ← reads v4 (not v_dst=v5), so no conflict for v5→v_dst5
-        // BUT let's test a case where v_dst IS read in between:
-        // v5 = v4 + v3
-        // use_v5 = v5 + 1   ← reads v5 (which IS v_src here)... wait v_src=v16, v_dst=v5
-        // v5 = Assign(v16)  ← can't coalesce because... let me reconsider.
-        //
-        // Pattern: v16 = v4+v3 (def_idx=0), intervening: v8 = v5+1 (reads v5=v_dst), Assign(v16→v5)
-        // v5 is read in between → conflict → do NOT coalesce.
-        let mut func = make_func(single_block(
-            vec![
-                IrInstr::BinOp {
-                    dest: VarId(16),
-                    op: BinOp::I32Add,
-                    lhs: VarId(4),
-                    rhs: VarId(3),
-                },
-                IrInstr::BinOp {
-                    // reads v5 (= v_dst of the upcoming Assign)
-                    dest: VarId(8),
-                    op: BinOp::I32Add,
-                    lhs: VarId(5),
-                    rhs: VarId(1),
-                },
-                IrInstr::Assign {
-                    dest: VarId(5),
-                    src: VarId(16),
-                },
-            ],
-            ret_none(),
-        ));
+        // Non-SSA pattern: v5 is a parameter AND redefined by Assign.
+        // v16 = v4+v3; v8 = v5+v1 (reads param v5); v5 = Assign(v16)
+        // Backward coalescing v16→v5 blocked because v5 is read in between.
+        // Global copy prop skips v5 because it has 2 defs (param + Assign).
+        let mut func = IrFunction {
+            params: vec![(VarId(5), WasmType::I32)],
+            locals: vec![],
+            blocks: single_block(
+                vec![
+                    IrInstr::BinOp {
+                        dest: VarId(16),
+                        op: BinOp::I32Add,
+                        lhs: VarId(4),
+                        rhs: VarId(3),
+                    },
+                    IrInstr::BinOp {
+                        dest: VarId(8),
+                        op: BinOp::I32Add,
+                        lhs: VarId(5),
+                        rhs: VarId(1),
+                    },
+                    IrInstr::Assign {
+                        dest: VarId(5),
+                        src: VarId(16),
+                    },
+                ],
+                ret_none(),
+            ),
+            entry_block: BlockId(0),
+            return_type: None,
+            type_idx: TypeIdx::new(0),
+            needs_host: false,
+        };
         eliminate(&mut func);
         // Coalescing v16→v5 is blocked because v5 is read between def(v16) and Assign.
         assert_eq!(func.blocks[0].instructions.len(), 3);
@@ -509,9 +625,9 @@ mod tests {
 
     #[test]
     fn chain_coalesced() {
-        // v7 = Const(2); v_a = Assign(v7); v1 = Assign(v_a)
-        // Round 1: v7 single-use → coalesce v_a=Const(2), remove first Assign.
-        // Round 2: v_a single-use → coalesce v1=Const(2), remove second Assign.
+        // v7 = Const(2); v10 = Assign(v7); v1 = Assign(v10)
+        // Global copy prop: v10→v7, v1→v10→v7. Both Assigns removed.
+        // Result: v7 = Const(2).
         let mut func = make_func(single_block(
             vec![
                 IrInstr::Const {
@@ -535,8 +651,8 @@ mod tests {
             IrInstr::Const {
                 dest,
                 value: IrValue::I32(2),
-            } => assert_eq!(*dest, VarId(1)),
-            other => panic!("expected Const(v1,2), got {other:?}"),
+            } => assert_eq!(*dest, VarId(7)),
+            other => panic!("expected Const(v7,2), got {other:?}"),
         }
     }
 
@@ -544,7 +660,8 @@ mod tests {
 
     #[test]
     fn dead_local_pruned_after_coalesce() {
-        // v7 is in locals; after coalescing v7 is gone from instructions.
+        // v7 = Const(2); v1 = Assign(v7)
+        // Global copy prop: v1→v7, Assign removed. v7 survives, v1 is dead.
         let mut func = make_func_with_locals(
             single_block(
                 vec![
@@ -562,14 +679,14 @@ mod tests {
             vec![(VarId(7), WasmType::I32), (VarId(1), WasmType::I32)],
         );
         eliminate(&mut func);
-        // v7 should be pruned; v1 (now has the Const) should survive.
+        // v1 should be pruned (its uses rewritten to v7); v7 survives.
         assert!(
-            !func.locals.iter().any(|(v, _)| *v == VarId(7)),
-            "v7 should be pruned from locals"
+            func.locals.iter().any(|(v, _)| *v == VarId(7)),
+            "v7 should remain in locals"
         );
         assert!(
-            func.locals.iter().any(|(v, _)| *v == VarId(1)),
-            "v1 should remain in locals"
+            !func.locals.iter().any(|(v, _)| *v == VarId(1)),
+            "v1 should be pruned from locals"
         );
     }
 
@@ -602,8 +719,8 @@ mod tests {
 
     #[test]
     fn fibo_b0_pattern() {
-        // v7 = Const(2); v1 = Assign(v7)   →  v1 = Const(2)
-        // v8 = Const(2); BranchIf using v8  →  v8 stays (used in BranchIf, not Assign)
+        // v7 = Const(2); v1 = Assign(v7); v8 = Const(2); v9 = BinOp(v0, v8)
+        // Global copy prop: v1→v7, Assign removed. 3 instrs remain.
         let mut func = make_func(single_block(
             vec![
                 IrInstr::Const {
@@ -632,20 +749,19 @@ mod tests {
             },
         ));
         eliminate(&mut func);
-        // v7 (single-use in Assign) coalesced into v1; v8, v9 remain.
         let instrs = &func.blocks[0].instructions;
         assert_eq!(
             instrs.len(),
             3,
             "only v7+Assign pair removed, leaving 3 instrs"
         );
-        // First instruction should now define v1 directly.
+        // First instruction is v7 = Const(2) (producer survives).
         match &instrs[0] {
             IrInstr::Const {
                 dest,
                 value: IrValue::I32(2),
-            } => assert_eq!(*dest, VarId(1)),
-            other => panic!("expected Const(v1,2), got {other:?}"),
+            } => assert_eq!(*dest, VarId(7)),
+            other => panic!("expected Const(v7,2), got {other:?}"),
         }
     }
 
@@ -741,8 +857,8 @@ mod tests {
     }
 
     #[test]
-    fn forward_blocked_by_cross_block_use() {
-        // v_dst used in another block → do NOT forward
+    fn forward_cross_block_use_propagated() {
+        // v_dst used in another block → global copy prop replaces v10 with v0
         let mut func = make_func(vec![
             IrBlock {
                 id: BlockId(0),
@@ -766,43 +882,49 @@ mod tests {
             },
         ]);
         eliminate(&mut func);
-        // Assign must remain in B0 because v10 is used in B1
-        assert_eq!(func.blocks[0].instructions.len(), 1);
-        assert!(matches!(
-            func.blocks[0].instructions[0],
-            IrInstr::Assign {
-                dest: VarId(10),
-                src: VarId(0)
-            }
-        ));
+        // Global copy prop rewrites v10 → v0 in B1; then the Assign has no
+        // remaining uses and is removed by the forward pass.
+        match &func.blocks[1].instructions[0] {
+            IrInstr::BinOp { lhs, .. } => assert_eq!(*lhs, VarId(0), "lhs should be v0"),
+            other => panic!("expected BinOp, got {other:?}"),
+        }
     }
 
     #[test]
     fn forward_blocked_by_src_redef_before_last_use() {
-        // v_dst = Assign(v_src)
-        // v_src = v_src + 1      ← redefines v_src
-        // use(v_dst)             ← last use — would see wrong v_src value
-        let mut func = make_func(single_block(
-            vec![
-                IrInstr::Assign {
-                    dest: VarId(10),
-                    src: VarId(0),
-                },
-                IrInstr::BinOp {
-                    dest: VarId(0), // redefines v_src = v0
-                    op: BinOp::I32Add,
-                    lhs: VarId(0),
-                    rhs: VarId(1),
-                },
-                IrInstr::BinOp {
-                    dest: VarId(11),
-                    op: BinOp::I32Add,
-                    lhs: VarId(10), // last use of v_dst
-                    rhs: VarId(2),
-                },
-            ],
-            ret_none(),
-        ));
+        // Non-SSA: v0 is a param AND redefined by BinOp (2 defs).
+        // v10 = Assign(v0); v0 = v0+v1; v11 = v10+v2
+        // Global copy prop skips v10 because v0 (src) has >1 def.
+        // Forward pass also blocked: v0 redefined before last use of v10.
+        let mut func = IrFunction {
+            params: vec![(VarId(0), WasmType::I32)],
+            locals: vec![],
+            blocks: single_block(
+                vec![
+                    IrInstr::Assign {
+                        dest: VarId(10),
+                        src: VarId(0),
+                    },
+                    IrInstr::BinOp {
+                        dest: VarId(0), // redefines v_src = v0
+                        op: BinOp::I32Add,
+                        lhs: VarId(0),
+                        rhs: VarId(1),
+                    },
+                    IrInstr::BinOp {
+                        dest: VarId(11),
+                        op: BinOp::I32Add,
+                        lhs: VarId(10), // last use of v_dst
+                        rhs: VarId(2),
+                    },
+                ],
+                ret_none(),
+            ),
+            entry_block: BlockId(0),
+            return_type: None,
+            type_idx: TypeIdx::new(0),
+            needs_host: false,
+        };
         eliminate(&mut func);
         // v10 = Assign(v0) must NOT be eliminated: v0 is redefined before v10's last use
         assert_eq!(func.blocks[0].instructions.len(), 3);
@@ -1037,6 +1159,86 @@ mod tests {
         }
     }
 
+    // ── Cross-block copy propagation ────────────────────────────────────
+
+    #[test]
+    fn global_copy_prop_chain_across_blocks() {
+        // B0: v10 = Assign(v0)
+        // B1: v20 = Assign(v10)
+        // B2: Return(v20)
+        //
+        // Chain: v20 → v10 → v0.  After global copy prop, B2 returns v0.
+        let mut func = make_func(vec![
+            IrBlock {
+                id: BlockId(0),
+                instructions: vec![IrInstr::Assign {
+                    dest: VarId(10),
+                    src: VarId(0),
+                }],
+                terminator: IrTerminator::Jump { target: BlockId(1) },
+            },
+            IrBlock {
+                id: BlockId(1),
+                instructions: vec![IrInstr::Assign {
+                    dest: VarId(20),
+                    src: VarId(10),
+                }],
+                terminator: IrTerminator::Jump { target: BlockId(2) },
+            },
+            IrBlock {
+                id: BlockId(2),
+                instructions: vec![],
+                terminator: IrTerminator::Return {
+                    value: Some(VarId(20)),
+                },
+            },
+        ]);
+        eliminate(&mut func);
+        // v20 → v10 → v0; Return should use v0
+        match &func.blocks[2].terminator {
+            IrTerminator::Return { value: Some(v) } => assert_eq!(*v, VarId(0)),
+            other => panic!("expected Return(v0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn global_copy_prop_multiple_uses_across_blocks() {
+        // B0: v10 = Assign(v0)
+        // B1: v11 = BinOp(v10, v10)  — two uses of v10 in another block
+        //
+        // Both uses should be rewritten to v0.
+        let mut func = make_func(vec![
+            IrBlock {
+                id: BlockId(0),
+                instructions: vec![IrInstr::Assign {
+                    dest: VarId(10),
+                    src: VarId(0),
+                }],
+                terminator: IrTerminator::Jump { target: BlockId(1) },
+            },
+            IrBlock {
+                id: BlockId(1),
+                instructions: vec![IrInstr::BinOp {
+                    dest: VarId(11),
+                    op: BinOp::I32Add,
+                    lhs: VarId(10),
+                    rhs: VarId(10),
+                }],
+                terminator: IrTerminator::Return {
+                    value: Some(VarId(11)),
+                },
+            },
+        ]);
+        eliminate(&mut func);
+        match &func.blocks[1].instructions[0] {
+            IrInstr::BinOp { lhs, rhs, .. } => {
+                assert_eq!(*lhs, VarId(0));
+                assert_eq!(*rhs, VarId(0));
+            }
+            other => panic!("expected BinOp, got {other:?}"),
+        }
+    }
+
     // ── Regression: cross-block v_src must NOT be coalesced ──────────────
     //
     // Bug: the old per-block use_count counted v_src uses only within the
@@ -1047,17 +1249,12 @@ mod tests {
     // returned 0 (the default initial value) instead of the correct result.
 
     #[test]
-    fn cross_block_src_not_coalesced() {
-        // Block 0: v3 = Const(1)
-        //          v0 = Assign(v3)    ← local.set; v3 single-use globally → OK to coalesce
-        //          v10 = Assign(v0)   ← local.get snapshot (1 use in B0)
-        //          Jump(B1)
+    fn cross_block_all_copies_resolved() {
+        // Block 0: v3 = Const(1); v0 = Assign(v3); v10 = Assign(v0)
+        // Block 1: v20 = Assign(v0); Return(v20)
         //
-        // Block 1: v20 = Assign(v0)   ← local.get snapshot (1 use in B1)
-        //          Return(v20)
-        //
-        // Global use_count[v0] = 2 (B0 index 2 AND B1 index 0) → must NOT coalesce v10=Assign(v0).
-        // If coalesced (buggy), v0 would vanish from B0 and B1 would read an undefined variable.
+        // Global copy prop chains: v0→v3, v10→v0→v3, v20→v0→v3.
+        // All Assigns are removed, Return uses v3. v3 is still defined.
         let mut func = make_func(vec![
             IrBlock {
                 id: BlockId(0),
@@ -1090,17 +1287,21 @@ mod tests {
         ]);
         eliminate(&mut func);
 
-        // v3 is single-use globally → coalesced into v0: B0[0] becomes `v0 = Const(1)`.
-        // v0 has 2 global uses → NOT coalesced; v0 must still be defined in Block 0.
+        // v3 must still be defined in Block 0 (it's the root).
         let b0_dests: Vec<VarId> = func.blocks[0]
             .instructions
             .iter()
             .filter_map(instr_dest)
             .collect();
         assert!(
-            b0_dests.contains(&VarId(0)),
-            "v0 must still be defined in Block 0 (it is read in Block 1); got: {b0_dests:?}"
+            b0_dests.contains(&VarId(3)),
+            "v3 must still be defined in Block 0; got: {b0_dests:?}"
         );
+        // Return should use v3 directly.
+        match &func.blocks[1].terminator {
+            IrTerminator::Return { value: Some(v) } => assert_eq!(*v, VarId(3)),
+            other => panic!("expected Return(v3), got {other:?}"),
+        }
     }
 
     // ── Multi-block: each block is independent ────────────────────────────
