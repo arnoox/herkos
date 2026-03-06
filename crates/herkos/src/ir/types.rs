@@ -596,6 +596,45 @@ pub enum UnOp {
 }
 
 impl BinOp {
+    /// Returns `true` if this operation is a comparison (produces 0 or 1).
+    pub fn is_comparison(&self) -> bool {
+        matches!(
+            self,
+            BinOp::I32Eq
+                | BinOp::I32Ne
+                | BinOp::I32LtS
+                | BinOp::I32LtU
+                | BinOp::I32GtS
+                | BinOp::I32GtU
+                | BinOp::I32LeS
+                | BinOp::I32LeU
+                | BinOp::I32GeS
+                | BinOp::I32GeU
+                | BinOp::I64Eq
+                | BinOp::I64Ne
+                | BinOp::I64LtS
+                | BinOp::I64LtU
+                | BinOp::I64GtS
+                | BinOp::I64GtU
+                | BinOp::I64LeS
+                | BinOp::I64LeU
+                | BinOp::I64GeS
+                | BinOp::I64GeU
+                | BinOp::F32Eq
+                | BinOp::F32Ne
+                | BinOp::F32Lt
+                | BinOp::F32Gt
+                | BinOp::F32Le
+                | BinOp::F32Ge
+                | BinOp::F64Eq
+                | BinOp::F64Ne
+                | BinOp::F64Lt
+                | BinOp::F64Gt
+                | BinOp::F64Le
+                | BinOp::F64Ge
+        )
+    }
+
     /// Returns the WasmType of the result produced by this operation.
     ///
     /// Note: all comparison operations return i32 (0 or 1), even for i64/f32/f64 operands.

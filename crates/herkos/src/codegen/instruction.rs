@@ -115,12 +115,24 @@ pub fn generate_instruction_with_info<B: Backend>(
     Ok(code)
 }
 
+/// An inlined comparison for a `BranchIf` terminator.
+///
+/// When the `BranchIf` condition is defined by a single-use comparison BinOp,
+/// the codegen skips emitting the comparison instruction and passes this info
+/// to the terminator so the backend can emit `if lhs >= rhs { ... }` directly.
+pub struct InlinedCmp {
+    pub op: BinOp,
+    pub lhs: VarId,
+    pub rhs: VarId,
+}
+
 /// Generate code for a terminator with BlockId to index mapping.
 pub fn generate_terminator_with_mapping<B: Backend>(
     backend: &B,
     term: &IrTerminator,
     block_id_to_index: &HashMap<BlockId, usize>,
     func_return_type: Option<WasmType>,
+    inlined_cmp: Option<&InlinedCmp>,
 ) -> String {
     match term {
         IrTerminator::Return { value } => {
@@ -145,7 +157,11 @@ pub fn generate_terminator_with_mapping<B: Backend>(
         } => {
             let true_idx = block_id_to_index[if_true];
             let false_idx = block_id_to_index[if_false];
-            backend.emit_branch_if_to_index(*condition, true_idx, false_idx)
+            if let Some(cmp) = inlined_cmp {
+                backend.emit_branch_cmp_to_index(cmp.op, cmp.lhs, cmp.rhs, true_idx, false_idx)
+            } else {
+                backend.emit_branch_if_to_index(*condition, true_idx, false_idx)
+            }
         }
 
         IrTerminator::BranchTable {

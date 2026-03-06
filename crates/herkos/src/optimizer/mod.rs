@@ -13,6 +13,8 @@ use anyhow::Result;
 pub(crate) mod utils;
 
 // ── Passes ───────────────────────────────────────────────────────────────────
+mod algebraic;
+mod branch_fold;
 mod const_prop;
 mod copy_prop;
 mod dead_blocks;
@@ -44,11 +46,16 @@ pub fn optimize_ir(module_info: LoweredModuleInfo) -> Result<LoweredModuleInfo> 
 
             // Value optimizations
             const_prop::eliminate(func);
+            algebraic::eliminate(func);
             copy_prop::eliminate(func);
 
             // Redundancy elimination
             local_cse::eliminate(func);
             copy_prop::eliminate(func);
+            dead_instrs::eliminate(func);
+
+            // Branch simplification
+            branch_fold::eliminate(func);
             dead_instrs::eliminate(func);
 
             // Loop optimization
