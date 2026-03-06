@@ -20,6 +20,7 @@ mod copy_prop;
 mod dead_blocks;
 mod dead_instrs;
 mod empty_blocks;
+mod gvn;
 mod licm;
 mod local_cse;
 mod merge_blocks;
@@ -51,6 +52,7 @@ pub fn optimize_ir(module_info: LoweredModuleInfo) -> Result<LoweredModuleInfo> 
 
             // Redundancy elimination
             local_cse::eliminate(func);
+            gvn::eliminate(func);
             copy_prop::eliminate(func);
             dead_instrs::eliminate(func);
 
