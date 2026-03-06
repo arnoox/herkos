@@ -172,10 +172,27 @@ pub fn generate_function_with_info<B: Backend>(
     output.push_str("    loop {\n");
     output.push_str("        match __current_block {\n");
 
+    // Build global use counts for branch condition inlining.
+    let global_uses = crate::optimizer::utils::build_global_use_count(ir_func);
+
     for (idx, block) in ir_func.blocks.iter().enumerate() {
         output.push_str(&format!("            Block::B{} => {{\n", idx));
 
+        // Detect if the BranchIf condition is a single-use comparison BinOp
+        // defined in this block — if so, skip emitting it and inline into branch.
+        let inlined_cmp = detect_inlined_cmp(block, &global_uses);
+        let skip_var = inlined_cmp.as_ref().map(|_| match &block.terminator {
+            IrTerminator::BranchIf { condition, .. } => *condition,
+            _ => unreachable!(),
+        });
+
         for instr in &block.instructions {
+            // Skip the inlined comparison instruction
+            if let Some(skip) = skip_var {
+                if crate::optimizer::utils::instr_dest(instr) == Some(skip) {
+                    continue;
+                }
+            }
             let code =
                 crate::codegen::instruction::generate_instruction_with_info(backend, instr, info)?;
             output.push_str(&code);
@@ -187,6 +204,7 @@ pub fn generate_function_with_info<B: Backend>(
             &block.terminator,
             &block_id_to_index,
             ir_func.return_type,
+            inlined_cmp.as_ref(),
         );
         output.push_str(&term_code);
         output.push('\n');
@@ -288,6 +306,48 @@ fn generate_signature_with_info<B: Backend>(
     ));
 
     sig
+}
+
+/// Detect whether a block's `BranchIf` condition is defined by a single-use
+/// comparison `BinOp` instruction within the same block. If so, return the
+/// comparison info for inlining into the branch.
+fn detect_inlined_cmp(
+    block: &IrBlock,
+    global_uses: &std::collections::HashMap<VarId, usize>,
+) -> Option<crate::codegen::instruction::InlinedCmp> {
+    let condition = match &block.terminator {
+        IrTerminator::BranchIf { condition, .. } => *condition,
+        _ => return None,
+    };
+
+    // Condition must have exactly one use (the BranchIf itself).
+    if global_uses.get(&condition).copied().unwrap_or(0) != 1 {
+        return None;
+    }
+
+    // Find the defining instruction in this block.
+    for (i, instr) in block.instructions.iter().enumerate() {
+        if let IrInstr::BinOp { dest, op, lhs, rhs } = instr {
+            if *dest == condition && op.is_comparison() {
+                // Safety: verify no instruction after this one redefines
+                // lhs or rhs. If they do, inlining at branch-time would see
+                // the wrong operand values.
+                let operands_stable = !block.instructions[i + 1..].iter().any(|later| {
+                    let d = crate::optimizer::utils::instr_dest(later);
+                    d == Some(*lhs) || d == Some(*rhs)
+                });
+                if operands_stable {
+                    return Some(crate::codegen::instruction::InlinedCmp {
+                        op: *op,
+                        lhs: *lhs,
+                        rhs: *rhs,
+                    });
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// Check if an IR function has any import calls.

@@ -16,6 +16,7 @@ wasmparser = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 heck = { workspace = true }
+herkos-runtime = { path = "../herkos-runtime", version = "0.1.1" }
 
 [dev-dependencies]
 wat = { workspace = true }

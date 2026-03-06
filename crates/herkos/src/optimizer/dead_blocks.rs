@@ -4,27 +4,10 @@
 //! arise naturally during IR translation when code follows an `unreachable` or
 //! `return` instruction inside a Wasm structured control flow construct.
 
-use crate::ir::{BlockId, IrBlock, IrFunction, IrTerminator};
+use super::utils::terminator_successors;
+use crate::ir::{BlockId, IrBlock, IrFunction};
 use anyhow::{bail, Result};
 use std::collections::{HashMap, HashSet};
-
-/// Returns the successor block IDs for a terminator.
-fn terminator_successors(term: &IrTerminator) -> Vec<BlockId> {
-    match term {
-        IrTerminator::Return { .. } | IrTerminator::Unreachable => vec![],
-        IrTerminator::Jump { target } => vec![*target],
-        IrTerminator::BranchIf {
-            if_true, if_false, ..
-        } => vec![*if_true, *if_false],
-        IrTerminator::BranchTable {
-            targets, default, ..
-        } => targets
-            .iter()
-            .chain(std::iter::once(default))
-            .copied()
-            .collect(),
-    }
-}
 
 /// Computes the set of block IDs reachable from the entry block via BFS.
 fn reachable_blocks(func: &IrFunction) -> Result<HashSet<BlockId>> {
@@ -61,7 +44,7 @@ pub fn eliminate(func: &mut IrFunction) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{IrInstr, IrValue, TypeIdx, VarId, WasmType};
+    use crate::ir::{IrInstr, IrTerminator, IrValue, TypeIdx, VarId, WasmType};
 
     /// Build a minimal `IrFunction` with the given blocks.
     /// Entry block is always `BlockId(0)`.

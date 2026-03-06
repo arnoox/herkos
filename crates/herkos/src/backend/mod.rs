@@ -106,6 +106,19 @@ pub trait Backend {
         if_false_idx: usize,
     ) -> String;
 
+    /// Emit Rust code for a conditional branch with an inlined comparison.
+    ///
+    /// Instead of `if condition != 0`, emits the comparison directly:
+    /// `if lhs >= rhs { ... } else { ... }`.
+    fn emit_branch_cmp_to_index(
+        &self,
+        op: BinOp,
+        lhs: VarId,
+        rhs: VarId,
+        if_true_idx: usize,
+        if_false_idx: usize,
+    ) -> String;
+
     /// Emit Rust code for multi-way branch (br_table) using block indices.
     fn emit_branch_table_to_index(
         &self,

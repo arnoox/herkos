@@ -12,6 +12,44 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VarId(pub u32);
 
+/// One-time-use definition token for an SSA variable.
+///
+/// Returned by [`IrBuilder::new_var()`] and consumed by [`IrBuilder::emit_def()`].
+/// Non-`Copy`/non-`Clone` so that the borrow checker enforces single-definition:
+/// attempting to emit the same variable twice is a compile-time error.
+///
+/// ```compile_fail
+/// let v = builder.new_var();
+/// let _ = builder.emit_def(v, |id| IrInstr::Const { dest: id, value: IrValue::I32(1) });
+/// let _ = builder.emit_def(v, |id| IrInstr::Const { dest: id, value: IrValue::I32(2) }); // error: use of moved value
+/// ```
+#[must_use = "DefVar must be emitted exactly once via emit_def or emit_phi_def"]
+#[derive(Debug)]
+pub struct DefVar(pub(super) VarId);
+
+impl DefVar {
+    /// Consume this token and return the underlying [`VarId`].
+    /// Used internally by emit methods to build [`IrInstr`] with the correct dest.
+    pub(super) fn into_var_id(self) -> VarId {
+        self.0
+    }
+}
+
+/// Multi-use read token for an already-defined SSA variable.
+///
+/// Obtained from [`IrBuilder::emit_def()`] or [`IrBuilder::emit_phi_def()`].
+/// `Copy + Clone` because a variable may be read any number of times.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UseVar(pub(super) VarId);
+
+impl UseVar {
+    /// Return the underlying [`VarId`].
+    /// Used internally when building [`IrInstr`] source fields.
+    pub(super) fn var_id(self) -> VarId {
+        self.0
+    }
+}
+
 /// Generic index type with a phantom tag to distinguish different index spaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Idx<TAG> {
@@ -315,6 +353,17 @@ pub enum IrInstr {
         val2: VarId,
         condition: VarId,
     },
+
+    /// SSA phi node: at a join point, select the reaching definition based on which
+    /// predecessor block was taken. `srcs` maps predecessor BlockId to the VarId that
+    /// holds the value of the local at the end of that predecessor.
+    ///
+    /// Phi nodes are inserted during IR construction and lowered (converted to Assign
+    /// instructions in predecessor blocks) before codegen.
+    Phi {
+        dest: VarId,
+        srcs: Vec<(BlockId, VarId)>,
+    },
 }
 
 /// Block terminator — how control flow exits a basic block.
@@ -345,7 +394,7 @@ pub enum IrTerminator {
 }
 
 /// Constant value in the IR.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum IrValue {
     I32(i32),
     I64(i64),
@@ -383,7 +432,7 @@ impl fmt::Display for IrValue {
 }
 
 /// Binary operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinOp {
     // i32 operations
     I32Add,
@@ -479,7 +528,7 @@ pub enum BinOp {
 }
 
 /// Unary operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnOp {
     // i32 unary
     I32Clz,    // Count leading zeros
@@ -547,6 +596,45 @@ pub enum UnOp {
 }
 
 impl BinOp {
+    /// Returns `true` if this operation is a comparison (produces 0 or 1).
+    pub fn is_comparison(&self) -> bool {
+        matches!(
+            self,
+            BinOp::I32Eq
+                | BinOp::I32Ne
+                | BinOp::I32LtS
+                | BinOp::I32LtU
+                | BinOp::I32GtS
+                | BinOp::I32GtU
+                | BinOp::I32LeS
+                | BinOp::I32LeU
+                | BinOp::I32GeS
+                | BinOp::I32GeU
+                | BinOp::I64Eq
+                | BinOp::I64Ne
+                | BinOp::I64LtS
+                | BinOp::I64LtU
+                | BinOp::I64GtS
+                | BinOp::I64GtU
+                | BinOp::I64LeS
+                | BinOp::I64LeU
+                | BinOp::I64GeS
+                | BinOp::I64GeU
+                | BinOp::F32Eq
+                | BinOp::F32Ne
+                | BinOp::F32Lt
+                | BinOp::F32Gt
+                | BinOp::F32Le
+                | BinOp::F32Ge
+                | BinOp::F64Eq
+                | BinOp::F64Ne
+                | BinOp::F64Lt
+                | BinOp::F64Gt
+                | BinOp::F64Le
+                | BinOp::F64Ge
+        )
+    }
+
     /// Returns the WasmType of the result produced by this operation.
     ///
     /// Note: all comparison operations return i32 (0 or 1), even for i64/f32/f64 operands.

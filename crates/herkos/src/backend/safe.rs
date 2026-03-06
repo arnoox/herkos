@@ -564,6 +564,21 @@ impl Backend for SafeBackend {
         )
     }
 
+    fn emit_branch_cmp_to_index(
+        &self,
+        op: BinOp,
+        lhs: VarId,
+        rhs: VarId,
+        if_true_idx: usize,
+        if_false_idx: usize,
+    ) -> String {
+        let cmp_expr = format_cmp_expr(op, lhs, rhs);
+        format!(
+            "                if {cmp_expr} {{\n                    __current_block = Block::B{};\n                }} else {{\n                    __current_block = Block::B{};\n                }}\n                continue;",
+            if_true_idx, if_false_idx
+        )
+    }
+
     fn emit_branch_table_to_index(
         &self,
         index: VarId,
@@ -595,5 +610,44 @@ impl Backend for SafeBackend {
         code.push_str("                continue;");
 
         code
+    }
+}
+
+/// Format a comparison expression for use in branch conditions.
+fn format_cmp_expr(op: BinOp, lhs: VarId, rhs: VarId) -> String {
+    match op {
+        // Signed i32 comparisons
+        BinOp::I32Eq => format!("{lhs} == {rhs}"),
+        BinOp::I32Ne => format!("{lhs} != {rhs}"),
+        BinOp::I32LtS => format!("{lhs} < {rhs}"),
+        BinOp::I32GtS => format!("{lhs} > {rhs}"),
+        BinOp::I32LeS => format!("{lhs} <= {rhs}"),
+        BinOp::I32GeS => format!("{lhs} >= {rhs}"),
+        // Unsigned i32 comparisons
+        BinOp::I32LtU => format!("({lhs} as u32) < ({rhs} as u32)"),
+        BinOp::I32GtU => format!("({lhs} as u32) > ({rhs} as u32)"),
+        BinOp::I32LeU => format!("({lhs} as u32) <= ({rhs} as u32)"),
+        BinOp::I32GeU => format!("({lhs} as u32) >= ({rhs} as u32)"),
+        // Signed i64 comparisons
+        BinOp::I64Eq => format!("{lhs} == {rhs}"),
+        BinOp::I64Ne => format!("{lhs} != {rhs}"),
+        BinOp::I64LtS => format!("{lhs} < {rhs}"),
+        BinOp::I64GtS => format!("{lhs} > {rhs}"),
+        BinOp::I64LeS => format!("{lhs} <= {rhs}"),
+        BinOp::I64GeS => format!("{lhs} >= {rhs}"),
+        // Unsigned i64 comparisons
+        BinOp::I64LtU => format!("({lhs} as u64) < ({rhs} as u64)"),
+        BinOp::I64GtU => format!("({lhs} as u64) > ({rhs} as u64)"),
+        BinOp::I64LeU => format!("({lhs} as u64) <= ({rhs} as u64)"),
+        BinOp::I64GeU => format!("({lhs} as u64) >= ({rhs} as u64)"),
+        // Float comparisons
+        BinOp::F32Eq | BinOp::F64Eq => format!("{lhs} == {rhs}"),
+        BinOp::F32Ne | BinOp::F64Ne => format!("{lhs} != {rhs}"),
+        BinOp::F32Lt | BinOp::F64Lt => format!("{lhs} < {rhs}"),
+        BinOp::F32Gt | BinOp::F64Gt => format!("{lhs} > {rhs}"),
+        BinOp::F32Le | BinOp::F64Le => format!("{lhs} <= {rhs}"),
+        BinOp::F32Ge | BinOp::F64Ge => format!("{lhs} >= {rhs}"),
+        // Non-comparison ops should never reach here
+        _ => format!("{lhs} != 0 /* unexpected non-comparison op */"),
     }
 }

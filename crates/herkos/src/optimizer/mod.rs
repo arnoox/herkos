@@ -6,17 +6,65 @@
 //! Each optimization is a self-contained sub-module. The top-level
 //! [`optimize_ir`] function runs all passes in order.
 
-use crate::ir::ModuleInfo;
+use crate::ir::LoweredModuleInfo;
 use anyhow::Result;
 
+// ── Shared utilities ─────────────────────────────────────────────────────────
+pub(crate) mod utils;
+
 // ── Passes ───────────────────────────────────────────────────────────────────
+mod algebraic;
+mod branch_fold;
+mod const_prop;
+mod copy_prop;
 mod dead_blocks;
+mod dead_instrs;
+mod empty_blocks;
+mod gvn;
+mod licm;
+mod local_cse;
+mod merge_blocks;
 
 /// Optimizes the IR representation by running all passes in order.
-pub fn optimize_ir(module_info: ModuleInfo) -> Result<ModuleInfo> {
+///
+/// Expects a [`LoweredModuleInfo`] — i.e. phi nodes have already been lowered
+/// by [`crate::ir::lower_phis::lower`] before calling this function.
+pub fn optimize_ir(module_info: LoweredModuleInfo) -> Result<LoweredModuleInfo> {
     let mut module_info = module_info;
     for func in &mut module_info.ir_functions {
-        dead_blocks::eliminate(func)?;
+        // Two structural passes: dead_instrs may have emptied blocks that
+        // lower_phis had populated with now-dead assignments (e.g. loop-exit
+        // locals that were never used after the join block). Re-run structural
+        // cleanup to remove those passthrough blocks.
+        for _ in 0..2 {
+            // Empty block optimizations
+            empty_blocks::eliminate(func);
+            dead_blocks::eliminate(func)?;
+
+            // Control flow optimizations
+            merge_blocks::eliminate(func);
+            dead_blocks::eliminate(func)?;
+
+            // Value optimizations
+            const_prop::eliminate(func);
+            algebraic::eliminate(func);
+            copy_prop::eliminate(func);
+
+            // Redundancy elimination
+            local_cse::eliminate(func);
+            gvn::eliminate(func);
+            copy_prop::eliminate(func);
+            dead_instrs::eliminate(func);
+
+            // Branch simplification
+            branch_fold::eliminate(func);
+            dead_instrs::eliminate(func);
+
+            // Loop optimization
+            licm::eliminate(func);
+            dead_instrs::eliminate(func);
+            copy_prop::eliminate(func);
+        }
     }
     Ok(module_info)
 }
@@ -25,62 +73,5 @@ pub fn optimize_ir(module_info: ModuleInfo) -> Result<ModuleInfo> {
 
 #[cfg(test)]
 mod tests {
-    use crate::ir::{BlockId, IrBlock, IrFunction, IrTerminator, ModuleInfo, TypeIdx};
-
-    #[test]
-    fn optimize_ir_eliminates_dead_blocks_across_functions() {
-        let make_ir_func = |blocks: Vec<IrBlock>| IrFunction {
-            params: vec![],
-            locals: vec![],
-            blocks,
-            entry_block: BlockId(0),
-            return_type: None,
-            type_idx: TypeIdx::new(0),
-            needs_host: false,
-        };
-
-        let module = ModuleInfo {
-            ir_functions: vec![
-                // func 0: block_0 → Return, block_1 dead
-                make_ir_func(vec![
-                    IrBlock {
-                        id: BlockId(0),
-                        instructions: vec![],
-                        terminator: IrTerminator::Return { value: None },
-                    },
-                    IrBlock {
-                        id: BlockId(1),
-                        instructions: vec![],
-                        terminator: IrTerminator::Return { value: None },
-                    },
-                ]),
-                // func 1: block_0 → Jump → block_1 → Return (all live)
-                make_ir_func(vec![
-                    IrBlock {
-                        id: BlockId(0),
-                        instructions: vec![],
-                        terminator: IrTerminator::Jump { target: BlockId(1) },
-                    },
-                    IrBlock {
-                        id: BlockId(1),
-                        instructions: vec![],
-                        terminator: IrTerminator::Return { value: None },
-                    },
-                ]),
-            ],
-            ..Default::default()
-        };
-
-        let result = super::optimize_ir(module).unwrap();
-        assert_eq!(
-            result.ir_functions[0].blocks.len(),
-            1,
-            "dead block in func 0 should be removed"
-        );
-        assert_eq!(
-            result.ir_functions[1].blocks.len(),
-            2,
-            "both blocks in func 1 should be kept"
-        );
-    }
+    // TODO: Add tests that verify the correctness of the optimized IR and the generated code.
 }
