@@ -74,7 +74,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = super::optimize_ir(module).unwrap();
+        let result = super::optimize_ir(crate::ir::lower_phis::lower(module)).unwrap();
         assert_eq!(
             result.ir_functions[0].blocks.len(),
             1,
