@@ -103,6 +103,14 @@ pub fn generate_instruction_with_info<B: Backend>(
             val2,
             condition,
         } => backend.emit_select(*dest, *val1, *val2, *condition),
+
+        // Phi nodes must be lowered to Assign instructions by the lower_phis pass
+        // before codegen runs. Reaching this arm is a compiler bug.
+        IrInstr::Phi { .. } => {
+            unreachable!(
+                "IrInstr::Phi must be lowered before codegen (lower_phis pass missed this block)"
+            )
+        }
     };
     Ok(code)
 }
