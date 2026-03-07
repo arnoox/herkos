@@ -8,12 +8,12 @@
 //!
 //! ## Architecture
 //!
-//! The builder maintains **two stacks** that together implement Wasm semantics:
+//! The builder maintains **three** key data structures that together implement Wasm semantics:
 //!
-//! ### Value Stack (`value_stack: Vec<VarId>`)
+//! ### Value Stack (`value_stack: Vec<UseVar>`)
 //!
 //! Replaces Wasm's implicit evaluation stack. Instead of pushing raw values, we push
-//! variable IDs. Example:
+//! [`UseVar`] tokens for already-defined SSA variables. Example:
 //!
 //! ```text
 //! i32.const 5 → emit: v0 = const 5; push(v0)
@@ -28,7 +28,29 @@
 //! - `start_block`: jump target for loops (backward)
 //! - `end_block`: jump target for block exit (forward/join)
 //! - `else_block`: false branch for If
-//! - `result_var`: PHI node if block has a result type
+//! - `result_var`: phi convergence slot if the block has a result type
+//! - `locals_at_entry`: snapshot of `local_vars` at the time this frame was pushed
+//! - `branch_incoming`: predecessor snapshots from forward `br`/`br_if`/`br_table`
+//! - `loop_phi_vars` / `phi_patches`: phi source collection for loop back-edges
+//!
+//! ### Local Variable Map (`local_vars: Vec<UseVar>`)
+//!
+//! Maps each Wasm local index to the **current** SSA variable holding its value.
+//! This map is the key to SSA construction for mutable locals:
+//!
+//! - At function entry, each local (param or declared) gets a fresh variable via
+//!   `new_pre_alloc_var()`.  The map starts as `[v0, v1, ..., vN]`.
+//! - `local.get i`  → emit `vX = Assign(local_vars[i])` and push vX.  A fresh copy
+//!   is emitted (rather than re-using `local_vars[i]`) so that a later `local.set`
+//!   cannot retroactively change what was already pushed onto the value stack.
+//! - `local.set i`  → allocate `vY`, emit `vY = Assign(popped_value)`, set
+//!   `local_vars[i] = vY`.  Subsequent `local.get i` will see vY.
+//! - `local.tee i`  → same as `local.set`, but the value is also left on the stack.
+//!
+//! When control flow merges (at `End` of block/loop/if), different predecessors may
+//! hold different variables for the same local.  The builder compares predecessor
+//! snapshots and inserts `IrInstr::Phi` nodes for diverging locals, then updates
+//! `local_vars` to the phi dest variables.  See `translate.rs` for the full protocol.
 //!
 //! ## Flow
 //!
@@ -39,66 +61,166 @@
 //!    `value_stack`, allocates new variables, emits IR instructions, pushes results.
 //!
 //! 3. Control flow instructions (`block`, `loop`, `if`, `br`, etc.) manipulate the control stack
-//!    and create new basic blocks as needed.
+//!    and create new basic blocks as needed.  Branch instructions (`br`, `br_if`, `br_table`)
+//!    additionally snapshot `local_vars` and record it as a phi predecessor via
+//!    `record_forward_branch()` or `record_loop_back_branch()`.
 //!
-//! 4. Return: `IrFunction` with all blocks, variables typed, and control flow explicit.
+//! 4. At each `End`: predecessor snapshots are collected, `IrInstr::Phi` nodes are inserted for
+//!    locals with differing values, and `local_vars` is updated to the phi dest variables.
+//!
+//! 5. Return: `IrFunction` with all blocks, variables typed, control flow explicit, and phi
+//!    nodes at every join point.  The `lower_phis` pass then destructs these phis into
+//!    predecessor-block assignments before codegen.
 //!
 //! ## Invariants
 //!
 //! - **Entry block**: First `new_block()` call returns `BlockId(0)` (function entry).
 //! - **Value stack**: Operations pop N arguments, push ≤1 result.
 //! - **Control stack**: Push/pop balanced; each frame has a unique start/end pair.
-//! - **Local variables**: `local_vars[i]` = VarId for Wasm local index i (set once at start).
+//! - **Local variables**: `local_vars[i]` always holds the *current* SSA variable for Wasm
+//!   local `i`.  It is updated on every `local.set`/`local.tee` and at every join point
+//!   (where it may be replaced by a phi dest variable).
 //!
-//! ## Example 1
+//! ## Example 1 — simple arithmetic with a local
 //!
-//! Wasm: `(func (param $a i32) → i32 (local.get $a) (i32.const 1) (i32.add))`
+//! ```wasm
+//! (func (param $a i32) (result i32)
+//!   local.get $a
+//!   i32.const 1
+//!   i32.add)
+//! ```
 //!
 //! Generated IR:
 //! ```text
 //! block_0:
-//!   v2 = i32_add(v0, v1)
-//!   return v2
+//!   v2 = Assign(v0)      ;; local.get $a  → fresh SSA copy of param
+//!   v3 = Const(1)        ;; i32.const 1
+//!   v4 = I32Add(v2, v3)  ;; i32.add
+//!   return v4
+//!
+//! ;; v0 = param $a (implicitly defined at function entry)
+//! ;; v1 = result convergence slot allocated by push_control (internal)
 //! ```
-//! where v0 = param $a, v1 = const 1 (allocated during init/translation).
 //!
-//! ## Example 2 (if-else)
+//! Note: `local.get` emits a fresh `Assign` copy (v2) rather than pushing v0 directly.
+//! This ensures a later `local.set $a` cannot retroactively change values already
+//! pushed on the value stack.
 //!
+//! ## Example 2 — local.set creates fresh SSA variables
+//!
+//! ```wasm
+//! (func (param $n i32) (result i32)
+//!   local.get $n    ;; read $n
+//!   i32.const 1
+//!   i32.add
+//!   local.set $n    ;; overwrite $n with $n+1
+//!   local.get $n)   ;; read updated $n
+//! ```
+//!
+//! Generated IR (local_vars evolution shown inline):
 //! ```text
-//! Wasm:
-//!   if i32
-//!     (const 1)
-//!   else
-//!     (const 2)
-//!   end
+//! block_0:
+//!   ;; local_vars = [v0]   (v0 = param $n)
+//!   v2 = Assign(v0)        ;; local.get $n  → copy; local_vars = [v0]  (unchanged)
+//!   v3 = Const(1)
+//!   v4 = I32Add(v2, v3)
+//!   v5 = Assign(v4)        ;; local.set $n  → fresh var; local_vars = [v5]
+//!   v6 = Assign(v5)        ;; local.get $n  → copy of v5; local_vars = [v5] (unchanged)
+//!   return v6
 //! ```
 //!
-//! Generated blocks:
+//! ## Example 3 — if/else with phi at join
 //!
+//! ```wasm
+//! ;; (func (param $cond i32) (param $n i32) (result i32)
+//! ;;   local.get $cond
+//! ;;   if
+//! ;;     i32.const 10
+//! ;;     local.set $n    ;; then-branch: $n ← 10
+//! ;;   else
+//! ;;     i32.const 20
+//! ;;     local.set $n    ;; else-branch: $n ← 20
+//! ;;   end
+//! ;;   local.get $n)     ;; which value?
+//! ```
+//!
+//! SSA IR after translation (simplified var names):
 //! ```text
-//! ┌──────────────────┐
-//! │   block_0        │  Entry
-//! │  (condition)     │
-//! │  br_if block_2   │
-//! │  br block_3      │
-//! └────────┬─────────┘
-//!          │
-//!     ┌────┴────┐
-//!     ▼         ▼
-//! ┌─────────┐ ┌─────────┐
-//! │ block_1 │ │ block_2 │  True and False branches
-//! │ v1=1    │ │ v2=2    │
-//! │ br block│ │ br block│
-//! │   3     │ │   3     │
-//! └────┬────┘ └────┬────┘
-//!      │           │
-//!      └────┬──────┘
-//!           ▼
-//!     ┌──────────────┐
-//!     │  block_3     │  Join point
-//!     │ v0=phi(v1,v2)│
-//!     └──────────────┘
+//! block_0 (entry):
+//!   ;; local_vars = [v_cond, v_n]
+//!   v_cv = Assign(v_cond)               ;; local.get $cond
+//!   BranchIf(v_cv, then=block_1, else=block_2)
+//!
+//! block_1 (then):
+//!   ;; At If push: locals_at_entry = [v_cond, v_n]
+//!   ;; local_vars = [v_cond, v_n]   ← snapshot preserved
+//!   v_ten = Const(10)
+//!   v_nt  = Assign(v_ten)               ;; local.set $n → local_vars = [v_cond, v_nt]
+//!   jump block_3
+//!   ;; At Else: then_pred_info = (block_1, [v_cond, v_nt])
+//!
+//! block_2 (else):
+//!   ;; local_vars restored to [v_cond, v_n]  ← locals_at_entry
+//!   v_twenty = Const(20)
+//!   v_ne     = Assign(v_twenty)          ;; local.set $n → local_vars = [v_cond, v_ne]
+//!   jump block_3
+//!
+//! block_3 (join):
+//!   ;; Predecessors: (block_1, [v_cond, v_nt]) and (block_2, [v_cond, v_ne])
+//!   ;; $n differs → insert phi; $cond same → no phi
+//!   v_phi_n = Phi [(block_1, v_nt), (block_2, v_ne)]
+//!   ;; local_vars = [v_cond, v_phi_n]
+//!   v_r = Assign(v_phi_n)               ;; local.get $n
+//!   return v_r
 //! ```
+//!
+//! ## Example 4 — loop with phi vars for the back-edge
+//!
+//! ```wasm
+//! ;; (func (param $n i32) (result i32)
+//! ;;   (local $i i32)     ;; zero-initialized
+//! ;;   loop $L
+//! ;;     local.get $i
+//! ;;     i32.const 1
+//! ;;     i32.add
+//! ;;     local.set $i     ;; $i++
+//! ;;     local.get $i
+//! ;;     local.get $n
+//! ;;     i32.lt_s
+//! ;;     br_if $L)        ;; keep looping while $i < $n
+//! ;;   local.get $i)      ;; return final $i
+//! ```
+//!
+//! SSA IR after translation (simplified):
+//! ```text
+//! block_0 (pre-loop):
+//!   ;; local_vars = [v_n, v_i0]  (v_n=param, v_i0=0-init local)
+//!   ;; push_control(Loop) snapshots locals_at_entry=[v_n, v_i0]
+//!   ;; and substitutes local_vars = [p_n, p_i]  ← phi vars
+//!   jump block_1
+//!
+//! block_1 (loop header):     ← br_if backward target
+//!   ;; Phi instructions inserted here by emit_loop_phis at End:
+//!   p_n = Phi [(block_0, v_n),  (block_2, v_n2)]   ;; $n unchanged → trivial
+//!   p_i = Phi [(block_0, v_i0), (block_2, v_inew)]  ;; $i modified  → real phi
+//!   v_ic = Assign(p_i)              ;; local.get $i
+//!   v_ip = I32Add(v_ic, Const(1))
+//!   v_inew = Assign(v_ip)          ;; local.set $i → local_vars = [p_n, v_inew]
+//!   v_ic2 = Assign(v_inew)         ;; local.get $i
+//!   v_nc  = Assign(p_n)            ;; local.get $n
+//!   v_cmp = I32LtS(v_ic2, v_nc)
+//!   ;; br_if 0: record_loop_back_branch → phi_patches += (p_i, block_1, v_inew)
+//!   BranchIf(v_cmp, if_true=block_1, if_false=block_2)
+//!
+//! block_2 (loop exit):
+//!   ;; local_vars = [p_n, v_inew]  (fall-through from br_if false path)
+//!   v_ret = Assign(v_inew)         ;; local.get $i
+//!   return v_ret
+//! ```
+//!
+//! After `lower_phis`, the trivial `p_n = Phi[..., v_n]` becomes `p_n = Assign(v_n)`
+//! and the real `p_i` phi is rewritten as predecessor-block assignments:
+//! `block_0` gets `p_i = v_i0`, `block_1` gets `p_i = v_inew` (before its terminator).
 
 use super::super::types::*;
 use anyhow::{Context, Result};

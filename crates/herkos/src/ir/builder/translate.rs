@@ -1,7 +1,118 @@
-//! Operator translation - converts WebAssembly bytecode to SSA IR instructions.
+//! Operator translation — converts WebAssembly bytecode to SSA IR instructions.
 //!
-//! This module contains the `translate_operator` method and related emit helpers
+//! This module contains [`IrBuilder::translate_operator`] and the emit helpers
 //! that form the core of the Wasm-to-IR conversion logic.
+//!
+//! ## SSA and Phi-Node Tracking
+//!
+//! WebAssembly locals are mutable, but the IR is in SSA form: every variable is
+//! defined exactly once.  To reconcile this, every `local.set`/`local.tee`
+//! allocates a **fresh variable** and updates `self.local_vars[i]` to point to
+//! it.  Reads via `local.get` emit a copy of the current `local_vars[i]` so that
+//! the copy's definition is stable even if the local is overwritten later.
+//!
+//! When control flow merges (at the exit of a `block`, `loop`, or `if`/`else`),
+//! different predecessors may have written different variables to the same local.
+//! The IR resolves this with **phi nodes** (`IrInstr::Phi`), inserted at the join
+//! block, that select the right value depending on which predecessor ran.
+//!
+//! ### How phi predecessors are tracked
+//!
+//! Three mechanisms accumulate the predecessor information needed to build phi
+//! nodes:
+//!
+//! 1. **`ControlFrame::locals_at_entry`** — a snapshot of `self.local_vars` taken
+//!    when the frame is pushed.  Used as the "implicit else" predecessor for
+//!    `if`-without-`else`, and as the loop-entry predecessor for loop phis.
+//!
+//! 2. **`ControlFrame::branch_incoming`** — filled by `record_forward_branch()`
+//!    whenever a `br`/`br_if`/`br_table` jumps *forward* to the frame's
+//!    `end_block`.  Each entry is `(predecessor_block_id, local_vars_snapshot)`.
+//!    Loop frames are exempt: their backward branches go into `phi_patches` instead.
+//!
+//! 3. **`IrBuilder::phi_patches`** — filled by `record_loop_back_branch()` for
+//!    backward edges (`br` inside a loop).  Consumed by `emit_loop_phis()` when
+//!    the loop's `End` is processed.
+//!
+//! ### Protocol for branch instructions (`Br`, `BrIf`, `BrTable`)
+//!
+//! For every branch:
+//! 1. Determine whether the target frame is a `Loop` (backward) or not (forward).
+//! 2. Call the appropriate record method *before* terminating the block, so the
+//!    snapshot captures the local state at the branch point.
+//! 3. Terminate the block with the appropriate `IrTerminator`.
+//! 4. Mark subsequent code as dead (`dead_code = true`) for unconditional branches.
+//!
+//! ### Protocol for join points (`End` of Block / If / Else / Loop)
+//!
+//! When an `End` is processed:
+//! 1. Collect all predecessor snapshots: fall-through (current block, if reachable)
+//!    + `frame.branch_incoming` for forward targets, or `phi_patches` for loops.
+//! 2. Terminate the current block (jump to `end_block`).
+//! 3. Activate `end_block` with `start_real_block` (clears `dead_code`).
+//! 4. Call `insert_phis_at_join` to insert `IrInstr::Phi` for every local whose
+//!    value differs across predecessors, and update `self.local_vars` to the phi
+//!    dest vars.
+//!
+//! After all operators are translated, `lower_phis::lower` converts these phi
+//! nodes into ordinary predecessor-block assignments before the optimizer runs.
+//!
+//! ### End-to-end tracing example
+//!
+//! Consider an `if`/`else` that writes to a local:
+//!
+//! ```wasm
+//! ;; (func (param $cond i32) (param $x i32) (result i32)
+//! ;;   local.get $cond
+//! ;;   if
+//! ;;     i32.const 10  local.set $x   ;; then: $x ← 10
+//! ;;   else
+//! ;;     i32.const 20  local.set $x   ;; else: $x ← 20
+//! ;;   end
+//! ;;   local.get $x)                  ;; result = chosen value
+//! ```
+//!
+//! Step-by-step state of `local_vars` and the tracking structures:
+//!
+//! ```text
+//! ── entry ──────────────────────────────────────────────────────────
+//! local_vars = [v_cond, v_x]
+//!
+//! ── Operator::If ───────────────────────────────────────────────────
+//! push_control(If):  locals_at_entry = [v_cond, v_x]  ← snapshot
+//! BranchIf(v_cv, if_true=block_then, if_false=block_else)
+//! start_real_block(block_then)
+//!
+//! ── then-branch ─────────────────────────────────────────────────────
+//! local_vars = [v_cond, v_x]     (same as entry; then branch starts from snapshot)
+//! local.set $x → v_xt = Assign(10); local_vars = [v_cond, v_xt]
+//!
+//! ── Operator::Else ──────────────────────────────────────────────────
+//! then_pred_info = (block_then, [v_cond, v_xt])   ← saved for phi use at End
+//! terminate block_then: Jump → block_join
+//! local_vars restored to [v_cond, v_x]             ← locals_at_entry
+//! start_real_block(block_else)
+//!
+//! ── else-branch ─────────────────────────────────────────────────────
+//! local_vars = [v_cond, v_x]     (restored; else branch is independent of then)
+//! local.set $x → v_xe = Assign(20); local_vars = [v_cond, v_xe]
+//!
+//! ── Operator::End (Else frame) ──────────────────────────────────────
+//! preds = [
+//!   (block_then, [v_cond, v_xt]),   ← from then_pred_info
+//!   (block_else, [v_cond, v_xe]),   ← else fall-through (current block)
+//! ]
+//! terminate block_else: Jump → block_join
+//! start_real_block(block_join)
+//! insert_phis_at_join(block_join, preds):
+//!   $cond: v_cond == v_cond → no phi needed
+//!   $x:    v_xt   != v_xe   → v_phi = Phi[(block_then, v_xt), (block_else, v_xe)]
+//! local_vars = [v_cond, v_phi]
+//!
+//! ── block_join ──────────────────────────────────────────────────────
+//! local.get $x → Assign(v_phi)   ← reads the phi result
+//! return
+//! ```
 
 use super::super::types::*;
 use super::core::IrBuilder;
@@ -822,22 +933,44 @@ impl IrBuilder {
             }
 
             Operator::Else => {
-                // Pop if frame
+                // === Transition from then-branch to else-branch ===
+                //
+                // At this point we are at the end of the then-branch body.  We need to:
+                //   1. Finalize the then-branch (assign result, emit jump to end_block).
+                //   2. Save the then-branch's fall-through predecessor info so it can
+                //      be included in the phi computation at end_block later.
+                //   3. Restore local_vars to the pre-if snapshot so the else-branch
+                //      starts with the same local state that the then-branch started with.
+                //   4. Activate the pre-allocated else_block and push an Else frame.
+                //
+                // Why restore local_vars?
+                //   The then-branch may have modified locals (local.set).  The else-branch
+                //   must start with the *pre-if* locals, not the then-branch's modified ones.
+                //   This is captured in `if_frame.locals_at_entry`.
+                //
+                // Why save then_pred_info instead of calling record_forward_branch?
+                //   At Else time, end_block hasn't been activated yet, and the Else frame
+                //   doesn't exist yet.  We stash the then-fall-through as `then_pred_info`
+                //   in the new Else frame; the End handler reads it from there.
+                //   (Any `br 0` inside the then-body went through record_forward_branch
+                //   normally and is already in `if_frame.branch_incoming`.)
+
                 let if_frame = self.pop_control().context("else without matching if")?;
 
                 if if_frame.kind != super::core::ControlKind::If {
                     bail!("else without matching if");
                 }
 
-                // Save then-branch fall-through info (predecessor for end_block phis).
-                // Only recorded if the then-branch body is reachable (not dead code).
+                // Step 1a: Save then-branch fall-through as a phi predecessor for end_block.
+                // Only recorded if the then-branch body is reachable (not dead code after
+                // an unconditional `br` or `return` inside the then-branch).
                 let then_pred_info = if !self.dead_code {
                     Some((self.current_block, self.local_vars.clone()))
                 } else {
                     None
                 };
 
-                // Then branch: assign result if needed
+                // Step 1b: Assign the result variable from the then-branch value (if typed).
                 let result_var = if_frame.result_var;
                 if let Some(result_var) = result_var {
                     if let Some(stack_value) = self.value_stack.pop() {
@@ -848,25 +981,26 @@ impl IrBuilder {
                     }
                 }
 
-                // Current block (then branch) jumps to end (if reachable)
+                // Step 1c: Terminate the then-branch with a jump to end_block.
                 if !self.dead_code {
                     self.terminate(IrTerminator::Jump {
                         target: if_frame.end_block,
                     });
                 }
 
-                // Restore local_vars to pre-if state so the else branch starts
-                // with the same local variable bindings as the then branch.
+                // Step 3: Restore local_vars to the pre-if snapshot.
+                // The else-branch must see the same locals that entered the if.
                 self.local_vars = if_frame.locals_at_entry.clone();
 
-                // Use the pre-allocated else block (always reachable: false branch of BranchIf)
+                // Step 4: Activate the else block (always reachable: false path of BranchIf).
                 let else_block = if_frame
                     .else_block
                     .expect("If frame should have else_block");
                 self.start_real_block(else_block);
 
-                // Push Else frame, preserving result_var and transferring branch_incoming
-                // (any `br 0` inside the then-branch already recorded in if_frame).
+                // Push Else frame.  Transfer `branch_incoming` from the If frame so that
+                // any `br 0` emitted inside the then-branch is still tracked as a predecessor
+                // of end_block when End is processed.
                 self.control_stack.push(super::core::ControlFrame {
                     kind: super::core::ControlKind::Else,
                     start_block: else_block,
@@ -875,14 +1009,23 @@ impl IrBuilder {
                     result_type: if_frame.result_type,
                     result_var,
                     locals_at_entry: if_frame.locals_at_entry,
-                    branch_incoming: if_frame.branch_incoming, // transfer then-body br's
-                    then_pred_info,
+                    branch_incoming: if_frame.branch_incoming, // then-body forward branches
+                    then_pred_info,                            // then fall-through predecessor
                     loop_phi_vars: Vec::new(),
                     pre_loop_block: None,
                 });
             }
 
             Operator::Br { relative_depth } => {
+                // === Unconditional branch ===
+                //
+                // "br N" jumps to the Nth enclosing control structure:
+                //   - Loop frame  → backward branch to start_block (re-enter the loop)
+                //   - Other frame → forward branch to end_block (exit the block)
+                //
+                // Before terminating the block we snapshot `local_vars` and record it
+                // as a phi predecessor for the target frame.  This snapshot is used by
+                // `insert_phis_at_join` (or `emit_loop_phis`) to build the phi sources.
                 let depth = *relative_depth as usize;
                 let frame_idx =
                     self.control_stack
@@ -900,22 +1043,38 @@ impl IrBuilder {
                     }
                 };
 
-                // Record this branch as a phi predecessor (before terminate)
+                // Record snapshot *before* terminating so local_vars is still valid.
                 if is_loop {
+                    // Backward branch: store (phi_var, current_block, src_var) in phi_patches.
+                    // Consumed by emit_loop_phis when the loop's End is processed.
                     self.record_loop_back_branch(frame_idx);
                 } else {
+                    // Forward branch: push (current_block, local_vars) into branch_incoming.
+                    // Consumed by insert_phis_at_join when the target frame's End is processed.
                     self.record_forward_branch(frame_idx);
                 }
 
                 self.terminate(IrTerminator::Jump { target });
 
-                // Everything after an unconditional branch is unreachable
+                // Everything after an unconditional branch is unreachable.
+                // We still need a block to absorb any subsequent instructions
+                // (e.g. the End of the enclosing block) without corrupting the
+                // already-terminated block.
                 let dead_block = self.new_block();
                 self.start_block(dead_block);
                 self.dead_code = true;
             }
 
             Operator::BrIf { relative_depth } => {
+                // === Conditional branch ===
+                //
+                // "br_if N" pops an i32 condition.  If nonzero, branches to the Nth
+                // enclosing frame's target; otherwise falls through to the next instruction.
+                //
+                // Phi tracking: we record the *taken* path as a predecessor of the target
+                // frame (same as unconditional Br).  The fall-through path continues in a
+                // new block and does NOT need recording here — the current `local_vars`
+                // state carries forward naturally into the continuation block.
                 let condition = self
                     .value_stack
                     .pop()
@@ -939,14 +1098,14 @@ impl IrBuilder {
                     }
                 };
 
-                // Record the taken branch as a phi predecessor
+                // Record the taken branch as a phi predecessor (snapshot before termination).
                 if is_loop {
                     self.record_loop_back_branch(frame_idx);
                 } else {
                     self.record_forward_branch(frame_idx);
                 }
 
-                // Create continuation block (fallthrough — always reachable)
+                // The fall-through block is always reachable (the false path of BranchIf).
                 let continue_block = self.new_block();
 
                 self.terminate(IrTerminator::BranchIf {
@@ -955,19 +1114,26 @@ impl IrBuilder {
                     if_false: continue_block,
                 });
 
-                // Fallthrough is always reachable; clear dead_code
+                // start_real_block clears dead_code — the fallthrough is always live.
                 self.start_real_block(continue_block);
             }
 
             Operator::BrTable { targets } => {
+                // === Jump table ===
+                //
+                // "br_table [d0 d1 ... dN] default" pops an index and branches to depth
+                // d_index if index ≤ N, otherwise to `default`.
+                //
+                // Phi tracking: each distinct target frame must receive a predecessor
+                // snapshot.  Multiple table entries may resolve to the *same* frame
+                // (same depth → same frame_idx), so we deduplicate by frame_idx using
+                // `recorded` to avoid recording the same block twice for the same phi.
                 let index = self
                     .value_stack
                     .pop()
                     .ok_or_else(|| anyhow::anyhow!("Stack underflow for br_table"))?
                     .var_id();
 
-                // Collect all depths (table entries + default), deduplicate by frame_idx
-                // to avoid recording the same predecessor block twice for the same target.
                 let target_depths: Vec<u32> = targets.targets().collect::<Result<Vec<_>, _>>()?;
                 let default_depth = targets.default();
 
@@ -1005,7 +1171,7 @@ impl IrBuilder {
                     default,
                 });
 
-                // Everything after br_table is unreachable
+                // Everything after br_table is unreachable (same as Br).
                 let dead_block = self.new_block();
                 self.start_block(dead_block);
                 self.dead_code = true;
