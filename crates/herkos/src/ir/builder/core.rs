@@ -23,15 +23,15 @@
 //!
 //! ### Control Stack (`control_stack: Vec<ControlFrame>`)
 //!
-//! Tracks nested blocks/loops/if structures. Each frame records:
-//! - `kind`: Block | Loop | If | Else
-//! - `start_block`: jump target for loops (backward)
-//! - `end_block`: jump target for block exit (forward/join)
-//! - `else_block`: false branch for If
+//! Tracks nested blocks/loops/if structures. `ControlFrame` is an enum with one
+//! variant per construct (`Block`, `Loop`, `If`, `Else`). Each variant holds only
+//! the fields relevant to it, making illegal states unrepresentable. Key fields:
+//! - `end_block`: join point for forward branches / block exit
+//! - `Loop::start_block`: backward-branch target (re-enter the loop)
 //! - `result_var`: phi convergence slot if the block has a result type
-//! - `locals_at_entry`: snapshot of `local_vars` at the time this frame was pushed
+//! - `locals_at_entry`: snapshot of `local_vars` at frame push
 //! - `branch_incoming`: predecessor snapshots from forward `br`/`br_if`/`br_table`
-//! - `loop_phi_vars` / `phi_patches`: phi source collection for loop back-edges
+//! - `Loop::loop_phi_vars` / `phi_patches`: phi source collection for loop back-edges
 //!
 //! ### Local Variable Map (`local_vars: Vec<UseVar>`)
 //!
@@ -228,166 +228,126 @@ use wasmparser::ValType;
 
 /// Control flow frame for tracking nested blocks/loops/if.
 ///
-/// Each control structure (block, loop, if, else) pushes a frame onto the control stack.
-/// When translating branch instructions (br, br_if, br_table), we look up the frame
-/// at the specified depth to determine the branch target. When an End operator is hit,
-/// we pop the frame and finalize the structure.
+/// Each variant holds only the fields relevant to that control construct,
+/// making illegal states unrepresentable.
 ///
 /// # Frame Lifecycle
 ///
 /// 1. **Push**: When Block, Loop, If, or Else operator is encountered
 /// 2. **Use**: When br/br_if/br_table references it by depth
 /// 3. **Pop**: When End operator is encountered for that structure
-///
-/// # Invariants
-///
-/// - Every frame has start_block ≠ end_block (except in edge cases)
-/// - If result_var is Some, both branches must produce that variable's type
-/// - else_block is only Some for If frames (deferred activation)
-/// - All BlockIds in a frame must be distinct
 #[derive(Debug, Clone)]
-pub(super) struct ControlFrame {
-    /// Kind of control structure (Block, Loop, If, Else)
-    ///
-    /// Determines how `br` instructions behave:
-    /// - **Block**: `br` jumps forward to end_block (exit the block)
-    /// - **Loop**: `br` jumps backward to start_block (re-enter the loop)
-    /// - **If**: `br` jumps forward to end_block (exit the if/else)
-    /// - **Else**: `br` jumps forward to end_block (exit the else branch)
-    pub(super) kind: ControlKind,
+pub(super) enum ControlFrame {
+    /// A `block ... end` construct.
+    /// `br N` targeting this frame jumps forward to `end_block`.
+    Block {
+        /// Join point where all paths (fall-through + forward branches) converge.
+        end_block: BlockId,
+        /// Phi convergence slot for the block's result value; `None` if no result.
+        result_var: Option<UseVar>,
+        /// Forward branches (`br`/`br_if`/`br_table`) that target this frame's `end_block`.
+        branch_incoming: Vec<(BlockId, Vec<UseVar>)>,
+    },
 
-    /// Start block (where to jump when looping, or where we are for blocks)
-    ///
-    /// **Meaning depends on kind**:
-    /// - **Block**: The current block we're building in (no new block created)
-    /// - **Loop**: The loop header block (where backward `br` jumps to re-enter)
-    /// - **If**: The then-block (where true branch starts)
-    /// - **Else**: The else-block where the else branch is executing. This is the
-    ///   *same BlockId* as the parent If frame's `else_block` (retrieved when
-    ///   `Operator::Else` was processed and activated). Unlike Loop's `start_block`,
-    ///   it is NOT used by branch resolution — `br` inside an else body targets
-    ///   `end_block`, not `start_block`. Stored here for documentation/context only.
-    ///
-    /// For backward branches (br in a loop), this is the jump target.
-    pub(super) start_block: BlockId,
+    /// A `loop ... end` construct.
+    /// `br N` targeting this frame jumps *backward* to `start_block` (re-enters the loop).
+    Loop {
+        /// Loop header block — target of backward branches.
+        start_block: BlockId,
+        /// Block immediately before the loop header; entry predecessor for loop phis.
+        pre_loop_block: BlockId,
+        /// Exit join point (target of forward `br` that exits the loop).
+        end_block: BlockId,
+        /// Phi convergence slot for the loop's result value; `None` if no result.
+        result_var: Option<UseVar>,
+        /// Pre-loop snapshot of `local_vars`; used as the entry predecessor for loop phis.
+        locals_at_entry: Vec<UseVar>,
+        /// Forward branches that exit the loop (depth > 0 past the loop frame).
+        branch_incoming: Vec<(BlockId, Vec<UseVar>)>,
+        /// Pre-allocated phi vars (one per Wasm local); substituted into `local_vars` at push.
+        loop_phi_vars: Vec<UseVar>,
+    },
 
-    /// End block (join point where all paths converge)
-    ///
-    /// **Meaning is consistent across all kinds**:
-    /// - **Block**: Where `br` jumps to (exit the block)
-    /// - **Loop**: Where `br` with depth > 0 jumps to (exit the loop)
-    /// - **If**: Where both then and else branches merge
-    /// - **Else**: Where the else branch merges back to the if's end
-    ///
-    /// This block is activated with `start_block(end_block)` when the structure's
-    /// End operator is encountered. It's the join point where control flow resumes
-    /// after the entire control structure (block/loop/if/else) completes.
-    pub(super) end_block: BlockId,
+    /// The then-branch of an `if ... end` or `if ... else ... end` construct.
+    /// `br N` targeting this frame jumps forward to `end_block`.
+    If {
+        /// Pre-allocated else block (activated at `Operator::Else` or as empty-else at `End`).
+        else_block: BlockId,
+        /// Join point where then and else branches converge.
+        end_block: BlockId,
+        /// Phi convergence slot for the if's result value; `None` if no result.
+        result_var: Option<UseVar>,
+        /// Pre-if snapshot of `local_vars`; restored at `Operator::Else`.
+        locals_at_entry: Vec<UseVar>,
+        /// Forward branches from the then-body targeting `end_block`.
+        branch_incoming: Vec<(BlockId, Vec<UseVar>)>,
+    },
 
-    /// Else block (only for If constructs; None for Block/Loop/Else)
-    ///
-    /// For If frames:
-    /// - Allocated upfront when If operator is processed
-    /// - Activated (with `start_block()`) when Else operator is encountered
-    /// - If no Else operator appears before End, remains empty (only contains jump to end_block)
-    ///
-    /// This field enables deferred activation: we know where the else branch will
-    /// execute before we actually start generating its code. Both then and else
-    /// branches must eventually jump to end_block.
-    ///
-    /// **Lifecycle**: When `Operator::Else` is processed, this BlockId is retrieved,
-    /// activated, and becomes the `start_block` of the newly pushed Else frame.
-    /// In other words: `If frame's else_block` == `Else frame's start_block`
-    /// (same BlockId, different lifecycle phase: deferred vs. active).
-    ///
-    /// For Block/Loop/Else frames: always None.
-    pub(super) else_block: Option<BlockId>,
-
-    /// Result type of the control structure (None if no result)
-    ///
-    /// If the block/loop/if has a result type (e.g., "block i32 ... end"),
-    /// both branches must produce a value of this type at their exit.
-    ///
-    /// Example:
-    /// ```wasm
-    /// block i32         ◄─── result_type = Some(I32)
-    ///   i32.const 5
-    /// end               ◄─── Must have an i32 value on stack
-    /// ```
-    ///
-    /// Used to allocate result_var if needed.
-    pub(super) result_type: Option<WasmType>,
-
-    /// Result variable (PHI node placeholder for the control structure's result)
-    ///
-    /// If result_type is Some, result_var holds the VarId that will contain
-    /// the final result value at the join point (end_block).
-    ///
-    /// **Flow**:
-    /// 1. When the control structure is pushed, result_var is allocated (if result_type is Some)
-    /// 2. As each branch executes, it computes a value (v0, v1, etc.)
-    /// 3. Before jumping to end_block, each branch assigns: result_var = branch_value
-    /// 4. At end_block, result_var contains the unified result
-    ///
-    /// **Example**:
-    /// ```text
-    /// block i32
-    ///   result_var = v5
-    ///   <then branch computes v1>
-    ///   v5 = v1
-    ///   br end_block
-    /// end
-    ///
-    /// (at end_block)
-    /// v5 contains the result, pushed onto value_stack
-    /// ```
-    ///
-    /// If result_var is None, the structure produces no value.
-    pub(super) result_var: Option<UseVar>,
-
-    /// Snapshot of `local_vars` at the time this frame was pushed.
-    ///
-    /// Uses:
-    /// - **Else frames**: `Operator::Else` restores `local_vars` to this snapshot so
-    ///   the else branch starts with the same local state as the then branch.
-    /// - **If frames (no else)**: The implicit else path uses these as phi sources.
-    /// - **Loop frames**: Pre-loop local values; used as the entry predecessor for loop phis.
-    pub(super) locals_at_entry: Vec<UseVar>,
-
-    /// Forward branches that target this frame's `end_block`.
-    /// Each entry is `(predecessor_block, local_vars_snapshot_at_branch_time)`.
-    ///
-    /// Populated by `Br`/`BrIf`/`BrTable` instructions that resolve to this frame's end.
-    /// Not used for Loop frames (backward branches go to `IrBuilder::phi_patches` instead).
-    pub(super) branch_incoming: Vec<(BlockId, Vec<UseVar>)>,
-
-    /// For Else frames only: info about the then-branch fall-through.
-    ///
-    /// Set when `Operator::Else` is processed and the If frame is converted to Else.
-    /// Contains `(then_end_block, local_vars_at_then_end)`.
-    /// Used to compute phis at the `end_block` join point.
-    pub(super) then_pred_info: Option<(BlockId, Vec<UseVar>)>,
-
-    /// For Loop frames only: pre-allocated phi VarIds (one per Wasm local).
-    ///
-    /// At push time, `local_vars[i]` is updated to `loop_phi_vars[i]` for all i.
-    /// This ensures all code inside the loop already references the phi vars.
-    /// Phi sources are filled in at `End` of the loop from `IrBuilder::phi_patches`.
-    pub(super) loop_phi_vars: Vec<UseVar>,
-
-    /// For Loop frames only: the block immediately before the loop header.
-    ///
-    /// This block terminates with a `Jump` to `start_block` (the loop header).
-    /// Used as the entry predecessor when emitting loop phi nodes.
-    pub(super) pre_loop_block: Option<BlockId>,
+    /// The else-branch of an `if ... else ... end` construct.
+    /// `br N` targeting this frame jumps forward to `end_block`.
+    Else {
+        /// Join point inherited from the If frame.
+        end_block: BlockId,
+        /// Phi convergence slot inherited from the If frame.
+        result_var: Option<UseVar>,
+        /// Forward branches from *both* then-body and else-body targeting `end_block`.
+        branch_incoming: Vec<(BlockId, Vec<UseVar>)>,
+        /// Then-branch fall-through info; `None` if the then-branch ended in dead code.
+        then_pred_info: Option<(BlockId, Vec<UseVar>)>,
+    },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ControlKind {
-    Block, // Forward branches only
-    Loop,  // Backward branch to start
-    If,    // Conditional with possible else
-    Else,  // Else branch of if
+impl ControlFrame {
+    /// End block (join point where all paths converge).
+    pub(super) fn end_block(&self) -> BlockId {
+        match self {
+            ControlFrame::Block { end_block, .. }
+            | ControlFrame::Loop { end_block, .. }
+            | ControlFrame::If { end_block, .. }
+            | ControlFrame::Else { end_block, .. } => *end_block,
+        }
+    }
+
+    /// Mutable reference to the forward-branch predecessor list.
+    pub(super) fn branch_incoming_mut(&mut self) -> &mut Vec<(BlockId, Vec<UseVar>)> {
+        match self {
+            ControlFrame::Block {
+                branch_incoming, ..
+            }
+            | ControlFrame::Loop {
+                branch_incoming, ..
+            }
+            | ControlFrame::If {
+                branch_incoming, ..
+            }
+            | ControlFrame::Else {
+                branch_incoming, ..
+            } => branch_incoming,
+        }
+    }
+
+    /// Returns `true` if this is a Loop frame (backward-branch target).
+    pub(super) fn is_loop(&self) -> bool {
+        matches!(self, ControlFrame::Loop { .. })
+    }
+
+    /// Loop phi vars (one per Wasm local); empty slice for non-Loop frames.
+    pub(super) fn loop_phi_vars(&self) -> &[UseVar] {
+        match self {
+            ControlFrame::Loop { loop_phi_vars, .. } => loop_phi_vars,
+            _ => &[],
+        }
+    }
+
+    /// Result var (the phi convergence slot), if any.
+    pub(super) fn result_var(&self) -> Option<UseVar> {
+        match self {
+            ControlFrame::Block { result_var, .. }
+            | ControlFrame::Loop { result_var, .. }
+            | ControlFrame::If { result_var, .. }
+            | ControlFrame::Else { result_var, .. } => *result_var,
+        }
+    }
 }
 
 /// Module-level context for function translation.
@@ -625,7 +585,7 @@ impl IrBuilder {
         });
 
         // Push function-level control frame
-        self.push_control(ControlKind::Block, entry, entry, None, return_type);
+        self.push_block(entry, return_type);
 
         // Translate each Wasm operator to IR
         for op in operators {
@@ -645,57 +605,73 @@ impl IrBuilder {
         })
     }
 
-    /// Push a control frame onto the control stack.
-    ///
-    /// For Loop frames, pre-allocates phi VarIds for all locals and immediately updates
-    /// `self.local_vars[i]` to the phi vars. This ensures that all code inside the loop
-    /// body reads/writes through the phi vars, making backward-branch phi sources correct.
-    pub(super) fn push_control(
-        &mut self,
-        kind: ControlKind,
-        start_block: BlockId,
-        end_block: BlockId,
-        else_block: Option<BlockId>,
-        result_type: Option<WasmType>,
-    ) {
-        // Allocate a result variable if block has result type.
-        // result_var is a phi convergence slot assigned by multiple branches —
-        // use new_pre_alloc_var to get UseVar directly.
-        let result_var = if result_type.is_some() {
+    /// Allocate a result variable if the block has a result type.
+    fn alloc_result_var(&mut self, result_type: Option<WasmType>) -> Option<UseVar> {
+        if result_type.is_some() {
             let (_, use_var) = self.new_pre_alloc_var();
             Some(use_var)
         } else {
             None
-        };
+        }
+    }
 
-        // Snapshot local state at frame entry (before any phi-var substitution).
-        let locals_at_entry = self.local_vars.clone();
-
-        // For Loop frames: pre-allocate phi vars for all locals and immediately substitute.
-        let (loop_phi_vars, pre_loop_block) = if kind == ControlKind::Loop {
-            let phi_vars: Vec<UseVar> = (0..self.local_vars.len())
-                .map(|_| self.new_pre_alloc_var().1)
-                .collect();
-            // Update local_vars so code inside the loop uses phi vars.
-            self.local_vars.clone_from(&phi_vars);
-            let pre_loop = self.current_block;
-            (phi_vars, Some(pre_loop))
-        } else {
-            (Vec::new(), None)
-        };
-
-        self.control_stack.push(ControlFrame {
-            kind,
-            start_block,
+    /// Push a Block control frame onto the control stack.
+    pub(super) fn push_block(&mut self, end_block: BlockId, result_type: Option<WasmType>) {
+        let result_var = self.alloc_result_var(result_type);
+        self.control_stack.push(ControlFrame::Block {
             end_block,
-            else_block,
-            result_type,
+            result_var,
+            branch_incoming: Vec::new(),
+        });
+    }
+
+    /// Push a Loop control frame onto the control stack.
+    ///
+    /// Pre-allocates phi VarIds for all locals and immediately updates `self.local_vars`
+    /// to point to them. This ensures all code inside the loop body reads/writes through
+    /// the phi vars, making backward-branch phi sources correct.
+    ///
+    /// Must be called while `self.current_block` still points to the pre-loop block
+    /// (before switching to the loop header).
+    pub(super) fn push_loop(
+        &mut self,
+        start_block: BlockId,
+        end_block: BlockId,
+        result_type: Option<WasmType>,
+    ) {
+        let result_var = self.alloc_result_var(result_type);
+        let locals_at_entry = self.local_vars.clone();
+        let pre_loop_block = self.current_block;
+        let loop_phi_vars: Vec<UseVar> = (0..self.local_vars.len())
+            .map(|_| self.new_pre_alloc_var().1)
+            .collect();
+        self.local_vars.clone_from(&loop_phi_vars);
+        self.control_stack.push(ControlFrame::Loop {
+            start_block,
+            pre_loop_block,
+            end_block,
             result_var,
             locals_at_entry,
             branch_incoming: Vec::new(),
-            then_pred_info: None,
             loop_phi_vars,
-            pre_loop_block,
+        });
+    }
+
+    /// Push an If control frame onto the control stack.
+    pub(super) fn push_if(
+        &mut self,
+        else_block: BlockId,
+        end_block: BlockId,
+        result_type: Option<WasmType>,
+    ) {
+        let result_var = self.alloc_result_var(result_type);
+        let locals_at_entry = self.local_vars.clone();
+        self.control_stack.push(ControlFrame::If {
+            else_block,
+            end_block,
+            result_var,
+            locals_at_entry,
+            branch_incoming: Vec::new(),
         });
     }
 
@@ -727,9 +703,9 @@ impl IrBuilder {
         let frame = &self.control_stack[frame_idx];
 
         // Loops branch back to start, others branch forward to end
-        let target = match frame.kind {
-            ControlKind::Loop => frame.start_block,
-            _ => frame.end_block,
+        let target = match frame {
+            ControlFrame::Loop { start_block, .. } => *start_block,
+            _ => frame.end_block(),
         };
 
         Ok(target)
@@ -767,7 +743,7 @@ impl IrBuilder {
         let pred_block = self.current_block;
         let locals_snap = self.local_vars.clone();
         self.control_stack[frame_idx]
-            .branch_incoming
+            .branch_incoming_mut()
             .push((pred_block, locals_snap));
     }
 
@@ -783,7 +759,7 @@ impl IrBuilder {
         }
         let pred_block = self.current_block;
         // Clone to avoid borrow conflict (local_vars is also in self)
-        let phi_vars = self.control_stack[frame_idx].loop_phi_vars.clone();
+        let phi_vars = self.control_stack[frame_idx].loop_phi_vars().to_vec();
         for (local_idx, &phi_var) in phi_vars.iter().enumerate() {
             let src_var = self.local_vars[local_idx];
             self.phi_patches.push((phi_var, pred_block, src_var));
@@ -852,43 +828,56 @@ impl IrBuilder {
     /// Emit phi instructions for a loop frame into its header block.
     ///
     /// Called at `End` of a Loop frame (after `pop_control`). Inserts `IrInstr::Phi`
-    /// at the start of `frame.start_block` for each local. Sources come from:
-    /// 1. The pre-loop predecessor (`frame.pre_loop_block`, `frame.locals_at_entry`).
+    /// at the start of the loop header (`start_block`) for each local. Sources come from:
+    /// 1. The pre-loop predecessor (`pre_loop_block`, `locals_at_entry`).
     /// 2. All backward branches recorded in `self.phi_patches` for this loop's phi vars.
     ///
     /// Consumes the relevant entries from `self.phi_patches`.
     /// Trivial phis (all sources are the same var, or the only non-self source) are left
     /// for the `lower_phis` pass to eliminate.
     pub(super) fn emit_loop_phis(&mut self, frame: &ControlFrame) {
-        debug_assert_eq!(frame.kind, ControlKind::Loop);
-        let num_locals = frame.loop_phi_vars.len();
+        let (start_block, pre_loop_block, loop_phi_vars, locals_at_entry) = match frame {
+            ControlFrame::Loop {
+                start_block,
+                pre_loop_block,
+                loop_phi_vars,
+                locals_at_entry,
+                ..
+            } => (
+                *start_block,
+                *pre_loop_block,
+                loop_phi_vars,
+                locals_at_entry,
+            ),
+            _ => return,
+        };
+
+        let num_locals = loop_phi_vars.len();
         if num_locals == 0 {
             return;
         }
 
         let mut phi_srcs: Vec<Vec<(BlockId, VarId)>> = vec![Vec::new(); num_locals];
 
-        // Entry from before the loop
-        if let Some(pre_block) = frame.pre_loop_block {
-            for (local_idx, phi_src) in phi_srcs.iter_mut().enumerate() {
-                phi_src.push((pre_block, frame.locals_at_entry[local_idx].var_id()));
-            }
+        // Entry from before the loop (pre_loop_block is always present for Loop frames)
+        for (local_idx, phi_src) in phi_srcs.iter_mut().enumerate() {
+            phi_src.push((pre_loop_block, locals_at_entry[local_idx].var_id()));
         }
 
         // Backward branch sources from phi_patches
         for &(phi_dest, pred_block, src_var) in &self.phi_patches {
-            if let Some(local_idx) = frame.loop_phi_vars.iter().position(|v| *v == phi_dest) {
+            if let Some(local_idx) = loop_phi_vars.iter().position(|v| *v == phi_dest) {
                 phi_srcs[local_idx].push((pred_block, src_var.var_id()));
             }
         }
 
         // Consume the processed patches
         self.phi_patches
-            .retain(|&(phi_dest, _, _)| !frame.loop_phi_vars.contains(&phi_dest));
+            .retain(|&(phi_dest, _, _)| !loop_phi_vars.contains(&phi_dest));
 
         // Build phi instructions and prepend to loop header
         let mut phi_instrs: Vec<IrInstr> = Vec::new();
-        for (local_idx, &phi_var) in frame.loop_phi_vars.iter().enumerate() {
+        for (local_idx, &phi_var) in loop_phi_vars.iter().enumerate() {
             let srcs = std::mem::take(&mut phi_srcs[local_idx]);
             phi_instrs.push(IrInstr::Phi {
                 dest: phi_var.var_id(),
@@ -896,7 +885,7 @@ impl IrBuilder {
             });
         }
 
-        if let Some(block) = self.blocks.iter_mut().find(|b| b.id == frame.start_block) {
+        if let Some(block) = self.blocks.iter_mut().find(|b| b.id == start_block) {
             let old = std::mem::take(&mut block.instructions);
             block.instructions = phi_instrs;
             block.instructions.extend(old);

@@ -410,14 +410,26 @@ impl IrBuilder {
                 } else {
                     let frame = self.pop_control()?;
 
-                    match frame.kind {
-                        super::core::ControlKind::If => {
+                    // Extract result_var before consuming frame in the match below.
+                    let result_var = frame.result_var();
+
+                    // Emit loop phi instructions if this is a Loop frame.
+                    // Called here (before the match consumes `frame`) because emit_loop_phis
+                    // needs a reference to the frame. It is a no-op for non-Loop frames.
+                    self.emit_loop_phis(&frame);
+
+                    match frame {
+                        super::core::ControlFrame::If {
+                            else_block,
+                            end_block,
+                            result_var: rv,
+                            branch_incoming,
+                            locals_at_entry,
+                            ..
+                        } => {
                             // === IF without ELSE ===
                             // The then-branch just finished. We create an implicit empty else
                             // block and insert phi nodes at the join point.
-
-                            let else_block =
-                                frame.else_block.expect("If frame must have else_block");
 
                             // Collect predecessors of end_block for phi computation.
                             // 1. Fall-through from then-body (if reachable)
@@ -427,10 +439,10 @@ impl IrBuilder {
                             if !self.dead_code {
                                 preds.push((self.current_block, self.local_vars.clone()));
                             }
-                            preds.extend(frame.branch_incoming.iter().cloned());
+                            preds.extend(branch_incoming.iter().cloned());
 
                             // Assign result if needed (then-branch fall-through)
-                            if let Some(result_var) = frame.result_var {
+                            if let Some(result_var) = rv {
                                 if let Some(stack_value) = self.value_stack.pop() {
                                     self.emit_void(IrInstr::Assign {
                                         dest: result_var.var_id(),
@@ -441,9 +453,7 @@ impl IrBuilder {
 
                             // Terminate then-branch (if reachable)
                             if !self.dead_code {
-                                self.terminate(IrTerminator::Jump {
-                                    target: frame.end_block,
-                                });
+                                self.terminate(IrTerminator::Jump { target: end_block });
                             }
 
                             // Create implicit else block (empty; just jumps to end).
@@ -451,29 +461,33 @@ impl IrBuilder {
                             // but we don't need to clear dead_code for it — it has no user
                             // instructions; we just terminate it directly.
                             self.start_block(else_block);
-                            self.terminate(IrTerminator::Jump {
-                                target: frame.end_block,
-                            });
+                            self.terminate(IrTerminator::Jump { target: end_block });
                             // The implicit else carries the pre-if local state.
-                            preds.push((else_block, frame.locals_at_entry.clone()));
+                            preds.push((else_block, locals_at_entry.clone()));
 
                             // Restore local_vars to pre-if state before computing phis
                             // (preds already captured the necessary snapshots above).
-                            self.local_vars = frame.locals_at_entry.clone();
+                            self.local_vars = locals_at_entry;
 
                             // Start the join block (always reachable — else_block always jumps here)
-                            self.start_real_block(frame.end_block);
+                            self.start_real_block(end_block);
 
                             // Insert phi nodes for locals with differing predecessor values.
                             // If no live predecessors, mark as dead code.
                             if preds.is_empty() {
                                 self.dead_code = true;
                             } else {
-                                self.insert_phis_at_join(frame.end_block, &preds);
+                                self.insert_phis_at_join(end_block, &preds);
                             }
                         }
 
-                        super::core::ControlKind::Else => {
+                        super::core::ControlFrame::Else {
+                            end_block,
+                            result_var: rv,
+                            branch_incoming,
+                            then_pred_info,
+                            ..
+                        } => {
                             // === IF-ELSE END ===
                             // The else-branch just finished. Insert phis at the join point
                             // using then-pred and else-pred info saved during Operator::Else.
@@ -483,16 +497,16 @@ impl IrBuilder {
                             // 2. else-branch fall-through (current block, if reachable)
                             // 3. Any `br` from either branch targeting end_block (branch_incoming)
                             let mut preds: Vec<(BlockId, Vec<UseVar>)> = Vec::new();
-                            if let Some((then_block, then_locals)) = frame.then_pred_info.clone() {
+                            if let Some((then_block, then_locals)) = then_pred_info {
                                 preds.push((then_block, then_locals));
                             }
                             if !self.dead_code {
                                 preds.push((self.current_block, self.local_vars.clone()));
                             }
-                            preds.extend(frame.branch_incoming.iter().cloned());
+                            preds.extend(branch_incoming.iter().cloned());
 
                             // Assign result if needed (else-branch fall-through)
-                            if let Some(result_var) = frame.result_var {
+                            if let Some(result_var) = rv {
                                 if let Some(stack_value) = self.value_stack.pop() {
                                     self.emit_void(IrInstr::Assign {
                                         dest: result_var.var_id(),
@@ -503,35 +517,37 @@ impl IrBuilder {
 
                             // Terminate else-branch (if reachable)
                             if !self.dead_code {
-                                self.terminate(IrTerminator::Jump {
-                                    target: frame.end_block,
-                                });
+                                self.terminate(IrTerminator::Jump { target: end_block });
                             }
 
                             // Start join block
-                            self.start_real_block(frame.end_block);
+                            self.start_real_block(end_block);
 
                             if preds.is_empty() {
                                 self.dead_code = true;
                             } else {
-                                self.insert_phis_at_join(frame.end_block, &preds);
+                                self.insert_phis_at_join(end_block, &preds);
                             }
                         }
 
-                        super::core::ControlKind::Loop => {
+                        super::core::ControlFrame::Loop {
+                            end_block,
+                            result_var: rv,
+                            branch_incoming,
+                            ..
+                        } => {
                             // === LOOP END ===
-                            // Emit the phi instructions into the loop header (start_block).
-                            // Then fall through to end_block.
+                            // Loop phi instructions were already emitted into the loop header
+                            // by the emit_loop_phis call above. Fall through to end_block.
 
                             // Collect fall-through predecessor BEFORE switching blocks.
-                            let mut preds: Vec<(BlockId, Vec<UseVar>)> =
-                                frame.branch_incoming.clone();
+                            let mut preds: Vec<(BlockId, Vec<UseVar>)> = branch_incoming;
                             if !self.dead_code {
                                 preds.push((self.current_block, self.local_vars.clone()));
                             }
 
                             // Assign result if needed (loop fall-through)
-                            if let Some(result_var) = frame.result_var {
+                            if let Some(result_var) = rv {
                                 if let Some(stack_value) = self.value_stack.pop() {
                                     self.emit_void(IrInstr::Assign {
                                         dest: result_var.var_id(),
@@ -542,37 +558,35 @@ impl IrBuilder {
 
                             // Terminate loop body fall-through (if reachable)
                             if !self.dead_code {
-                                self.terminate(IrTerminator::Jump {
-                                    target: frame.end_block,
-                                });
+                                self.terminate(IrTerminator::Jump { target: end_block });
                             }
 
-                            // Emit Phi instructions into the loop header block.
-                            // This consumes the relevant phi_patches.
-                            self.emit_loop_phis(&frame);
-
                             // Start the loop's exit block
-                            self.start_real_block(frame.end_block);
+                            self.start_real_block(end_block);
 
                             // Insert phis at end_block for locals with differing exit values
                             if preds.is_empty() {
                                 self.dead_code = true;
                             } else {
-                                self.insert_phis_at_join(frame.end_block, &preds);
+                                self.insert_phis_at_join(end_block, &preds);
                             }
                         }
 
-                        super::core::ControlKind::Block => {
+                        super::core::ControlFrame::Block {
+                            end_block,
+                            result_var: rv,
+                            branch_incoming,
+                            ..
+                        } => {
                             // === BLOCK END ===
                             // Collect fall-through predecessor BEFORE switching blocks.
-                            let mut preds: Vec<(BlockId, Vec<UseVar>)> =
-                                frame.branch_incoming.clone();
+                            let mut preds: Vec<(BlockId, Vec<UseVar>)> = branch_incoming;
                             if !self.dead_code {
                                 preds.push((self.current_block, self.local_vars.clone()));
                             }
 
                             // Assign result if needed (block fall-through)
-                            if let Some(result_var) = frame.result_var {
+                            if let Some(result_var) = rv {
                                 if let Some(stack_value) = self.value_stack.pop() {
                                     // Normal case: block fell through with a result value
                                     self.emit_void(IrInstr::Assign {
@@ -585,25 +599,23 @@ impl IrBuilder {
 
                             // Terminate block fall-through (if reachable)
                             if !self.dead_code {
-                                self.terminate(IrTerminator::Jump {
-                                    target: frame.end_block,
-                                });
+                                self.terminate(IrTerminator::Jump { target: end_block });
                             }
 
                             // Start join block
-                            self.start_real_block(frame.end_block);
+                            self.start_real_block(end_block);
 
                             if preds.is_empty() {
                                 self.dead_code = true;
                             } else {
-                                self.insert_phis_at_join(frame.end_block, &preds);
+                                self.insert_phis_at_join(end_block, &preds);
                             }
                         }
                     }
 
                     // If the control structure produced a result, push it onto the value stack.
-                    if let Some(result_var) = frame.result_var {
-                        self.value_stack.push(result_var);
+                    if let Some(rv) = result_var {
+                        self.value_stack.push(rv);
                     }
                 }
             }
@@ -789,30 +801,9 @@ impl IrBuilder {
                 // This is where we merge back together after the block.
                 let end_block = self.new_block();
 
-                // === Reuse the current block as the loop start target ===
-                // This is KEY DIFFERENCE from Loop:
-                //   Block: start_block = current block (we stay in it, no jump needed)
-                //   Loop:  start_block = newly created block (we jump to it)
-                //
-                // Why? Because blocks execute sequentially with no backward jumps.
-                // We don't need to set up a loop header; we just keep building
-                // instructions in the current block.
-                let start_block = self.current_block;
-
                 // === STEP 1: Push control frame ===
-                // Record this block's control structure:
-                //   - kind=Block: marks this as a block (for br/br_if dispatch)
-                //   - start_block=current_block: where we are now (no backward jumps)
-                //   - end_block=end_block: where br jumps (exit the block)
-                //   - else_block=None: blocks don't have else branches (that's just If)
-                //   - result_type: the block's result type (if any)
-                self.push_control(
-                    super::core::ControlKind::Block,
-                    start_block,
-                    end_block,
-                    None,
-                    result_type,
-                );
+                // Blocks have no backward jumps — br targets end_block (forward exit).
+                self.push_block(end_block, result_type);
             }
 
             Operator::Loop { blockty } => {
@@ -845,20 +836,14 @@ impl IrBuilder {
                 });
 
                 // === STEP 2: Push control frame BEFORE switching blocks ===
-                // push_control captures self.current_block as pre_loop_block (the block
+                // push_loop captures self.current_block as pre_loop_block (the block
                 // that jumps into the loop). It must be called while current_block still
                 // points to the pre-loop block, before start_block changes it.
                 //
-                // push_control also pre-allocates phi vars for all locals and updates
+                // push_loop also pre-allocates phi vars for all locals and updates
                 // self.local_vars to point to them, so all code inside the loop body
                 // reads/writes through the phi vars from the start.
-                self.push_control(
-                    super::core::ControlKind::Loop,
-                    loop_header,
-                    end_block,
-                    None,
-                    result_type,
-                );
+                self.push_loop(loop_header, end_block, result_type);
 
                 // === STEP 3: Begin codegen in the loop header block ===
                 // This block is the entry point to the loop and the target of backward
@@ -917,13 +902,7 @@ impl IrBuilder {
                 //   - end_block=end_block: where br 1 jumps (out of if/else)
                 //   - else_block=Some(else_block): deferred; we'll activate it when we see Else or End
                 //   - result_type: the if's result type (if any)
-                self.push_control(
-                    super::core::ControlKind::If,
-                    then_block,
-                    end_block,
-                    Some(else_block),
-                    result_type,
-                );
+                self.push_if(else_block, end_block, result_type);
 
                 // === NOTE: Deferred activation ===
                 // The else_block is NOT activated yet. It's stored in the control frame.
@@ -957,9 +936,17 @@ impl IrBuilder {
 
                 let if_frame = self.pop_control().context("else without matching if")?;
 
-                if if_frame.kind != super::core::ControlKind::If {
+                let super::core::ControlFrame::If {
+                    else_block,
+                    end_block: if_end_block,
+                    result_var,
+                    locals_at_entry,
+                    branch_incoming,
+                    ..
+                } = if_frame
+                else {
                     bail!("else without matching if");
-                }
+                };
 
                 // Step 1a: Save then-branch fall-through as a phi predecessor for end_block.
                 // Only recorded if the then-branch body is reachable (not dead code after
@@ -971,7 +958,6 @@ impl IrBuilder {
                 };
 
                 // Step 1b: Assign the result variable from the then-branch value (if typed).
-                let result_var = if_frame.result_var;
                 if let Some(result_var) = result_var {
                     if let Some(stack_value) = self.value_stack.pop() {
                         self.emit_void(IrInstr::Assign {
@@ -984,35 +970,25 @@ impl IrBuilder {
                 // Step 1c: Terminate the then-branch with a jump to end_block.
                 if !self.dead_code {
                     self.terminate(IrTerminator::Jump {
-                        target: if_frame.end_block,
+                        target: if_end_block,
                     });
                 }
 
                 // Step 3: Restore local_vars to the pre-if snapshot.
                 // The else-branch must see the same locals that entered the if.
-                self.local_vars = if_frame.locals_at_entry.clone();
+                self.local_vars = locals_at_entry.clone();
 
                 // Step 4: Activate the else block (always reachable: false path of BranchIf).
-                let else_block = if_frame
-                    .else_block
-                    .expect("If frame should have else_block");
                 self.start_real_block(else_block);
 
                 // Push Else frame.  Transfer `branch_incoming` from the If frame so that
                 // any `br 0` emitted inside the then-branch is still tracked as a predecessor
                 // of end_block when End is processed.
-                self.control_stack.push(super::core::ControlFrame {
-                    kind: super::core::ControlKind::Else,
-                    start_block: else_block,
-                    end_block: if_frame.end_block,
-                    else_block: None,
-                    result_type: if_frame.result_type,
+                self.control_stack.push(super::core::ControlFrame::Else {
+                    end_block: if_end_block,
                     result_var,
-                    locals_at_entry: if_frame.locals_at_entry,
-                    branch_incoming: if_frame.branch_incoming, // then-body forward branches
-                    then_pred_info,                            // then fall-through predecessor
-                    loop_phi_vars: Vec::new(),
-                    pre_loop_block: None,
+                    branch_incoming, // then-body forward branches
+                    then_pred_info,  // then fall-through predecessor
                 });
             }
 
@@ -1037,9 +1013,9 @@ impl IrBuilder {
 
                 let (target, is_loop) = {
                     let frame = &self.control_stack[frame_idx];
-                    match frame.kind {
-                        super::core::ControlKind::Loop => (frame.start_block, true),
-                        _ => (frame.end_block, false),
+                    match frame {
+                        super::core::ControlFrame::Loop { start_block, .. } => (*start_block, true),
+                        _ => (frame.end_block(), false),
                     }
                 };
 
@@ -1092,9 +1068,9 @@ impl IrBuilder {
 
                 let (target, is_loop) = {
                     let frame = &self.control_stack[frame_idx];
-                    match frame.kind {
-                        super::core::ControlKind::Loop => (frame.start_block, true),
-                        _ => (frame.end_block, false),
+                    match frame {
+                        super::core::ControlFrame::Loop { start_block, .. } => (*start_block, true),
+                        _ => (frame.end_block(), false),
                     }
                 };
 
@@ -1148,8 +1124,7 @@ impl IrBuilder {
                     let depth = depth as usize;
                     let frame_idx = stack_len.saturating_sub(depth + 1);
                     if recorded.insert(frame_idx) {
-                        let is_loop =
-                            self.control_stack[frame_idx].kind == super::core::ControlKind::Loop;
+                        let is_loop = self.control_stack[frame_idx].is_loop();
                         if is_loop {
                             self.record_loop_back_branch(frame_idx);
                         } else {
