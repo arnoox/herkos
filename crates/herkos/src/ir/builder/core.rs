@@ -521,6 +521,27 @@ impl IrBuilder {
         }
     }
 
+    /// Set a terminator only if code is reachable (not dead).
+    ///
+    /// This is the safe way to terminate blocks in branches that may be unreachable
+    /// (e.g., the fall-through of an if-then without else).
+    pub(super) fn terminate_if_live(&mut self, term: IrTerminator) {
+        if !self.dead_code {
+            self.terminate(term);
+        }
+    }
+
+    /// Record the current block and local state as a phi predecessor, only if code is reachable.
+    ///
+    /// This is used at join points (End of Block/Loop/If) to collect predecessor information
+    /// needed to build phi nodes. The predecessor is silently dropped if the current block
+    /// is unreachable (dead code after an unconditional branch or return).
+    pub(super) fn push_predecessor_if_live(&self, preds: &mut Vec<(BlockId, Vec<UseVar>)>) {
+        if !self.dead_code {
+            preds.push((self.current_block, self.local_vars.clone()));
+        }
+    }
+
     /// Translate a function from Wasm bytecode to IR.
     pub fn translate_function(
         &mut self,

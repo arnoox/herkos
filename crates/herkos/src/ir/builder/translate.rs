@@ -423,7 +423,7 @@ impl IrBuilder {
                             else_block,
                             end_block,
                             result_var: rv,
-                            branch_incoming,
+                            mut branch_incoming,
                             locals_at_entry,
                             ..
                         } => {
@@ -435,11 +435,7 @@ impl IrBuilder {
                             // 1. Fall-through from then-body (if reachable)
                             // 2. Any `br` inside then-body that targeted end_block
                             // 3. Implicit else block (with pre-if locals = locals_at_entry)
-                            let mut preds: Vec<(BlockId, Vec<UseVar>)> = Vec::new();
-                            if !self.dead_code {
-                                preds.push((self.current_block, self.local_vars.clone()));
-                            }
-                            preds.extend(branch_incoming.iter().cloned());
+                            self.push_predecessor_if_live(&mut branch_incoming);
 
                             // Assign result if needed (then-branch fall-through)
                             if let Some(result_var) = rv {
@@ -452,9 +448,7 @@ impl IrBuilder {
                             }
 
                             // Terminate then-branch (if reachable)
-                            if !self.dead_code {
-                                self.terminate(IrTerminator::Jump { target: end_block });
-                            }
+                            self.terminate_if_live(IrTerminator::Jump { target: end_block });
 
                             // Create implicit else block (empty; just jumps to end).
                             // The else_block is always reachable (false-branch of BranchIf),
@@ -463,7 +457,7 @@ impl IrBuilder {
                             self.start_block(else_block);
                             self.terminate(IrTerminator::Jump { target: end_block });
                             // The implicit else carries the pre-if local state.
-                            preds.push((else_block, locals_at_entry.clone()));
+                            branch_incoming.push((else_block, locals_at_entry.clone()));
 
                             // Restore local_vars to pre-if state before computing phis
                             // (preds already captured the necessary snapshots above).
@@ -474,10 +468,10 @@ impl IrBuilder {
 
                             // Insert phi nodes for locals with differing predecessor values.
                             // If no live predecessors, mark as dead code.
-                            if preds.is_empty() {
+                            if branch_incoming.is_empty() {
                                 self.dead_code = true;
                             } else {
-                                self.insert_phis_at_join(end_block, &preds);
+                                self.insert_phis_at_join(end_block, &branch_incoming);
                             }
                         }
 
@@ -500,9 +494,7 @@ impl IrBuilder {
                             if let Some((then_block, then_locals)) = then_pred_info {
                                 preds.push((then_block, then_locals));
                             }
-                            if !self.dead_code {
-                                preds.push((self.current_block, self.local_vars.clone()));
-                            }
+                            self.push_predecessor_if_live(&mut preds);
                             preds.extend(branch_incoming.iter().cloned());
 
                             // Assign result if needed (else-branch fall-through)
@@ -516,9 +508,7 @@ impl IrBuilder {
                             }
 
                             // Terminate else-branch (if reachable)
-                            if !self.dead_code {
-                                self.terminate(IrTerminator::Jump { target: end_block });
-                            }
+                            self.terminate_if_live(IrTerminator::Jump { target: end_block });
 
                             // Start join block
                             self.start_real_block(end_block);
@@ -533,7 +523,7 @@ impl IrBuilder {
                         super::core::ControlFrame::Loop {
                             end_block,
                             result_var: rv,
-                            branch_incoming,
+                            mut branch_incoming,
                             ..
                         } => {
                             // === LOOP END ===
@@ -541,10 +531,7 @@ impl IrBuilder {
                             // by the emit_loop_phis call above. Fall through to end_block.
 
                             // Collect fall-through predecessor BEFORE switching blocks.
-                            let mut preds: Vec<(BlockId, Vec<UseVar>)> = branch_incoming;
-                            if !self.dead_code {
-                                preds.push((self.current_block, self.local_vars.clone()));
-                            }
+                            self.push_predecessor_if_live(&mut branch_incoming);
 
                             // Assign result if needed (loop fall-through)
                             if let Some(result_var) = rv {
@@ -557,33 +544,28 @@ impl IrBuilder {
                             }
 
                             // Terminate loop body fall-through (if reachable)
-                            if !self.dead_code {
-                                self.terminate(IrTerminator::Jump { target: end_block });
-                            }
+                            self.terminate_if_live(IrTerminator::Jump { target: end_block });
 
                             // Start the loop's exit block
                             self.start_real_block(end_block);
 
                             // Insert phis at end_block for locals with differing exit values
-                            if preds.is_empty() {
+                            if branch_incoming.is_empty() {
                                 self.dead_code = true;
                             } else {
-                                self.insert_phis_at_join(end_block, &preds);
+                                self.insert_phis_at_join(end_block, &branch_incoming);
                             }
                         }
 
                         super::core::ControlFrame::Block {
                             end_block,
                             result_var: rv,
-                            branch_incoming,
+                            mut branch_incoming,
                             ..
                         } => {
                             // === BLOCK END ===
                             // Collect fall-through predecessor BEFORE switching blocks.
-                            let mut preds: Vec<(BlockId, Vec<UseVar>)> = branch_incoming;
-                            if !self.dead_code {
-                                preds.push((self.current_block, self.local_vars.clone()));
-                            }
+                            self.push_predecessor_if_live(&mut branch_incoming);
 
                             // Assign result if needed (block fall-through)
                             if let Some(result_var) = rv {
@@ -598,17 +580,15 @@ impl IrBuilder {
                             }
 
                             // Terminate block fall-through (if reachable)
-                            if !self.dead_code {
-                                self.terminate(IrTerminator::Jump { target: end_block });
-                            }
+                            self.terminate_if_live(IrTerminator::Jump { target: end_block });
 
                             // Start join block
                             self.start_real_block(end_block);
 
-                            if preds.is_empty() {
+                            if branch_incoming.is_empty() {
                                 self.dead_code = true;
                             } else {
-                                self.insert_phis_at_join(end_block, &preds);
+                                self.insert_phis_at_join(end_block, &branch_incoming);
                             }
                         }
                     }
@@ -968,11 +948,9 @@ impl IrBuilder {
                 }
 
                 // Step 1c: Terminate the then-branch with a jump to end_block.
-                if !self.dead_code {
-                    self.terminate(IrTerminator::Jump {
-                        target: if_end_block,
-                    });
-                }
+                self.terminate_if_live(IrTerminator::Jump {
+                    target: if_end_block,
+                });
 
                 // Step 3: Restore local_vars to the pre-if snapshot.
                 // The else-branch must see the same locals that entered the if.
