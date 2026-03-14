@@ -25,7 +25,7 @@ pub struct TranspileOptions {
     pub mode: String,
     /// Maximum memory pages (used when Wasm module declares no maximum)
     pub max_pages: usize,
-    /// Enable optimizations (default: true)
+    /// Enable optimizations
     pub optimize: bool,
 }
 
