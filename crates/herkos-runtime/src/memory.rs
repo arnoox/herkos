@@ -150,9 +150,9 @@ impl<const MAX_PAGES: usize> IsolatedMemory<MAX_PAGES> {
     ///
     /// Only the low 8 bits of `val` are used (Wasm spec). Traps (`OutOfBounds`)
     /// if the region extends beyond the current active memory.
-    pub fn fill(&mut self, dst: u32, val: u8, len: u32) -> WasmResult<()> {
+    pub fn fill(&mut self, dst: usize, val: u8, len: usize) -> WasmResult<()> {
         let active = self.active_size();
-        fill_inner(self.flat_mut(), active, dst as usize, val, len as usize)
+        fill_inner(self.flat_mut(), active, dst, val, len)
     }
 
     /// Wasm `memory.init` — copy `len` bytes from `data[src_offset..]` into
@@ -164,13 +164,13 @@ impl<const MAX_PAGES: usize> IsolatedMemory<MAX_PAGES> {
     /// beyond active memory.
     pub fn init_data_partial(
         &mut self,
-        dst: u32,
+        dst: usize,
         data: &[u8],
         src_offset: usize,
         len: usize,
     ) -> WasmResult<()> {
         let active = self.active_size();
-        init_data_partial_inner(self.flat_mut(), active, dst as usize, data, src_offset, len)
+        init_data_partial_inner(self.flat_mut(), active, dst, data, src_offset, len)
     }
 
     // ── Bounds-checked (safe) load/store ──────────────────────────────
@@ -826,16 +826,13 @@ mod tests {
     #[test]
     fn fill_out_of_bounds() {
         let mut mem = Mem::try_new(1).unwrap();
-        assert_eq!(
-            mem.fill(PAGE_SIZE as u32 - 3, 0, 10),
-            Err(WasmTrap::OutOfBounds)
-        );
+        assert_eq!(mem.fill(PAGE_SIZE - 3, 0, 10), Err(WasmTrap::OutOfBounds));
     }
 
     #[test]
     fn fill_at_boundary() {
         let mut mem = Mem::try_new(1).unwrap();
-        assert!(mem.fill(PAGE_SIZE as u32 - 4, 0x42, 4).is_ok());
+        assert!(mem.fill(PAGE_SIZE - 4, 0x42, 4).is_ok());
         assert_eq!(mem.load_u8(PAGE_SIZE - 1).unwrap(), 0x42);
     }
 
@@ -878,7 +875,7 @@ mod tests {
     fn init_data_partial_dst_out_of_bounds() {
         let mut mem = Mem::try_new(1).unwrap();
         assert_eq!(
-            mem.init_data_partial(PAGE_SIZE as u32 - 2, b"Hello", 0, 5),
+            mem.init_data_partial(PAGE_SIZE - 2, b"Hello", 0, 5),
             Err(WasmTrap::OutOfBounds)
         );
     }

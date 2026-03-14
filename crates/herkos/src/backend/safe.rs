@@ -548,7 +548,7 @@ impl Backend for SafeBackend {
     }
 
     fn emit_memory_fill(&self, dst: VarId, val: VarId, len: VarId) -> String {
-        format!("                memory.fill({dst} as u32, {val} as u8, {len} as u32)?;")
+        format!("                memory.fill({dst} as usize, {val} as u8, {len} as usize)?;")
     }
 
     fn emit_memory_init(
@@ -558,7 +558,7 @@ impl Backend for SafeBackend {
         len: VarId,
         segment_const_name: &str,
     ) -> String {
-        format!("                memory.init_data_partial({dst} as u32, {segment_const_name}, {src_offset} as usize, {len} as usize)?;")
+        format!("                memory.init_data_partial({dst} as usize, {segment_const_name}, {src_offset} as usize, {len} as usize)?;")
     }
 
     fn emit_data_drop(&self, segment: u32) -> String {
