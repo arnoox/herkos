@@ -92,6 +92,22 @@ pub trait Backend {
     /// Emit Rust code for memory.copy (copies len bytes from src to dst).
     fn emit_memory_copy(&self, dst: VarId, src: VarId, len: VarId) -> String;
 
+    /// Emit Rust code for memory.fill (fills len bytes at dst with byte val).
+    fn emit_memory_fill(&self, dst: VarId, val: VarId, len: VarId) -> String;
+
+    /// Emit Rust code for memory.init (copies len bytes from passive segment
+    /// `segment_const_name` at src_offset into memory at dst).
+    fn emit_memory_init(
+        &self,
+        dst: VarId,
+        src_offset: VarId,
+        len: VarId,
+        segment_const_name: &str,
+    ) -> String;
+
+    /// Emit Rust code for data.drop (no-op in the safe backend).
+    fn emit_data_drop(&self, segment: u32) -> String;
+
     /// Emit Rust code for unreachable.
     fn emit_unreachable(&self) -> String;
 

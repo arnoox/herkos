@@ -64,6 +64,20 @@ pub struct DataSegment {
     pub data: Vec<u8>,
 }
 
+/// A passive data segment (bulk-memory proposal).
+///
+/// Passive segments are not copied into memory at module instantiation.
+/// They are initialized on demand via `memory.init`. The `wasm_index` is the
+/// segment's position in the Wasm data section (counting both active and
+/// passive segments in order).
+#[derive(Debug, Clone)]
+pub struct PassiveDataSegment {
+    /// Global Wasm data segment index (position in the data section).
+    pub wasm_index: u32,
+    /// Raw data bytes.
+    pub data: Vec<u8>,
+}
+
 /// An export from the Wasm module.
 #[derive(Debug, Clone)]
 pub struct ExportInfo {
@@ -138,6 +152,10 @@ pub struct ParsedModule {
 
     /// Data segments for memory initialization (Milestone 4)
     pub data_segments: Vec<DataSegment>,
+
+    /// Passive data segments (bulk-memory proposal).
+    /// Not copied into memory at startup; accessed via `memory.init`.
+    pub passive_data_segments: Vec<PassiveDataSegment>,
 
     /// Exports (Milestone 4)
     pub exports: Vec<ExportInfo>,
@@ -238,35 +256,6 @@ fn parse_element_segment(element: wasmparser::Element) -> Result<Option<ElementS
     }
 }
 
-/// Parse an active data segment, or return None for passive segments.
-fn parse_data_segment(data: wasmparser::Data) -> Result<Option<DataSegment>> {
-    match data.kind {
-        wasmparser::DataKind::Active {
-            memory_index: 0,
-            offset_expr,
-        } => {
-            let offset = match eval_const_expr(offset_expr)? {
-                InitValue::I32(v) => v as u32,
-                _ => anyhow::bail!("Data segment offset must be i32"),
-            };
-            Ok(Some(DataSegment {
-                offset,
-                data: data.data.to_vec(),
-            }))
-        }
-        wasmparser::DataKind::Passive => {
-            // Skip passive data segments (used with memory.init)
-            Ok(None)
-        }
-        wasmparser::DataKind::Active { memory_index, .. } => {
-            anyhow::bail!(
-                "Multi-memory data segments not supported (memory_index={})",
-                memory_index
-            );
-        }
-    }
-}
-
 /// Parse a function code section entry, extracting locals and bytecode.
 fn parse_code_entry(body: wasmparser::FunctionBody, type_idx: u32) -> Result<ParsedFunction> {
     // Extract locals
@@ -308,6 +297,7 @@ pub fn parse_wasm(wasm_bytes: &[u8]) -> Result<ParsedModule> {
     let mut element_segments = Vec::new();
     let mut globals = Vec::new();
     let mut data_segments = Vec::new();
+    let mut passive_data_segments = Vec::new();
     let mut exports = Vec::new();
     let mut imports = Vec::new();
     let mut num_imported_functions: u32 = 0;
@@ -451,10 +441,34 @@ pub fn parse_wasm(wasm_bytes: &[u8]) -> Result<ParsedModule> {
             }
 
             Payload::DataSection(reader) => {
-                for data in reader {
+                for (segment_index, data) in (0_u32..).zip(reader) {
                     let data = data.context("reading data segment")?;
-                    if let Some(segment) = parse_data_segment(data)? {
-                        data_segments.push(segment);
+                    match data.kind {
+                        wasmparser::DataKind::Active {
+                            memory_index: 0,
+                            offset_expr,
+                        } => {
+                            let offset = match eval_const_expr(offset_expr)? {
+                                InitValue::I32(v) => v as u32,
+                                _ => anyhow::bail!("Data segment offset must be i32"),
+                            };
+                            data_segments.push(DataSegment {
+                                offset,
+                                data: data.data.to_vec(),
+                            });
+                        }
+                        wasmparser::DataKind::Passive => {
+                            passive_data_segments.push(PassiveDataSegment {
+                                wasm_index: segment_index,
+                                data: data.data.to_vec(),
+                            });
+                        }
+                        wasmparser::DataKind::Active { memory_index, .. } => {
+                            anyhow::bail!(
+                                "Multi-memory data segments not supported (memory_index={})",
+                                memory_index
+                            );
+                        }
                     }
                 }
             }
@@ -471,6 +485,7 @@ pub fn parse_wasm(wasm_bytes: &[u8]) -> Result<ParsedModule> {
         element_segments,
         globals,
         data_segments,
+        passive_data_segments,
         exports,
         imports,
         num_imported_functions,
@@ -607,6 +622,41 @@ mod tests {
         assert_eq!(module.data_segments.len(), 1);
         assert_eq!(module.data_segments[0].offset, 16);
         assert_eq!(module.data_segments[0].data, b"Hello");
+        assert_eq!(module.passive_data_segments.len(), 0);
+    }
+
+    #[test]
+    fn parse_passive_data_segment() {
+        let wat = r#"
+            (module
+                (memory 1)
+                (data "Hello")
+            )
+        "#;
+        let wasm = wat::parse_str(wat).unwrap();
+        let module = parse_wasm(&wasm).unwrap();
+        assert_eq!(module.data_segments.len(), 0);
+        assert_eq!(module.passive_data_segments.len(), 1);
+        assert_eq!(module.passive_data_segments[0].wasm_index, 0);
+        assert_eq!(module.passive_data_segments[0].data, b"Hello");
+    }
+
+    #[test]
+    fn parse_mixed_active_and_passive_segments() {
+        let wat = r#"
+            (module
+                (memory 1)
+                (data (i32.const 0) "Active")
+                (data "Passive")
+            )
+        "#;
+        let wasm = wat::parse_str(wat).unwrap();
+        let module = parse_wasm(&wasm).unwrap();
+        assert_eq!(module.data_segments.len(), 1);
+        assert_eq!(module.passive_data_segments.len(), 1);
+        // wasm_index=1 because the active segment at index 0 comes first
+        assert_eq!(module.passive_data_segments[0].wasm_index, 1);
+        assert_eq!(module.passive_data_segments[0].data, b"Passive");
     }
 
     #[test]

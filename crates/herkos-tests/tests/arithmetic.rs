@@ -6,7 +6,8 @@
 //! 3. The semantics match WebAssembly's wrapping arithmetic
 
 use herkos_tests::{
-    abs, add, add_i64, const_i64, const_return, factorial, fibonacci, gcd, mul, nop, sub,
+    abs, add, add_i64, const_i64, const_return, factorial, fibonacci, gcd, i32_extend16_s,
+    i32_extend8_s, i64_extend16_s, i64_extend32_s, i64_extend8_s, mul, nop, sub,
 };
 
 #[test]
@@ -306,4 +307,205 @@ fn test_add_matches_rust_wrapping() {
             a, b, wasm_result, rust_result
         );
     }
+}
+
+// Sign-extension operations
+#[test]
+fn test_i32_extend8_s() {
+    let mut extend8_mod = i32_extend8_s::new().unwrap();
+
+    // Positive value: 0x42 sign-extended to i32
+    assert_eq!(
+        extend8_mod.func_0(0x42).unwrap(),
+        0x42,
+        "i32.extend8_s(0x42) should be 0x42"
+    );
+
+    // Negative value: 0xFF sign-extended to i32 (all bits set, -1)
+    assert_eq!(
+        extend8_mod.func_0(0xFF).unwrap(),
+        -1i32,
+        "i32.extend8_s(0xFF) should be -1"
+    );
+
+    // Another negative: 0x80 sign-extended (bit 7 set)
+    assert_eq!(
+        extend8_mod.func_0(0x80).unwrap(),
+        -128i32,
+        "i32.extend8_s(0x80) should be -128"
+    );
+
+    // Zero
+    assert_eq!(
+        extend8_mod.func_0(0).unwrap(),
+        0,
+        "i32.extend8_s(0) should be 0"
+    );
+
+    // 0x7F sign-extended (max positive signed byte)
+    assert_eq!(
+        extend8_mod.func_0(0x7F).unwrap(),
+        127i32,
+        "i32.extend8_s(0x7F) should be 127"
+    );
+}
+
+#[test]
+fn test_i32_extend16_s() {
+    let mut extend16_mod = i32_extend16_s::new().unwrap();
+
+    // Positive value: 0x1234 sign-extended
+    assert_eq!(
+        extend16_mod.func_0(0x1234).unwrap(),
+        0x1234,
+        "i32.extend16_s(0x1234) should be 0x1234"
+    );
+
+    // Negative value: 0xFFFF sign-extended (all bits set, -1)
+    assert_eq!(
+        extend16_mod.func_0(0xFFFF).unwrap(),
+        -1i32,
+        "i32.extend16_s(0xFFFF) should be -1"
+    );
+
+    // Another negative: 0x8000 sign-extended (bit 15 set)
+    assert_eq!(
+        extend16_mod.func_0(0x8000).unwrap(),
+        -32768i32,
+        "i32.extend16_s(0x8000) should be -32768"
+    );
+
+    // Zero
+    assert_eq!(
+        extend16_mod.func_0(0).unwrap(),
+        0,
+        "i32.extend16_s(0) should be 0"
+    );
+
+    // 0x7FFF sign-extended (max positive signed short)
+    assert_eq!(
+        extend16_mod.func_0(0x7FFF).unwrap(),
+        32767i32,
+        "i32.extend16_s(0x7FFF) should be 32767"
+    );
+}
+
+#[test]
+fn test_i64_extend8_s() {
+    let mut extend8_mod = i64_extend8_s::new().unwrap();
+
+    // Positive value
+    assert_eq!(
+        extend8_mod.func_0(0x42).unwrap(),
+        0x42i64,
+        "i64.extend8_s(0x42) should be 0x42"
+    );
+
+    // Negative value: 0xFF sign-extended to i64
+    assert_eq!(
+        extend8_mod.func_0(0xFF).unwrap(),
+        -1i64,
+        "i64.extend8_s(0xFF) should be -1"
+    );
+
+    // Another negative: 0x80 sign-extended
+    assert_eq!(
+        extend8_mod.func_0(0x80).unwrap(),
+        -128i64,
+        "i64.extend8_s(0x80) should be -128"
+    );
+
+    // Zero
+    assert_eq!(
+        extend8_mod.func_0(0).unwrap(),
+        0i64,
+        "i64.extend8_s(0) should be 0"
+    );
+
+    // Max positive signed byte
+    assert_eq!(
+        extend8_mod.func_0(0x7F).unwrap(),
+        127i64,
+        "i64.extend8_s(0x7F) should be 127"
+    );
+}
+
+#[test]
+fn test_i64_extend16_s() {
+    let mut extend16_mod = i64_extend16_s::new().unwrap();
+
+    // Positive value
+    assert_eq!(
+        extend16_mod.func_0(0x1234).unwrap(),
+        0x1234i64,
+        "i64.extend16_s(0x1234) should be 0x1234"
+    );
+
+    // Negative value: 0xFFFF sign-extended to i64
+    assert_eq!(
+        extend16_mod.func_0(0xFFFF).unwrap(),
+        -1i64,
+        "i64.extend16_s(0xFFFF) should be -1"
+    );
+
+    // Another negative: 0x8000 sign-extended
+    assert_eq!(
+        extend16_mod.func_0(0x8000).unwrap(),
+        -32768i64,
+        "i64.extend16_s(0x8000) should be -32768"
+    );
+
+    // Zero
+    assert_eq!(
+        extend16_mod.func_0(0).unwrap(),
+        0i64,
+        "i64.extend16_s(0) should be 0"
+    );
+
+    // Max positive signed short
+    assert_eq!(
+        extend16_mod.func_0(0x7FFF).unwrap(),
+        32767i64,
+        "i64.extend16_s(0x7FFF) should be 32767"
+    );
+}
+
+#[test]
+fn test_i64_extend32_s() {
+    let mut extend32_mod = i64_extend32_s::new().unwrap();
+
+    // Positive value: 0x12345678 sign-extended
+    assert_eq!(
+        extend32_mod.func_0(0x12345678i64).unwrap(),
+        0x12345678i64,
+        "i64.extend32_s(0x12345678) should be 0x12345678"
+    );
+
+    // Negative value: 0xFFFFFFFF sign-extended to i64 (all bits set, -1)
+    assert_eq!(
+        extend32_mod.func_0(0xFFFFFFFFi64).unwrap(),
+        -1i64,
+        "i64.extend32_s(0xFFFFFFFF) should be -1"
+    );
+
+    // Another negative: 0x80000000 sign-extended (bit 31 set)
+    assert_eq!(
+        extend32_mod.func_0(0x80000000i64).unwrap(),
+        -2147483648i64,
+        "i64.extend32_s(0x80000000) should be -2147483648"
+    );
+
+    // Zero
+    assert_eq!(
+        extend32_mod.func_0(0).unwrap(),
+        0i64,
+        "i64.extend32_s(0) should be 0"
+    );
+
+    // Max positive signed int
+    assert_eq!(
+        extend32_mod.func_0(0x7FFFFFFFi64).unwrap(),
+        2147483647i64,
+        "i64.extend32_s(0x7FFFFFFF) should be 2147483647"
+    );
 }

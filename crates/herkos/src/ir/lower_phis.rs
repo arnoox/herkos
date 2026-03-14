@@ -291,6 +291,7 @@ mod tests {
             element_segments: Vec::new(),
             globals: Vec::new(),
             data_segments: Vec::new(),
+            passive_data_segments: Vec::new(),
             func_exports: Vec::new(),
             type_signatures: Vec::new(),
             canonical_type: Vec::new(),

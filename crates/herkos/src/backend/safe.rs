@@ -278,6 +278,12 @@ impl Backend for SafeBackend {
             UnOp::I32WrapI64 => format!("                {dest} = {operand} as i32;"),
             UnOp::I64ExtendI32S => format!("                {dest} = {operand} as i64;"),
             UnOp::I64ExtendI32U => format!("                {dest} = ({operand} as u32) as i64;"),
+            // Sign-extension ops
+            UnOp::I32Extend8S => format!("                {dest} = ({operand} as i8) as i32;"),
+            UnOp::I32Extend16S => format!("                {dest} = ({operand} as i16) as i32;"),
+            UnOp::I64Extend8S => format!("                {dest} = ({operand} as i8) as i64;"),
+            UnOp::I64Extend16S => format!("                {dest} = ({operand} as i16) as i64;"),
+            UnOp::I64Extend32S => format!("                {dest} = ({operand} as i32) as i64;"),
 
             // Float → i32 (trapping on NaN/overflow) — logic lives in herkos_runtime::ops
             UnOp::I32TruncF32S => {
@@ -539,6 +545,24 @@ impl Backend for SafeBackend {
 
     fn emit_memory_copy(&self, dst: VarId, src: VarId, len: VarId) -> String {
         format!("                memory.memory_copy({dst} as u32, {src} as u32, {len} as u32)?;")
+    }
+
+    fn emit_memory_fill(&self, dst: VarId, val: VarId, len: VarId) -> String {
+        format!("                memory.fill({dst} as usize, {val} as u8, {len} as usize)?;")
+    }
+
+    fn emit_memory_init(
+        &self,
+        dst: VarId,
+        src_offset: VarId,
+        len: VarId,
+        segment_const_name: &str,
+    ) -> String {
+        format!("                memory.init_data_partial({dst} as usize, {segment_const_name}, {src_offset} as usize, {len} as usize)?;")
+    }
+
+    fn emit_data_drop(&self, segment: u32) -> String {
+        format!("                // data.drop segment {segment} (no-op: const slice)")
     }
 
     fn emit_unreachable(&self) -> String {

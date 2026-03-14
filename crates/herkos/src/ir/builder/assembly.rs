@@ -22,6 +22,7 @@ pub(super) fn assemble_module_metadata(
 ) -> Result<ModuleInfo> {
     let globals = build_globals(parsed);
     let data_segments = build_data_segments(parsed);
+    let passive_data_segments = build_passive_data_segments(parsed);
     let element_segments = build_element_segments(parsed, num_imported_functions);
     let func_exports = build_function_exports(parsed, num_imported_functions);
     let type_signatures = build_call_indirect_signatures(parsed);
@@ -45,6 +46,7 @@ pub(super) fn assemble_module_metadata(
         element_segments,
         globals,
         data_segments,
+        passive_data_segments,
         func_exports,
         type_signatures,
         canonical_type,
@@ -71,6 +73,18 @@ fn build_globals(parsed: &ParsedModule) -> Vec<GlobalDef> {
                 mutable: g.mutable,
                 init_value,
             }
+        })
+        .collect()
+}
+
+/// Builds passive data segment definitions.
+fn build_passive_data_segments(parsed: &ParsedModule) -> Vec<PassiveDataSegment> {
+    parsed
+        .passive_data_segments
+        .iter()
+        .map(|ps| PassiveDataSegment {
+            wasm_index: ps.wasm_index,
+            data: ps.data.clone(),
         })
         .collect()
 }

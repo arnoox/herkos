@@ -36,6 +36,19 @@ fn generate_wrapper_module<B: Backend>(backend: &B, info: &ModuleInfo) -> Result
     }
     rust_code.push('\n');
 
+    // Passive data segment consts (bulk-memory proposal)
+    for seg in &info.passive_data_segments {
+        let bytes: Vec<String> = seg.data.iter().map(|b| format!("{b}u8")).collect();
+        rust_code.push_str(&format!(
+            "#[allow(dead_code)]\nconst PASSIVE_SEGMENT_{}: &[u8] = &[{}];\n",
+            seg.wasm_index,
+            bytes.join(", ")
+        ));
+    }
+    if !info.passive_data_segments.is_empty() {
+        rust_code.push('\n');
+    }
+
     // Host trait definitions
     rust_code.push_str(&generate_host_traits(backend, info));
 
