@@ -441,8 +441,7 @@ pub fn parse_wasm(wasm_bytes: &[u8]) -> Result<ParsedModule> {
             }
 
             Payload::DataSection(reader) => {
-                let mut segment_index: u32 = 0;
-                for data in reader {
+                for (segment_index, data) in (0_u32..).zip(reader) {
                     let data = data.context("reading data segment")?;
                     match data.kind {
                         wasmparser::DataKind::Active {
@@ -471,7 +470,6 @@ pub fn parse_wasm(wasm_bytes: &[u8]) -> Result<ParsedModule> {
                             );
                         }
                     }
-                    segment_index += 1;
                 }
             }
 
