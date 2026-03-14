@@ -15,8 +15,8 @@ struct Cli {
     #[arg(long, short)]
     output: Option<PathBuf>,
 
-    /// Enable optimizations (default: true)
-    #[arg(long, short = 'O', default_value_t = true)]
+    /// Enable IR optimizations
+    #[arg(long, short = 'O')]
     optimize: bool,
 }
 

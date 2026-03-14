@@ -34,7 +34,7 @@ impl Default for TranspileOptions {
         Self {
             mode: "safe".to_string(),
             max_pages: 256,
-            optimize: true,
+            optimize: false,
         }
     }
 }

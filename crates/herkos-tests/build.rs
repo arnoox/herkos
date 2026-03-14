@@ -13,8 +13,8 @@ fn main() -> Result<()> {
     // Use cargo's OUT_DIR for generated files (parallel-build safe)
     let out_dir = PathBuf::from(env::var("OUT_DIR").context("OUT_DIR not set")?);
 
-    // HERKOS_OPTIMIZE=0 disables IR optimizations; any other value (or unset) enables them.
-    let optimize = env::var("HERKOS_OPTIMIZE").map_or(true, |v| v != "0");
+    // HERKOS_OPTIMIZE=1 enables IR optimizations; any other value (or unset) disables them.
+    let optimize = env::var("HERKOS_OPTIMIZE").map_or(false, |v| v == "1");
     eprintln!(
         "Generating WASM and transpiled modules to: {} (optimize={})",
         out_dir.display(),
