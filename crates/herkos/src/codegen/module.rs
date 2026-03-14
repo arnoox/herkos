@@ -15,7 +15,10 @@ use anyhow::{Context, Result};
 /// Generate a complete Rust module from IR functions with full module info.
 ///
 /// This is the main entry point. It generates a module wrapper structure.
-pub fn generate_module_with_info<B: Backend>(backend: &B, info: &ModuleInfo) -> Result<String> {
+pub fn generate_module_with_info<B: Backend>(
+    backend: &B,
+    info: &LoweredModuleInfo,
+) -> Result<String> {
     generate_wrapper_module(backend, info)
 }
 
