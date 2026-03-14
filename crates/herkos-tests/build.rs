@@ -14,7 +14,7 @@ fn main() -> Result<()> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").context("OUT_DIR not set")?);
 
     // HERKOS_OPTIMIZE=1 enables IR optimizations; any other value (or unset) disables them.
-    let optimize = env::var("HERKOS_OPTIMIZE").map_or(false, |v| v == "1");
+    let optimize = env::var("HERKOS_OPTIMIZE").is_ok_and(|v| v == "1");
     eprintln!(
         "Generating WASM and transpiled modules to: {} (optimize={})",
         out_dir.display(),
