@@ -10,13 +10,8 @@ env:
 
 jobs:
   check:
-    name: Build, Test, Lint (optimize=${{ matrix.optimize }})
+    name: Build, Test, Lint
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        optimize: ["1", "0"]
-    env:
-      HERKOS_OPTIMIZE: ${{ matrix.optimize }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -34,8 +29,15 @@ jobs:
       - name: Build
         run: cargo build --all-targets
 
-      - name: Test
+      - name: Test (optimized)
         run: cargo test
+        env:
+          HERKOS_OPTIMIZE: "1"
+
+      - name: Test (unoptimized)
+        run: cargo test
+        env:
+          HERKOS_OPTIMIZE: "0"
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
