@@ -6,21 +6,35 @@
 //! Each optimization is a self-contained sub-module. The top-level
 //! [`optimize_ir`] function runs all passes in order.
 
-use crate::ir::LoweredModuleInfo;
+use crate::ir::{LoweredModuleInfo, ModuleInfo};
 use anyhow::Result;
 
 // ── Passes ───────────────────────────────────────────────────────────────────
 mod dead_blocks;
 
-/// Optimizes the IR representation by running all passes in order.
+/// Optimizes the pure SSA IR before phi lowering.
 ///
-/// Expects a [`LoweredModuleInfo`] — i.e. phi nodes have already been lowered
-/// by [`crate::ir::lower_phis::lower`] before calling this function.
-pub fn optimize_ir(module_info: LoweredModuleInfo) -> Result<LoweredModuleInfo> {
+/// Passes here operate on [`ModuleInfo`] with phi nodes still intact.
+/// Control-flow based passes (e.g. dead block elimination) belong here
+/// because reachability is identical in SSA and lowered form.
+pub fn optimize_ir(module_info: ModuleInfo, do_opt: bool) -> Result<ModuleInfo> {
     let mut module_info = module_info;
-    for func in &mut module_info.ir_functions {
-        dead_blocks::eliminate(func)?;
+    if do_opt {
+        for func in &mut module_info.ir_functions {
+            dead_blocks::eliminate(func)?;
+        }
     }
+    Ok(module_info)
+}
+
+/// Optimizes the lowered IR after phi nodes have been eliminated.
+///
+/// Passes here operate on [`LoweredModuleInfo`] where all `IrInstr::Phi`
+/// nodes have been replaced by `IrInstr::Assign` in predecessor blocks.
+pub fn optimize_lowered_ir(
+    module_info: LoweredModuleInfo,
+    _do_opt: bool,
+) -> Result<LoweredModuleInfo> {
     Ok(module_info)
 }
 
@@ -74,7 +88,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = super::optimize_ir(crate::ir::lower_phis::lower(module)).unwrap();
+        let result = super::optimize_ir(module, true).unwrap();
         assert_eq!(
             result.ir_functions[0].blocks.len(),
             1,

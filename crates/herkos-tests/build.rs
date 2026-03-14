@@ -5,18 +5,26 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() -> Result<()> {
-    // Rerun build script if this file or any data files change
+    // Rerun build script if this file, any data files, or the optimize flag changes
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=data");
+    println!("cargo:rerun-if-env-changed=HERKOS_OPTIMIZE");
 
     // Use cargo's OUT_DIR for generated files (parallel-build safe)
     let out_dir = PathBuf::from(env::var("OUT_DIR").context("OUT_DIR not set")?);
+
+    // HERKOS_OPTIMIZE=0 disables IR optimizations; any other value (or unset) enables them.
+    let optimize = env::var("HERKOS_OPTIMIZE").map_or(true, |v| v != "0");
     eprintln!(
-        "Generating WASM and transpiled modules to: {}",
-        out_dir.display()
+        "Generating WASM and transpiled modules to: {} (optimize={})",
+        out_dir.display(),
+        optimize
     );
 
-    let options = TranspileOptions::default();
+    let options = TranspileOptions {
+        optimize,
+        ..TranspileOptions::default()
+    };
     let mut module_names = Vec::new();
 
     // 1. WAT test cases from data/wat/*.wat

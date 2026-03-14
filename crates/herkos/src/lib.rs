@@ -15,7 +15,7 @@ use backend::SafeBackend;
 use codegen::CodeGenerator;
 use ir::builder::build_module_info;
 use ir::{lower_phis, LoweredModuleInfo};
-use optimizer::optimize_ir;
+use optimizer::{optimize_ir, optimize_lowered_ir};
 use parser::parse_wasm;
 
 /// Configuration options for transpilation
@@ -25,6 +25,8 @@ pub struct TranspileOptions {
     pub mode: String,
     /// Maximum memory pages (used when Wasm module declares no maximum)
     pub max_pages: usize,
+    /// Enable optimizations (default: true)
+    pub optimize: bool,
 }
 
 impl Default for TranspileOptions {
@@ -32,6 +34,7 @@ impl Default for TranspileOptions {
         Self {
             mode: "safe".to_string(),
             max_pages: 256,
+            optimize: true,
         }
     }
 }
@@ -65,16 +68,17 @@ pub fn transpile(wasm_bytes: &[u8], options: &TranspileOptions) -> Result<String
     let module_info =
         build_module_info(&parsed, options).context("failed to build module metadata")?;
 
-    // SSA destruction: lower phi nodes to predecessor assignments.
-    // Must run before the optimizer so that all block-elimination passes
-    // operate on phi-free IR.
-    let module_info = lower_phis::lower(module_info);
+    // Optimize the pure SSA IR.
+    let module_info = optimize_ir(module_info, options.optimize)?;
 
-    // Optimize the IR
-    let module_info = optimize_ir(module_info)?;
+    // SSA destruction: lower phi nodes to predecessor assignments.
+    let lowered_module_info = lower_phis::lower(module_info);
+
+    // Optimize the lowered IR
+    let lowered_module_info = optimize_lowered_ir(lowered_module_info, options.optimize)?;
 
     // Generate Rust source code
-    let rust_code = generate_rust_code(&module_info)?;
+    let rust_code = generate_rust_code(&lowered_module_info)?;
 
     Ok(rust_code)
 }
