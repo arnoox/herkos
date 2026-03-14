@@ -14,6 +14,10 @@ struct Cli {
     /// Output Rust source file
     #[arg(long, short)]
     output: Option<PathBuf>,
+
+    /// Enable IR optimizations
+    #[arg(long, short = 'O')]
+    optimize: bool,
 }
 
 fn main() -> Result<()> {
@@ -29,6 +33,7 @@ fn main() -> Result<()> {
     let options = TranspileOptions {
         mode: "safe".to_string(),
         max_pages: 256,
+        optimize: cli.optimize,
     };
 
     // Transpile using library function

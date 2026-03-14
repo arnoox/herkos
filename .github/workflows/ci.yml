@@ -7,6 +7,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   check:
@@ -29,8 +30,15 @@ jobs:
       - name: Build
         run: cargo build --all-targets
 
-      - name: Test
+      - name: Test (optimized)
         run: cargo test
+        env:
+          HERKOS_OPTIMIZE: "1"
+
+      - name: Test (unoptimized)
+        run: cargo test
+        env:
+          HERKOS_OPTIMIZE: "0"
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
