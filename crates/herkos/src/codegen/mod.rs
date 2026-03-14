@@ -211,6 +211,7 @@ mod tests {
             element_segments: Vec::new(),
             globals: Vec::new(),
             data_segments: Vec::new(),
+            passive_data_segments: Vec::new(),
             func_exports: Vec::new(),
             type_signatures: Vec::new(),
             canonical_type: Vec::new(),
@@ -262,6 +263,7 @@ mod tests {
             element_segments: Vec::new(),
             globals: Vec::new(),
             data_segments: Vec::new(),
+            passive_data_segments: Vec::new(),
             func_exports: Vec::new(),
             type_signatures: Vec::new(),
             canonical_type: Vec::new(),
@@ -368,6 +370,7 @@ mod tests {
             element_segments: Vec::new(),
             globals: Vec::new(),
             data_segments: Vec::new(),
+            passive_data_segments: Vec::new(),
             func_exports: Vec::new(),
             type_signatures: Vec::new(),
             canonical_type: Vec::new(),
@@ -432,6 +435,7 @@ mod tests {
             element_segments: Vec::new(),
             globals: Vec::new(),
             data_segments: Vec::new(),
+            passive_data_segments: Vec::new(),
             func_exports: Vec::new(),
             type_signatures: Vec::new(),
             canonical_type: Vec::new(),
@@ -486,6 +490,7 @@ mod tests {
                 init_value: GlobalInit::I32(0),
             }],
             data_segments: Vec::new(),
+            passive_data_segments: Vec::new(),
             func_exports: vec![FuncExport {
                 name: "get_value".to_string(),
                 func_index: LocalFuncIdx::new(0),
@@ -553,6 +558,7 @@ mod tests {
                 offset: 0,
                 data: vec![72, 101, 108, 108, 111], // "Hello"
             }],
+            passive_data_segments: Vec::new(),
             func_exports: vec![FuncExport {
                 name: "load_word".to_string(),
                 func_index: LocalFuncIdx::new(0),
@@ -621,6 +627,7 @@ mod tests {
                 init_value: GlobalInit::I32(42),
             }],
             data_segments: Vec::new(),
+            passive_data_segments: Vec::new(),
             func_exports: vec![FuncExport {
                 name: "get_const".to_string(),
                 func_index: LocalFuncIdx::new(0),

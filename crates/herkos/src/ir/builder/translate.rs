@@ -391,6 +391,13 @@ impl IrBuilder {
             Operator::F32ReinterpretI32 => self.emit_unop(UnOp::F32ReinterpretI32)?,
             Operator::F64ReinterpretI64 => self.emit_unop(UnOp::F64ReinterpretI64)?,
 
+            // Sign-extension ops
+            Operator::I32Extend8S => self.emit_unop(UnOp::I32Extend8S)?,
+            Operator::I32Extend16S => self.emit_unop(UnOp::I32Extend16S)?,
+            Operator::I64Extend8S => self.emit_unop(UnOp::I64Extend8S)?,
+            Operator::I64Extend16S => self.emit_unop(UnOp::I64Extend16S)?,
+            Operator::I64Extend32S => self.emit_unop(UnOp::I64Extend32S)?,
+
             // Return
             Operator::Return => {
                 self.emit_return()?;
@@ -1251,6 +1258,55 @@ impl IrBuilder {
                     dst: dst.var_id(),
                     src: src.var_id(),
                     len: len.var_id(),
+                });
+            }
+
+            Operator::MemoryFill { mem: 0 } => {
+                // Stack: [dst: i32, val: i32, len: i32] (len on top)
+                let len = self
+                    .value_stack
+                    .pop()
+                    .ok_or_else(|| anyhow::anyhow!("Stack underflow for memory.fill (len)"))?;
+                let val = self
+                    .value_stack
+                    .pop()
+                    .ok_or_else(|| anyhow::anyhow!("Stack underflow for memory.fill (val)"))?;
+                let dst = self
+                    .value_stack
+                    .pop()
+                    .ok_or_else(|| anyhow::anyhow!("Stack underflow for memory.fill (dst)"))?;
+                self.emit_void(IrInstr::MemoryFill {
+                    dst: dst.var_id(),
+                    val: val.var_id(),
+                    len: len.var_id(),
+                });
+            }
+
+            Operator::MemoryInit { mem: 0, data_index } => {
+                // Stack: [dst: i32, src_offset: i32, len: i32] (len on top)
+                let len = self
+                    .value_stack
+                    .pop()
+                    .ok_or_else(|| anyhow::anyhow!("Stack underflow for memory.init (len)"))?;
+                let src_offset = self.value_stack.pop().ok_or_else(|| {
+                    anyhow::anyhow!("Stack underflow for memory.init (src_offset)")
+                })?;
+                let dst = self
+                    .value_stack
+                    .pop()
+                    .ok_or_else(|| anyhow::anyhow!("Stack underflow for memory.init (dst)"))?;
+                self.emit_void(IrInstr::MemoryInit {
+                    dst: dst.var_id(),
+                    src_offset: src_offset.var_id(),
+                    len: len.var_id(),
+                    segment: *data_index,
+                });
+            }
+
+            Operator::DataDrop { data_index } => {
+                // No-op: const slices have no runtime lifetime to drop.
+                self.emit_void(IrInstr::DataDrop {
+                    segment: *data_index,
                 });
             }
 

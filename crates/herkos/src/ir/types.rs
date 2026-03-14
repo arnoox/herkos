@@ -346,6 +346,24 @@ pub enum IrInstr {
     /// Traps if either region is out of bounds. Returns nothing.
     MemoryCopy { dst: VarId, src: VarId, len: VarId },
 
+    /// Fill `len` bytes starting at `dst` with `val` (low 8 bits used).
+    /// Traps if the region is out of bounds. Returns nothing.
+    MemoryFill { dst: VarId, val: VarId, len: VarId },
+
+    /// Copy `len` bytes from passive data segment `segment` at `src_offset`
+    /// into linear memory at `dst`. `segment` is a compile-time constant
+    /// (Wasm immediate). Traps if either range is out of bounds.
+    MemoryInit {
+        dst: VarId,
+        src_offset: VarId,
+        len: VarId,
+        segment: u32,
+    },
+
+    /// Drop a passive data segment (no-op in the safe backend — const slices
+    /// have no runtime lifetime to drop).
+    DataDrop { segment: u32 },
+
     /// Conditional select (dest = if condition != 0 { val1 } else { val2 })
     Select {
         dest: VarId,
@@ -563,6 +581,12 @@ pub enum UnOp {
     I32WrapI64,    // i64 → i32 (truncate to low 32 bits)
     I64ExtendI32S, // i32 → i64 (sign-extend)
     I64ExtendI32U, // i32 → i64 (zero-extend)
+    // Sign-extension ops (Wasm sign-extension-ops proposal)
+    I32Extend8S,  // sign-extend 8-bit value in i32
+    I32Extend16S, // sign-extend 16-bit value in i32
+    I64Extend8S,  // sign-extend 8-bit value in i64
+    I64Extend16S, // sign-extend 16-bit value in i64
+    I64Extend32S, // sign-extend 32-bit value in i64
 
     // Conversions: float → integer (trapping on NaN/overflow)
     I32TruncF32S,
@@ -726,11 +750,16 @@ impl UnOp {
             | UnOp::I32TruncF32U
             | UnOp::I32TruncF64S
             | UnOp::I32TruncF64U
-            | UnOp::I32ReinterpretF32 => WasmType::I32,
+            | UnOp::I32ReinterpretF32
+            | UnOp::I32Extend8S
+            | UnOp::I32Extend16S => WasmType::I32,
 
             // Conversions → i64
             UnOp::I64ExtendI32S
             | UnOp::I64ExtendI32U
+            | UnOp::I64Extend8S
+            | UnOp::I64Extend16S
+            | UnOp::I64Extend32S
             | UnOp::I64TruncF32S
             | UnOp::I64TruncF32U
             | UnOp::I64TruncF64S
@@ -815,6 +844,21 @@ pub struct DataSegmentDef {
     /// Byte offset into memory.
     pub offset: u32,
     /// Raw bytes to write.
+    pub data: Vec<u8>,
+}
+
+/// A passive data segment (bulk-memory proposal).
+///
+/// Passive segments are not copied into memory at module instantiation.
+/// They are accessed on demand via `memory.init`. The `wasm_index` is the
+/// segment's position in the Wasm data section (counting both active and
+/// passive segments in order), which determines the generated const name
+/// `PASSIVE_SEGMENT_{wasm_index}`.
+#[derive(Debug, Clone)]
+pub struct PassiveDataSegment {
+    /// Global Wasm data segment index (position in the data section).
+    pub wasm_index: u32,
+    /// Raw data bytes.
     pub data: Vec<u8>,
 }
 
@@ -910,6 +954,9 @@ pub struct ModuleInfo {
     pub globals: Vec<GlobalDef>,
     /// Data segments for memory initialization.
     pub data_segments: Vec<DataSegmentDef>,
+    /// Passive data segments (bulk-memory proposal).
+    /// Not copied into memory at startup; accessed via `memory.init`.
+    pub passive_data_segments: Vec<PassiveDataSegment>,
     /// Exported functions.
     pub func_exports: Vec<FuncExport>,
     /// Type section signatures (for call_indirect dispatch).

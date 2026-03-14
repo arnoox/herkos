@@ -146,6 +146,33 @@ impl<const MAX_PAGES: usize> IsolatedMemory<MAX_PAGES> {
         Ok(())
     }
 
+    /// Wasm `memory.fill` — fill `len` bytes starting at `dst` with `val`.
+    ///
+    /// Only the low 8 bits of `val` are used (Wasm spec). Traps (`OutOfBounds`)
+    /// if the region extends beyond the current active memory.
+    pub fn fill(&mut self, dst: u32, val: u8, len: u32) -> WasmResult<()> {
+        let active = self.active_size();
+        fill_inner(self.flat_mut(), active, dst as usize, val, len as usize)
+    }
+
+    /// Wasm `memory.init` — copy `len` bytes from `data[src_offset..]` into
+    /// linear memory at `dst`.
+    ///
+    /// Unlike `init_data` (which copies an entire slice), this copies a
+    /// sub-range of a passive data segment. Traps (`OutOfBounds`) if either
+    /// the source range extends beyond `data` or the destination region extends
+    /// beyond active memory.
+    pub fn init_data_partial(
+        &mut self,
+        dst: u32,
+        data: &[u8],
+        src_offset: usize,
+        len: usize,
+    ) -> WasmResult<()> {
+        let active = self.active_size();
+        init_data_partial_inner(self.flat_mut(), active, dst as usize, data, src_offset, len)
+    }
+
     // ── Bounds-checked (safe) load/store ──────────────────────────────
 
     /// Load an i32 from linear memory with bounds checking.
@@ -467,6 +494,38 @@ fn init_data_inner(
     Ok(())
 }
 
+#[inline(never)]
+fn fill_inner(
+    memory: &mut [u8],
+    active_bytes: usize,
+    dst: usize,
+    val: u8,
+    len: usize,
+) -> WasmResult<()> {
+    let region = checked_slice_mut(memory, active_bytes, dst, len)?;
+    region.fill(val);
+    Ok(())
+}
+
+#[inline(never)]
+fn init_data_partial_inner(
+    memory: &mut [u8],
+    active_bytes: usize,
+    dst: usize,
+    data: &[u8],
+    src_offset: usize,
+    len: usize,
+) -> WasmResult<()> {
+    let src_end = src_offset.checked_add(len).ok_or(WasmTrap::OutOfBounds)?;
+    if src_end > data.len() {
+        return Err(WasmTrap::OutOfBounds);
+    }
+    let src = &data[src_offset..src_end];
+    let dst_region = checked_slice_mut(memory, active_bytes, dst, len)?;
+    dst_region.copy_from_slice(src);
+    Ok(())
+}
+
 // ── Unchecked inner functions ─────────────────────────────────────────
 //
 // SAFETY: the caller (verified backend) guarantees the offset is in-bounds,
@@ -745,6 +804,92 @@ mod tests {
         mem.store_u8(5, 0xFF).unwrap();
         mem.init_data(5, &[0xABu8]).unwrap();
         assert_eq!(mem.load_u8(5).unwrap(), 0xAB);
+    }
+
+    // ── fill ──
+
+    #[test]
+    fn fill_writes_byte_pattern() {
+        let mut mem = Mem::try_new(1).unwrap();
+        mem.fill(100, 0xAB, 5).unwrap();
+        for i in 0..5usize {
+            assert_eq!(mem.load_u8(100 + i).unwrap(), 0xAB);
+        }
+    }
+
+    #[test]
+    fn fill_zero_len_is_noop() {
+        let mut mem = Mem::try_new(1).unwrap();
+        assert!(mem.fill(0, 0xFF, 0).is_ok());
+    }
+
+    #[test]
+    fn fill_out_of_bounds() {
+        let mut mem = Mem::try_new(1).unwrap();
+        assert_eq!(
+            mem.fill(PAGE_SIZE as u32 - 3, 0, 10),
+            Err(WasmTrap::OutOfBounds)
+        );
+    }
+
+    #[test]
+    fn fill_at_boundary() {
+        let mut mem = Mem::try_new(1).unwrap();
+        assert!(mem.fill(PAGE_SIZE as u32 - 4, 0x42, 4).is_ok());
+        assert_eq!(mem.load_u8(PAGE_SIZE - 1).unwrap(), 0x42);
+    }
+
+    // ── init_data_partial ──
+
+    #[test]
+    fn init_data_partial_copies_subrange() {
+        let mut mem = Mem::try_new(1).unwrap();
+        let data = b"Hello, World!";
+        mem.init_data_partial(0, data, 7, 5).unwrap(); // "World"
+        assert_eq!(mem.load_u8(0).unwrap(), b'W');
+        assert_eq!(mem.load_u8(4).unwrap(), b'd');
+    }
+
+    #[test]
+    fn init_data_partial_zero_len_is_noop() {
+        let mut mem = Mem::try_new(1).unwrap();
+        assert!(mem.init_data_partial(0, b"Hello", 0, 0).is_ok());
+    }
+
+    #[test]
+    fn init_data_partial_full_segment() {
+        let mut mem = Mem::try_new(1).unwrap();
+        mem.init_data_partial(10, b"Hello", 0, 5).unwrap();
+        assert_eq!(mem.load_u8(10).unwrap(), b'H');
+        assert_eq!(mem.load_u8(14).unwrap(), b'o');
+    }
+
+    #[test]
+    fn init_data_partial_src_out_of_bounds() {
+        let mut mem = Mem::try_new(1).unwrap();
+        // src_offset=3, len=5: 3+5=8 > 5 (data.len())
+        assert_eq!(
+            mem.init_data_partial(0, b"Hello", 3, 5),
+            Err(WasmTrap::OutOfBounds)
+        );
+    }
+
+    #[test]
+    fn init_data_partial_dst_out_of_bounds() {
+        let mut mem = Mem::try_new(1).unwrap();
+        assert_eq!(
+            mem.init_data_partial(PAGE_SIZE as u32 - 2, b"Hello", 0, 5),
+            Err(WasmTrap::OutOfBounds)
+        );
+    }
+
+    #[test]
+    fn init_data_partial_src_offset_overflow() {
+        let mut mem = Mem::try_new(1).unwrap();
+        assert_eq!(
+            mem.init_data_partial(0, b"Hello", usize::MAX, 1),
+            Err(WasmTrap::OutOfBounds)
+        );
     }
 
     // ── little-endian encoding ──

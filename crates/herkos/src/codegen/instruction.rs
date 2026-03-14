@@ -97,6 +97,22 @@ pub fn generate_instruction_with_info<B: Backend>(
 
         IrInstr::MemoryCopy { dst, src, len } => backend.emit_memory_copy(*dst, *src, *len),
 
+        IrInstr::MemoryFill { dst, val, len } => backend.emit_memory_fill(*dst, *val, *len),
+
+        IrInstr::MemoryInit {
+            dst,
+            src_offset,
+            len,
+            segment,
+        } => backend.emit_memory_init(
+            *dst,
+            *src_offset,
+            *len,
+            &format!("PASSIVE_SEGMENT_{segment}"),
+        ),
+
+        IrInstr::DataDrop { segment } => backend.emit_data_drop(*segment),
+
         IrInstr::Select {
             dest,
             val1,
