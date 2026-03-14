@@ -471,7 +471,7 @@ impl IrBuilder {
                             if branch_incoming.is_empty() {
                                 self.dead_code = true;
                             } else {
-                                self.insert_phis_at_join(end_block, &branch_incoming);
+                                self.insert_phis_at_join(end_block, &branch_incoming)?;
                             }
                         }
 
@@ -495,7 +495,7 @@ impl IrBuilder {
                                 preds.push((then_block, then_locals));
                             }
                             self.push_predecessor_if_live(&mut preds);
-                            preds.extend(branch_incoming.iter().cloned());
+                            preds.extend(branch_incoming.clone());
 
                             // Assign result if needed (else-branch fall-through)
                             if let Some(result_var) = rv {
@@ -516,7 +516,7 @@ impl IrBuilder {
                             if preds.is_empty() {
                                 self.dead_code = true;
                             } else {
-                                self.insert_phis_at_join(end_block, &preds);
+                                self.insert_phis_at_join(end_block, &preds)?;
                             }
                         }
 
@@ -553,7 +553,7 @@ impl IrBuilder {
                             if branch_incoming.is_empty() {
                                 self.dead_code = true;
                             } else {
-                                self.insert_phis_at_join(end_block, &branch_incoming);
+                                self.insert_phis_at_join(end_block, &branch_incoming)?;
                             }
                         }
 
@@ -588,7 +588,7 @@ impl IrBuilder {
                             if branch_incoming.is_empty() {
                                 self.dead_code = true;
                             } else {
-                                self.insert_phis_at_join(end_block, &branch_incoming);
+                                self.insert_phis_at_join(end_block, &branch_incoming)?;
                             }
                         }
                     }
@@ -980,22 +980,7 @@ impl IrBuilder {
                 // Before terminating the block we snapshot `local_vars` and record it
                 // as a phi predecessor for the target frame.  This snapshot is used by
                 // `insert_phis_at_join` (or `emit_loop_phis`) to build the phi sources.
-                let depth = *relative_depth as usize;
-                let frame_idx =
-                    self.control_stack
-                        .len()
-                        .checked_sub(depth + 1)
-                        .ok_or_else(|| {
-                            anyhow::anyhow!("br: depth {} exceeds control stack", relative_depth)
-                        })?;
-
-                let (target, is_loop) = {
-                    let frame = &self.control_stack[frame_idx];
-                    match frame {
-                        super::core::ControlFrame::Loop { start_block, .. } => (*start_block, true),
-                        _ => (frame.end_block(), false),
-                    }
-                };
+                let (target, is_loop, frame_idx) = self.resolve_branch_info(*relative_depth)?;
 
                 // Record snapshot *before* terminating so local_vars is still valid.
                 if is_loop {
@@ -1035,22 +1020,7 @@ impl IrBuilder {
                     .ok_or_else(|| anyhow::anyhow!("Stack underflow for br_if"))?
                     .var_id();
 
-                let depth = *relative_depth as usize;
-                let frame_idx =
-                    self.control_stack
-                        .len()
-                        .checked_sub(depth + 1)
-                        .ok_or_else(|| {
-                            anyhow::anyhow!("br_if: depth {} exceeds control stack", relative_depth)
-                        })?;
-
-                let (target, is_loop) = {
-                    let frame = &self.control_stack[frame_idx];
-                    match frame {
-                        super::core::ControlFrame::Loop { start_block, .. } => (*start_block, true),
-                        _ => (frame.end_block(), false),
-                    }
-                };
+                let (target, is_loop, frame_idx) = self.resolve_branch_info(*relative_depth)?;
 
                 // Record the taken branch as a phi predecessor (snapshot before termination).
                 if is_loop {
@@ -1091,7 +1061,8 @@ impl IrBuilder {
                 let target_depths: Vec<u32> = targets.targets().collect::<Result<Vec<_>, _>>()?;
                 let default_depth = targets.default();
 
-                let stack_len = self.control_stack.len();
+                // Collect all branch targets and record phi predecessors, deduplicating by frame_idx
+                // (multiple table entries may point to the same target frame).
                 let mut recorded: std::collections::HashSet<usize> =
                     std::collections::HashSet::new();
                 for depth in target_depths
@@ -1099,10 +1070,8 @@ impl IrBuilder {
                     .copied()
                     .chain(std::iter::once(default_depth))
                 {
-                    let depth = depth as usize;
-                    let frame_idx = stack_len.saturating_sub(depth + 1);
+                    let (_, is_loop, frame_idx) = self.resolve_branch_info(depth)?;
                     if recorded.insert(frame_idx) {
-                        let is_loop = self.control_stack[frame_idx].is_loop();
                         if is_loop {
                             self.record_loop_back_branch(frame_idx);
                         } else {

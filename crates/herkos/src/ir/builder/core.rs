@@ -326,11 +326,6 @@ impl ControlFrame {
         }
     }
 
-    /// Returns `true` if this is a Loop frame (backward-branch target).
-    pub(super) fn is_loop(&self) -> bool {
-        matches!(self, ControlFrame::Loop { .. })
-    }
-
     /// Loop phi vars (one per Wasm local); empty slice for non-Loop frames.
     pub(super) fn loop_phi_vars(&self) -> &[UseVar] {
         match self {
@@ -505,7 +500,9 @@ impl IrBuilder {
         if let Some(block) = self.blocks.iter_mut().find(|b| b.id == self.current_block) {
             block.instructions.push(instr);
         } else {
-            // Current block doesn't exist yet, create it
+            // Current block doesn't exist yet, create it as a fallback.
+            // This handles cases where instructions are emitted before explicit block creation,
+            // which is valid in the IR builder's lazy block creation model.
             self.blocks.push(IrBlock {
                 id: self.current_block,
                 instructions: vec![instr],
@@ -732,6 +729,32 @@ impl IrBuilder {
         Ok(target)
     }
 
+    /// Resolve branch target and metadata for relative depth N.
+    ///
+    /// Returns `(target_block, is_loop, frame_idx)` needed for recording phi predecessors
+    /// and determining terminator type.
+    pub(super) fn resolve_branch_info(&self, depth: u32) -> Result<(BlockId, bool, usize)> {
+        let frame_idx = self
+            .control_stack
+            .len()
+            .checked_sub(depth as usize + 1)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Branch depth {} exceeds control stack depth {}",
+                    depth,
+                    self.control_stack.len()
+                )
+            })?;
+
+        let frame = &self.control_stack[frame_idx];
+        let (target, is_loop) = match frame {
+            ControlFrame::Loop { start_block, .. } => (*start_block, true),
+            _ => (frame.end_block(), false),
+        };
+
+        Ok((target, is_loop, frame_idx))
+    }
+
     /// Start a new block (create and switch to it).
     pub(super) fn start_block(&mut self, block_id: BlockId) {
         self.current_block = block_id;
@@ -799,10 +822,10 @@ impl IrBuilder {
         &mut self,
         join_block: BlockId,
         predecessors: &[(BlockId, Vec<UseVar>)],
-    ) {
+    ) -> Result<()> {
         let num_locals = self.local_vars.len();
         if predecessors.is_empty() || num_locals == 0 {
-            return;
+            return Ok(());
         }
 
         // Collect phis to insert: allocate dest vars before touching self.blocks.
@@ -838,12 +861,18 @@ impl IrBuilder {
         self.local_vars = new_locals;
 
         if !phi_instrs.is_empty() {
-            if let Some(block) = self.blocks.iter_mut().find(|b| b.id == join_block) {
-                let old = std::mem::take(&mut block.instructions);
-                block.instructions = phi_instrs;
-                block.instructions.extend(old);
-            }
+            let block = self
+                .blocks
+                .iter_mut()
+                .find(|b| b.id == join_block)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("join block {:?} not found in blocks", join_block)
+                })?;
+            let old = std::mem::take(&mut block.instructions);
+            block.instructions = phi_instrs;
+            block.instructions.extend(old);
         }
+        Ok(())
     }
 
     /// Emit phi instructions for a loop frame into its header block.
@@ -906,11 +935,20 @@ impl IrBuilder {
             });
         }
 
-        if let Some(block) = self.blocks.iter_mut().find(|b| b.id == start_block) {
-            let old = std::mem::take(&mut block.instructions);
-            block.instructions = phi_instrs;
-            block.instructions.extend(old);
-        }
+        let block = self
+            .blocks
+            .iter_mut()
+            .find(|b| b.id == start_block)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Loop header block {:?} not found when emitting loop phis. \
+                     This indicates a bug in the IR builder's block or control frame management.",
+                    start_block
+                );
+            });
+        let old = std::mem::take(&mut block.instructions);
+        block.instructions = phi_instrs;
+        block.instructions.extend(old);
     }
 }
 
