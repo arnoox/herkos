@@ -61,10 +61,6 @@ impl Default for TranspileOptions {
 /// std::fs::write("output.rs", rust_code).unwrap();
 /// ```
 pub fn transpile(wasm_bytes: &[u8], options: &TranspileOptions) -> Result<String> {
-    if !options.optimize {
-        panic!("unoptimizations not yet implemented")
-    }
-
     // Parse the WebAssembly binary
     let parsed = parse_wasm(wasm_bytes).context("failed to parse WebAssembly module")?;
 
