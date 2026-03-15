@@ -151,10 +151,15 @@ fn enrich_ir_functions(
     imported_globals: &[ImportedGlobalDef],
 ) -> Result<()> {
     let num_imported_globals = imported_globals.len();
+    let has_func_imports = parsed
+        .imports
+        .iter()
+        .any(|i| matches!(i.kind, ImportKind::Function(_)));
     for (func_idx, func) in parsed.functions.iter().enumerate() {
         if let Some(ir_func) = ir_functions.get_mut(func_idx) {
             ir_func.type_idx = TypeIdx::new(canonical_type[func.type_idx as usize]);
-            ir_func.needs_host = function_calls_imports(ir_func, num_imported_globals);
+            ir_func.needs_host =
+                function_calls_imports(ir_func, num_imported_globals, has_func_imports);
         } else {
             return Err(anyhow::anyhow!(
                 "IR function missing for parsed function index {}",
@@ -166,7 +171,17 @@ fn enrich_ir_functions(
 }
 
 /// Determines if a function calls imports or accesses imported globals.
-fn function_calls_imports(ir_func: &IrFunction, num_imported_globals: usize) -> bool {
+///
+/// Returns true if the function:
+/// - Has a direct CallImport instruction, OR
+/// - Accesses an imported global, OR
+/// - Uses CallIndirect when the module has any function imports
+///   (because call_indirect may dispatch to functions that need the host parameter)
+fn function_calls_imports(
+    ir_func: &IrFunction,
+    num_imported_globals: usize,
+    has_func_imports: bool,
+) -> bool {
     ir_func.blocks.iter().any(|block| {
         block.instructions.iter().any(|instr| {
             matches!(instr, IrInstr::CallImport { .. })
@@ -177,6 +192,7 @@ fn function_calls_imports(ir_func: &IrFunction, num_imported_globals: usize) -> 
                             | IrInstr::GlobalSet { index, .. }
                             if index.as_usize() < num_imported_globals
                     ))
+                || (has_func_imports && matches!(instr, IrInstr::CallIndirect { .. }))
         })
     })
 }

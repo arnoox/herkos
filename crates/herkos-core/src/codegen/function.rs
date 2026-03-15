@@ -172,12 +172,24 @@ pub fn generate_function_with_info<B: Backend>(
     output.push_str("    loop {\n");
     output.push_str("        match __current_block {\n");
 
+    // Compute whether this function has a host parameter in scope
+    // (same conditions as in generate_signature_with_info)
+    let has_call_indirect_with_imports =
+        has_call_indirect(ir_func) && !info.func_imports.is_empty();
+    let caller_has_host = has_import_calls(ir_func)
+        || has_global_import_access(ir_func, info.imported_globals.len())
+        || has_call_indirect_with_imports;
+
     for (idx, block) in ir_func.blocks.iter().enumerate() {
         output.push_str(&format!("            Block::B{} => {{\n", idx));
 
         for instr in &block.instructions {
-            let code =
-                crate::codegen::instruction::generate_instruction_with_info(backend, instr, info)?;
+            let code = crate::codegen::instruction::generate_instruction_with_info(
+                backend,
+                instr,
+                info,
+                caller_has_host,
+            )?;
             output.push_str(&code);
             output.push('\n');
         }
@@ -212,9 +224,12 @@ fn generate_signature_with_info<B: Backend>(
 ) -> String {
     let visibility = if is_public { "pub " } else { "" };
 
-    // Check if function needs host parameter (imports or global imports)
-    let needs_host =
-        has_import_calls(ir_func) || has_global_import_access(ir_func, info.imported_globals.len());
+    // Check if function needs host parameter (imports, global imports, or call_indirect with imports)
+    let has_call_indirect_with_imports =
+        has_call_indirect(ir_func) && !info.func_imports.is_empty();
+    let needs_host = has_import_calls(ir_func)
+        || has_global_import_access(ir_func, info.imported_globals.len())
+        || has_call_indirect_with_imports;
     let trait_bounds_opt = if needs_host {
         crate::codegen::traits::build_trait_bounds(info)
     } else {
@@ -297,6 +312,16 @@ fn has_import_calls(ir_func: &IrFunction) -> bool {
             .instructions
             .iter()
             .any(|instr| matches!(instr, IrInstr::CallImport { .. }))
+    })
+}
+
+/// Check if an IR function has any call_indirect instructions.
+fn has_call_indirect(ir_func: &IrFunction) -> bool {
+    ir_func.blocks.iter().any(|block| {
+        block
+            .instructions
+            .iter()
+            .any(|instr| matches!(instr, IrInstr::CallIndirect { .. }))
     })
 }
 
