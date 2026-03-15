@@ -47,6 +47,7 @@ pub trait Backend {
     ) -> Result<String>;
 
     /// Emit Rust code for a function call (local function).
+    #[allow(clippy::too_many_arguments)]
     fn emit_call(
         &self,
         dest: Option<VarId>,
