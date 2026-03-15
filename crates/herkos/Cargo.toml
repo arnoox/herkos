@@ -12,10 +12,9 @@ categories = ["wasm", "development-tools::build-utils"]
 readme = "../../README.md"
 
 [dependencies]
-wasmparser = { workspace = true }
+herkos-core = { path = "../herkos-core" }
 anyhow = { workspace = true }
 clap = { workspace = true }
-heck = { workspace = true }
 
 [dev-dependencies]
 wat = { workspace = true }

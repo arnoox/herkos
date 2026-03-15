@@ -169,6 +169,65 @@ fn test_i64_extend_i32_u() {
 }
 
 #[test]
+fn test_i32_extend8_s() {
+    let mut conversions_mod = conversions::new().unwrap();
+    // Sign-extend from i8 to i32
+    assert_eq!(conversions_mod.extend8_s(0x42).unwrap(), 0x42);
+    assert_eq!(conversions_mod.extend8_s(0xFF).unwrap(), -1); // 0xFF as i8 = -1
+    assert_eq!(conversions_mod.extend8_s(0x7F).unwrap(), 127); // 0x7F as i8 = 127
+    assert_eq!(conversions_mod.extend8_s(0x80).unwrap(), -128); // 0x80 as i8 = -128
+}
+
+#[test]
+fn test_i32_extend16_s() {
+    let mut conversions_mod = conversions::new().unwrap();
+    // Sign-extend from i16 to i32
+    assert_eq!(conversions_mod.extend16_s(0x4242).unwrap(), 0x4242);
+    assert_eq!(conversions_mod.extend16_s(0xFFFF).unwrap(), -1); // 0xFFFF as i16 = -1
+    assert_eq!(conversions_mod.extend16_s(0x7FFF).unwrap(), 32767); // max positive i16
+    assert_eq!(conversions_mod.extend16_s(0x8000).unwrap(), -32768); // min negative i16
+}
+
+#[test]
+fn test_i64_extend8_s() {
+    let mut conversions_mod = conversions::new().unwrap();
+    // Sign-extend from i8 to i64
+    assert_eq!(conversions_mod.i64_extend8_s(0x42).unwrap(), 0x42i64);
+    assert_eq!(conversions_mod.i64_extend8_s(0xFF).unwrap(), -1i64); // 0xFF as i8 = -1
+    assert_eq!(conversions_mod.i64_extend8_s(0x7F).unwrap(), 127i64);
+    assert_eq!(conversions_mod.i64_extend8_s(0x80).unwrap(), -128i64);
+}
+
+#[test]
+fn test_i64_extend16_s() {
+    let mut conversions_mod = conversions::new().unwrap();
+    // Sign-extend from i16 to i64
+    assert_eq!(conversions_mod.i64_extend16_s(0x4242).unwrap(), 0x4242i64);
+    assert_eq!(conversions_mod.i64_extend16_s(0xFFFF).unwrap(), -1i64); // 0xFFFF as i16 = -1
+    assert_eq!(conversions_mod.i64_extend16_s(0x7FFF).unwrap(), 32767i64);
+    assert_eq!(conversions_mod.i64_extend16_s(0x8000).unwrap(), -32768i64);
+}
+
+#[test]
+fn test_i64_extend32_s() {
+    let mut conversions_mod = conversions::new().unwrap();
+    // Sign-extend from i32 to i64
+    assert_eq!(
+        conversions_mod.i64_extend32_s(0x42424242).unwrap(),
+        0x42424242i64
+    );
+    assert_eq!(conversions_mod.i64_extend32_s(0xFFFFFFFF).unwrap(), -1i64); // -1 as i32
+    assert_eq!(
+        conversions_mod.i64_extend32_s(0x7FFFFFFF).unwrap(),
+        i32::MAX as i64
+    );
+    assert_eq!(
+        conversions_mod.i64_extend32_s(0x80000000).unwrap(),
+        i32::MIN as i64
+    );
+}
+
+#[test]
 fn test_f64_convert_i32_s() {
     let mut conversions_mod = conversions::new().unwrap();
     assert_eq!(conversions_mod.convert_i32_s(42).unwrap(), 42.0);

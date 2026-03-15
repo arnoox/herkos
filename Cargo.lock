@@ -358,6 +358,15 @@ version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
+ "herkos-core",
+ "wat",
+]
+
+[[package]]
+name = "herkos-core"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
  "heck",
  "wasmparser 0.227.1",
  "wat",
@@ -376,7 +385,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "criterion",
- "herkos",
+ "herkos-core",
  "herkos-runtime",
  "wat",
 ]
