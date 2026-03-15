@@ -52,6 +52,7 @@ pub trait Backend {
         dest: Option<VarId>,
         func_idx: usize,
         args: &[VarId],
+        has_host: bool,
         has_globals: bool,
         has_memory: bool,
         has_table: bool,
