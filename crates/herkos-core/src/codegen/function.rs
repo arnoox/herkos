@@ -21,7 +21,7 @@ pub fn generate_function_with_info<B: Backend>(
     let mut output = String::new();
 
     // Suppress warnings for generated code patterns that are hard to avoid
-    output.push_str("#[allow(unused_mut, unused_variables, unused_assignments, clippy::needless_return, clippy::manual_range_contains, clippy::never_loop)]\n");
+    output.push_str("#[allow(unused_mut, unused_variables, unused_assignments, clippy::only_used_in_recursion, clippy::needless_return, clippy::manual_range_contains, clippy::never_loop)]\n");
 
     // Generate function signature
     output.push_str(&generate_signature_with_info(
@@ -172,20 +172,12 @@ pub fn generate_function_with_info<B: Backend>(
     output.push_str("    loop {\n");
     output.push_str("        match __current_block {\n");
 
-    // Compute whether this function has a host parameter in scope.
-    // Use ir_func.needs_host — the IR builder's fixpoint is authoritative.
-    let caller_has_host = ir_func.needs_host;
-
     for (idx, block) in ir_func.blocks.iter().enumerate() {
         output.push_str(&format!("            Block::B{} => {{\n", idx));
 
         for instr in &block.instructions {
-            let code = crate::codegen::instruction::generate_instruction_with_info(
-                backend,
-                instr,
-                info,
-                caller_has_host,
-            )?;
+            let code =
+                crate::codegen::instruction::generate_instruction_with_info(backend, instr, info)?;
             output.push_str(&code);
             output.push('\n');
         }
@@ -220,26 +212,13 @@ fn generate_signature_with_info<B: Backend>(
 ) -> String {
     let visibility = if is_public { "pub " } else { "" };
 
-    // Use ir_func.needs_host — the IR builder's fixpoint algorithm is authoritative.
-    // It handles: direct imports, imported globals, call_indirect with imports,
-    // and transitive calls to functions that need host.
-    let needs_host = ir_func.needs_host;
-    let trait_bounds_opt = if needs_host {
-        crate::codegen::traits::build_trait_bounds(info)
-    } else {
-        None
-    };
-
-    let has_multiple_bounds = trait_bounds_opt.as_ref().is_some_and(|b| b.contains(" + "));
-
     // Build generics: handle both H (host) and MP (imported memory size)
     let mut generics: Vec<String> = Vec::new();
     if info.has_memory_import {
         generics.push("const MP: usize".to_string());
     }
-    if has_multiple_bounds {
-        generics.push(format!("H: {}", trait_bounds_opt.as_ref().unwrap()));
-    }
+    // All internal functions have H: ModuleHostTrait generic
+    generics.push("H: ModuleHostTrait".to_string());
 
     let generic_part = if generics.is_empty() {
         String::new()
@@ -259,21 +238,8 @@ fn generate_signature_with_info<B: Backend>(
         })
         .collect();
 
-    // Add host parameter if function needs imports or global imports
-    if let Some(trait_bounds) = trait_bounds_opt {
-        if has_multiple_bounds {
-            // Use generic parameter H
-            param_parts.push("host: &mut H".to_string());
-        } else {
-            // Single trait bound - use impl directly
-            param_parts.push(format!("host: &mut impl {trait_bounds}"));
-        }
-    }
-
-    // Add globals parameter if module has mutable globals
-    if info.has_mutable_globals() {
-        param_parts.push("globals: &mut Globals".to_string());
-    }
+    // Always add env parameter
+    param_parts.push("env: &mut Env<'_, H>".to_string());
 
     // Add memory parameter — either const MAX_PAGES or generic MP
     if info.has_memory {

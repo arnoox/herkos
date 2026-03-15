@@ -51,6 +51,13 @@ pub enum WasmTrap {
 /// Result type for Wasm operations — `Result<T, WasmTrap>`.
 pub type WasmResult<T> = Result<T, WasmTrap>;
 
+/// Sentinel type for modules with no host imports.
+///
+/// Zero-sized — the compiler eliminates it entirely. Used as the generic parameter `H`
+/// in `Env<H>` for modules that have no host imports.
+#[derive(Clone, Copy)]
+pub struct NoHost;
+
 /// Errors that occur during module/memory/table construction.
 ///
 /// These are programming errors in the transpiler, not runtime Wasm traps.

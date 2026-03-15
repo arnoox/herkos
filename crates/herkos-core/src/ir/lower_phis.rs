@@ -304,7 +304,6 @@ mod tests {
                 entry_block: BlockId(0),
                 return_type: None,
                 type_idx: TypeIdx::new(0),
-                needs_host: false,
             }],
             wasm_version: 1,
         }

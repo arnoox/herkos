@@ -73,7 +73,6 @@ mod tests {
             entry_block: BlockId(0),
             return_type: None,
             type_idx: TypeIdx::new(0),
-            needs_host: false,
         }
     }
 
@@ -409,7 +408,6 @@ mod tests {
             entry_block: BlockId(0),
             return_type: Some(WasmType::I32),
             type_idx: TypeIdx::new(0),
-            needs_host: false,
         };
         eliminate(&mut func).unwrap();
         assert_eq!(block_ids(&func), vec![0, 1]);

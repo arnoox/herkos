@@ -476,18 +476,12 @@ impl Backend for SafeBackend {
         dest: Option<VarId>,
         func_idx: usize,
         args: &[VarId],
-        has_host: bool,
-        has_globals: bool,
         has_memory: bool,
         has_table: bool,
     ) -> String {
         let mut call_args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-        if has_host {
-            call_args.push("host".to_string());
-        }
-        if has_globals {
-            call_args.push("globals".to_string());
-        }
+        // All functions uniformly receive env
+        call_args.push("env".to_string());
         if has_memory {
             call_args.push("memory".to_string());
         }
@@ -505,23 +499,23 @@ impl Backend for SafeBackend {
         func_name: &str,
         args: &[VarId],
     ) -> String {
-        // Generate: host.func_name(args)?
+        // Generate: env.host.func_name(args)?
         // Note: module_name is ignored for now (Milestone 3 will use it for trait names)
         let args_str: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-        let call_expr = format!("host.{}({})?", func_name, args_str.join(", "));
+        let call_expr = format!("env.host.{}({})?", func_name, args_str.join(", "));
         emit_call_result(dest, &call_expr)
     }
 
     fn emit_global_get(&self, dest: VarId, index: usize, is_mutable: bool) -> String {
         if is_mutable {
-            format!("                {dest} = globals.g{index};")
+            format!("                {dest} = env.globals.g{index};")
         } else {
             format!("                {dest} = G{index};")
         }
     }
 
     fn emit_global_set(&self, index: usize, value: VarId) -> String {
-        format!("                globals.g{index} = {value};")
+        format!("                env.globals.g{index} = {value};")
     }
 
     fn emit_assign(&self, dest: VarId, src: VarId) -> String {

@@ -203,9 +203,6 @@ pub struct IrFunction {
 
     /// Index into the Wasm type section (needed for call_indirect dispatch).
     pub type_idx: TypeIdx,
-
-    /// Whether this function calls imported functions or accesses imported globals (needs host parameter).
-    pub needs_host: bool,
 }
 
 /// A basic block — sequence of instructions with a single entry and exit.
@@ -880,8 +877,6 @@ pub struct FuncSignature {
     /// Index into the Wasm type section (needed for call_indirect dispatch).
     /// Note: This field is currently always set to 0 and not used in codegen.
     pub type_idx: TypeIdx,
-    /// Whether this function calls imported functions (needs host parameter).
-    pub needs_host: bool,
 }
 
 /// An element segment to initialize a table.
@@ -1513,7 +1508,6 @@ mod tests {
             entry_block: BlockId(0),
             return_type: None,
             type_idx: TypeIdx::new(0),
-            needs_host: false,
         };
         assert!(!has_import_calls(&ir_func_no_imports));
 
@@ -1541,7 +1535,6 @@ mod tests {
             entry_block: BlockId(0),
             return_type: None,
             type_idx: TypeIdx::new(0),
-            needs_host: true,
         };
         assert!(has_import_calls(&ir_func_with_imports));
     }
@@ -1562,7 +1555,6 @@ mod tests {
             entry_block: BlockId(0),
             return_type: None,
             type_idx: TypeIdx::new(0),
-            needs_host: false,
         };
 
         // No imported globals
@@ -1592,7 +1584,6 @@ mod tests {
             entry_block: BlockId(0),
             return_type: None,
             type_idx: TypeIdx::new(0),
-            needs_host: true,
         };
         assert!(has_global_import_access(&ir_func_with_global_get, 2));
     }
@@ -1613,7 +1604,6 @@ mod tests {
             entry_block: BlockId(0),
             return_type: None,
             type_idx: TypeIdx::new(0),
-            needs_host: true,
         };
 
         assert!(has_global_import_access(&ir_func, 2));

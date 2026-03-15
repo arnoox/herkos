@@ -9,14 +9,10 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 /// Generate code for a single instruction with module info.
-///
-/// `caller_has_host` indicates whether the calling function has a `host` parameter in scope.
-/// This is used by `call_indirect` to determine whether to pass `host` to dispatched functions.
 pub fn generate_instruction_with_info<B: Backend>(
     backend: &B,
     instr: &IrInstr,
     info: &ModuleInfo,
-    caller_has_host: bool,
 ) -> Result<String> {
     let code = match instr {
         IrInstr::Const { dest, value } => backend.emit_const(*dest, value),
@@ -48,20 +44,9 @@ pub fn generate_instruction_with_info<B: Backend>(
             args,
         } => {
             // Call to local function (imports are handled by CallImport)
-            let target_needs_host = info.ir_function(*func_idx).is_some_and(|f| f.needs_host);
-            let has_host = caller_has_host && target_needs_host;
-            let has_globals = info.has_mutable_globals();
             let has_memory = info.has_memory;
             let has_table = info.has_table();
-            backend.emit_call(
-                *dest,
-                func_idx.as_usize(),
-                args,
-                has_host,
-                has_globals,
-                has_memory,
-                has_table,
-            )
+            backend.emit_call(*dest, func_idx.as_usize(), args, has_memory, has_table)
         }
 
         IrInstr::CallImport {
@@ -77,20 +62,13 @@ pub fn generate_instruction_with_info<B: Backend>(
             type_idx,
             table_idx,
             args,
-        } => generate_call_indirect(
-            *dest,
-            type_idx.clone(),
-            *table_idx,
-            args,
-            info,
-            caller_has_host,
-        ),
+        } => generate_call_indirect(*dest, type_idx.clone(), *table_idx, args, info),
 
         IrInstr::Assign { dest, src } => backend.emit_assign(*dest, *src),
 
         IrInstr::GlobalGet { dest, index } => match info.resolve_global(*index) {
             ResolvedGlobal::Imported(_idx, g) => {
-                format!("                {} = host.get_{}();", dest, g.name)
+                format!("                {} = env.host.get_{}();", dest, g.name)
             }
             ResolvedGlobal::Local(idx, g) => {
                 let is_mutable = g.mutable;
@@ -100,7 +78,7 @@ pub fn generate_instruction_with_info<B: Backend>(
 
         IrInstr::GlobalSet { index, value } => match info.resolve_global(*index) {
             ResolvedGlobal::Imported(_idx, g) => {
-                format!("                host.set_{}({});", g.name, value)
+                format!("                env.host.set_{}({});", g.name, value)
             }
             ResolvedGlobal::Local(idx, _g) => backend.emit_global_set(idx.as_usize(), *value),
         },
@@ -199,19 +177,14 @@ pub fn generate_terminator_with_mapping<B: Backend>(
 /// 2. Checks the type signature matches
 /// 3. Dispatches to the matching function via a match on func_index
 ///
-/// `caller_has_host` indicates whether the calling function has a `host` parameter.
-/// Each dispatch arm will only pass `host` to its target if both:
-/// - The target function needs_host, AND
-/// - The caller has_host in scope
+/// All dispatch arms uniformly pass `env` to the target functions.
 fn generate_call_indirect(
     dest: Option<VarId>,
     type_idx: TypeIdx,
     table_idx: VarId,
     args: &[VarId],
     info: &ModuleInfo,
-    caller_has_host: bool,
 ) -> String {
-    let has_globals = info.has_mutable_globals();
     let has_memory = info.has_memory;
     let has_table = info.has_table();
 
@@ -250,19 +223,12 @@ fn generate_call_indirect(
 
     for (func_idx, ir_func) in info.ir_functions.iter().enumerate() {
         if ir_func.type_idx.as_usize() == canon_idx {
-            // Per-arm args generation: only pass host if both target needs it AND caller has it
+            // All arms uniformly: wasm args + env + memory + table
             let mut arm_base: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-            if ir_func.needs_host && caller_has_host {
-                arm_base.push("host".to_string());
-            }
+            arm_base.push("env".to_string());
+
             let arm_call_args = crate::codegen::utils::build_inner_call_args(
-                &arm_base,
-                has_globals,
-                "globals",
-                has_memory,
-                "memory",
-                has_table,
-                "table",
+                &arm_base, has_memory, "memory", has_table, "table",
             );
             let arm_args_str = arm_call_args.join(", ");
             code.push_str(&format!(

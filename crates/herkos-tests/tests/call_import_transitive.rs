@@ -18,7 +18,7 @@ impl MockHost {
 }
 
 // Implement the generated EnvImports trait
-impl call_import_transitive::EnvImports for MockHost {
+impl call_import_transitive::ModuleHostTrait for MockHost {
     fn log(&mut self, value: i32) -> WasmResult<()> {
         self.last_logged = Some(value);
         Ok(())
