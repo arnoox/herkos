@@ -139,7 +139,6 @@ fn build_function_exports(parsed: &ParsedModule, num_imported_functions: usize) 
         .collect()
 }
 
-
 /// Builds type signatures for call_indirect type checking.
 fn build_call_indirect_signatures(parsed: &ParsedModule) -> Vec<FuncSignature> {
     parsed

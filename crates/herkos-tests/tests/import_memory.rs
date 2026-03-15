@@ -80,7 +80,9 @@ fn test_library_module_roundtrip() {
     assert_eq!(read_value, test_value);
 
     // Module writes different value
-    module.write_at(4, test_value + 1, &mut memory, &mut host).unwrap();
+    module
+        .write_at(4, test_value + 1, &mut memory, &mut host)
+        .unwrap();
 
     // Host reads back what module wrote
     let stored_value = memory.load_i32(4).unwrap();

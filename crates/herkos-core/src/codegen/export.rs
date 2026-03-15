@@ -79,7 +79,9 @@ pub fn generate_export_impl<B: Backend>(_backend: &B, info: &ModuleInfo) -> Stri
             code.push_str("        let mut env = Env { host, globals: &mut self.0.globals };\n");
         } else {
             code.push_str("        let mut __host = herkos_runtime::NoHost;\n");
-            code.push_str("        let mut env = Env { host: &mut __host, globals: &mut self.0.globals };\n");
+            code.push_str(
+                "        let mut env = Env { host: &mut __host, globals: &mut self.0.globals };\n",
+            );
         }
 
         // Build call arguments: wasm params + env + memory (if owned) + table

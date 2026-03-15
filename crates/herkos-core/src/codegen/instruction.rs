@@ -46,13 +46,7 @@ pub fn generate_instruction_with_info<B: Backend>(
             // Call to local function (imports are handled by CallImport)
             let has_memory = info.has_memory;
             let has_table = info.has_table();
-            backend.emit_call(
-                *dest,
-                func_idx.as_usize(),
-                args,
-                has_memory,
-                has_table,
-            )
+            backend.emit_call(*dest, func_idx.as_usize(), args, has_memory, has_table)
         }
 
         IrInstr::CallImport {
@@ -68,13 +62,7 @@ pub fn generate_instruction_with_info<B: Backend>(
             type_idx,
             table_idx,
             args,
-        } => generate_call_indirect(
-            *dest,
-            type_idx.clone(),
-            *table_idx,
-            args,
-            info,
-        ),
+        } => generate_call_indirect(*dest, type_idx.clone(), *table_idx, args, info),
 
         IrInstr::Assign { dest, src } => backend.emit_assign(*dest, *src),
 
@@ -240,11 +228,7 @@ fn generate_call_indirect(
             arm_base.push("env".to_string());
 
             let arm_call_args = crate::codegen::utils::build_inner_call_args(
-                &arm_base,
-                has_memory,
-                "memory",
-                has_table,
-                "table",
+                &arm_base, has_memory, "memory", has_table, "table",
             );
             let arm_args_str = arm_call_args.join(", ");
             code.push_str(&format!(
