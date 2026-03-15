@@ -11,9 +11,6 @@ keywords = ["webassembly", "wasm", "transpiler", "rust", "isolation"]
 categories = ["wasm", "development-tools::build-utils"]
 readme = "../../README.md"
 
-[lib]
-crate-type = ["rlib"]
-
 [dependencies]
 wasmparser = { workspace = true }
 anyhow = { workspace = true }
