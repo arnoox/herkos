@@ -36,6 +36,45 @@ pub(super) fn assemble_module_metadata(
         &imported_globals,
     )?;
 
+    // Propagate needs_host transitively through direct function calls.
+    // If function A calls function B and B.needs_host is true, then A.needs_host must also be true
+    // (because A's signature must have `host` to pass it to B).
+    // This is a fixpoint algorithm that converges when no more functions are marked.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        // Snapshot current needs_host state to avoid borrow checker issues
+        let needs_host_snapshot: Vec<bool> = ir_functions.iter().map(|f| f.needs_host).collect();
+        let mut to_mark: Vec<usize> = Vec::new();
+
+        for (func_idx, ir_func) in ir_functions.iter().enumerate() {
+            if ir_func.needs_host {
+                continue; // Already marked
+            }
+
+            // Check if this function directly calls any function that needs host
+            let calls_host_needing = ir_func.blocks.iter().any(|block| {
+                block.instructions.iter().any(|instr| {
+                    matches!(instr, IrInstr::Call { func_idx: callee, .. }
+                        if needs_host_snapshot
+                            .get(callee.as_usize())
+                            .copied()
+                            .unwrap_or(false))
+                })
+            });
+
+            if calls_host_needing {
+                to_mark.push(func_idx);
+            }
+        }
+
+        // Apply all changes from this iteration
+        for idx in to_mark {
+            ir_functions[idx].needs_host = true;
+            changed = true;
+        }
+    }
+
     Ok(ModuleInfo {
         has_memory: mem_info.has_memory,
         has_memory_import: mem_info.has_memory_import,

@@ -48,6 +48,8 @@ pub fn generate_instruction_with_info<B: Backend>(
             args,
         } => {
             // Call to local function (imports are handled by CallImport)
+            let target_needs_host = info.ir_function(*func_idx).is_some_and(|f| f.needs_host);
+            let has_host = caller_has_host && target_needs_host;
             let has_globals = info.has_mutable_globals();
             let has_memory = info.has_memory;
             let has_table = info.has_table();
@@ -55,6 +57,7 @@ pub fn generate_instruction_with_info<B: Backend>(
                 *dest,
                 func_idx.as_usize(),
                 args,
+                has_host,
                 has_globals,
                 has_memory,
                 has_table,

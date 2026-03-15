@@ -172,13 +172,9 @@ pub fn generate_function_with_info<B: Backend>(
     output.push_str("    loop {\n");
     output.push_str("        match __current_block {\n");
 
-    // Compute whether this function has a host parameter in scope
-    // (same conditions as in generate_signature_with_info)
-    let has_call_indirect_with_imports =
-        has_call_indirect(ir_func) && !info.func_imports.is_empty();
-    let caller_has_host = has_import_calls(ir_func)
-        || has_global_import_access(ir_func, info.imported_globals.len())
-        || has_call_indirect_with_imports;
+    // Compute whether this function has a host parameter in scope.
+    // Use ir_func.needs_host — the IR builder's fixpoint is authoritative.
+    let caller_has_host = ir_func.needs_host;
 
     for (idx, block) in ir_func.blocks.iter().enumerate() {
         output.push_str(&format!("            Block::B{} => {{\n", idx));
@@ -224,12 +220,10 @@ fn generate_signature_with_info<B: Backend>(
 ) -> String {
     let visibility = if is_public { "pub " } else { "" };
 
-    // Check if function needs host parameter (imports, global imports, or call_indirect with imports)
-    let has_call_indirect_with_imports =
-        has_call_indirect(ir_func) && !info.func_imports.is_empty();
-    let needs_host = has_import_calls(ir_func)
-        || has_global_import_access(ir_func, info.imported_globals.len())
-        || has_call_indirect_with_imports;
+    // Use ir_func.needs_host — the IR builder's fixpoint algorithm is authoritative.
+    // It handles: direct imports, imported globals, call_indirect with imports,
+    // and transitive calls to functions that need host.
+    let needs_host = ir_func.needs_host;
     let trait_bounds_opt = if needs_host {
         crate::codegen::traits::build_trait_bounds(info)
     } else {
@@ -303,36 +297,4 @@ fn generate_signature_with_info<B: Backend>(
     ));
 
     sig
-}
-
-/// Check if an IR function has any import calls.
-fn has_import_calls(ir_func: &IrFunction) -> bool {
-    ir_func.blocks.iter().any(|block| {
-        block
-            .instructions
-            .iter()
-            .any(|instr| matches!(instr, IrInstr::CallImport { .. }))
-    })
-}
-
-/// Check if an IR function has any call_indirect instructions.
-fn has_call_indirect(ir_func: &IrFunction) -> bool {
-    ir_func.blocks.iter().any(|block| {
-        block
-            .instructions
-            .iter()
-            .any(|instr| matches!(instr, IrInstr::CallIndirect { .. }))
-    })
-}
-
-/// Check if an IR function accesses any imported globals.
-fn has_global_import_access(ir_func: &IrFunction, num_imported_globals: usize) -> bool {
-    if num_imported_globals == 0 {
-        return false;
-    }
-    ir_func.blocks.iter().any(|block| {
-        block.instructions.iter().any(|instr| {
-            matches!(instr, IrInstr::GlobalGet { index, .. } | IrInstr::GlobalSet { index, .. } if index.as_usize() < num_imported_globals)
-        })
-    })
 }

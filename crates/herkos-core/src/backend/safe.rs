@@ -476,11 +476,15 @@ impl Backend for SafeBackend {
         dest: Option<VarId>,
         func_idx: usize,
         args: &[VarId],
+        has_host: bool,
         has_globals: bool,
         has_memory: bool,
         has_table: bool,
     ) -> String {
         let mut call_args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        if has_host {
+            call_args.push("host".to_string());
+        }
         if has_globals {
             call_args.push("globals".to_string());
         }
