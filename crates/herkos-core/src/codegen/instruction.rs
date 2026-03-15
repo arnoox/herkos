@@ -9,10 +9,14 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 /// Generate code for a single instruction with module info.
+///
+/// `caller_has_host` indicates whether the calling function has a `host` parameter in scope.
+/// This is used by `call_indirect` to determine whether to pass `host` to dispatched functions.
 pub fn generate_instruction_with_info<B: Backend>(
     backend: &B,
     instr: &IrInstr,
     info: &ModuleInfo,
+    caller_has_host: bool,
 ) -> Result<String> {
     let code = match instr {
         IrInstr::Const { dest, value } => backend.emit_const(*dest, value),
@@ -70,7 +74,14 @@ pub fn generate_instruction_with_info<B: Backend>(
             type_idx,
             table_idx,
             args,
-        } => generate_call_indirect(*dest, type_idx.clone(), *table_idx, args, info),
+        } => generate_call_indirect(
+            *dest,
+            type_idx.clone(),
+            *table_idx,
+            args,
+            info,
+            caller_has_host,
+        ),
 
         IrInstr::Assign { dest, src } => backend.emit_assign(*dest, *src),
 
@@ -184,12 +195,18 @@ pub fn generate_terminator_with_mapping<B: Backend>(
 /// 1. Looks up the table entry by index
 /// 2. Checks the type signature matches
 /// 3. Dispatches to the matching function via a match on func_index
+///
+/// `caller_has_host` indicates whether the calling function has a `host` parameter.
+/// Each dispatch arm will only pass `host` to its target if both:
+/// - The target function needs_host, AND
+/// - The caller has_host in scope
 fn generate_call_indirect(
     dest: Option<VarId>,
     type_idx: TypeIdx,
     table_idx: VarId,
     args: &[VarId],
     info: &ModuleInfo,
+    caller_has_host: bool,
 ) -> String {
     let has_globals = info.has_mutable_globals();
     let has_memory = info.has_memory;
@@ -217,19 +234,6 @@ fn generate_call_indirect(
         "                if __entry.type_index != {canon_idx} {{ return Err(WasmTrap::IndirectCallTypeMismatch); }}\n"
     ));
 
-    // Build the common args string for dispatch calls
-    let base_args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-    let call_args = crate::codegen::utils::build_inner_call_args(
-        &base_args,
-        has_globals,
-        "globals",
-        has_memory,
-        "memory",
-        has_table,
-        "table",
-    );
-    let args_str = call_args.join(", ");
-
     // Build dispatch match — only dispatch to functions with matching
     // canonical type (structural equivalence)
     let dest_prefix = match dest {
@@ -243,9 +247,24 @@ fn generate_call_indirect(
 
     for (func_idx, ir_func) in info.ir_functions.iter().enumerate() {
         if ir_func.type_idx.as_usize() == canon_idx {
+            // Per-arm args generation: only pass host if both target needs it AND caller has it
+            let mut arm_base: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            if ir_func.needs_host && caller_has_host {
+                arm_base.push("host".to_string());
+            }
+            let arm_call_args = crate::codegen::utils::build_inner_call_args(
+                &arm_base,
+                has_globals,
+                "globals",
+                has_memory,
+                "memory",
+                has_table,
+                "table",
+            );
+            let arm_args_str = arm_call_args.join(", ");
             code.push_str(&format!(
                 "                    {} => func_{}({})?,\n",
-                func_idx, func_idx, args_str
+                func_idx, func_idx, arm_args_str
             ));
         }
     }
