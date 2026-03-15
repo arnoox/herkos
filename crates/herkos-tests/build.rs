@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use herkos::{transpile, TranspileOptions};
+use herkos_core::{transpile, TranspileOptions};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};

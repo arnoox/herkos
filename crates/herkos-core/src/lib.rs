@@ -1,9 +1,10 @@
-//! herkos — WebAssembly to Rust transpiler.
+//! herkos-core — WebAssembly to Rust transpiler.
 //!
 //! This crate provides the core transpilation pipeline that converts WebAssembly
 //! modules into memory-safe Rust source code.
 
 pub mod backend;
+pub mod c_ffi;
 pub mod codegen;
 pub mod ir;
 pub mod optimizer;
@@ -53,7 +54,7 @@ impl Default for TranspileOptions {
 ///
 /// # Example
 /// ```no_run
-/// use herkos::{transpile, TranspileOptions};
+/// use herkos_core::{transpile, TranspileOptions};
 ///
 /// let wasm_bytes = std::fs::read("input.wasm").unwrap();
 /// let options = TranspileOptions::default();

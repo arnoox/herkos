@@ -581,12 +581,11 @@ pub enum UnOp {
     I32WrapI64,    // i64 → i32 (truncate to low 32 bits)
     I64ExtendI32S, // i32 → i64 (sign-extend)
     I64ExtendI32U, // i32 → i64 (zero-extend)
-    // Sign-extension ops (Wasm sign-extension-ops proposal)
-    I32Extend8S,  // sign-extend 8-bit value in i32
-    I32Extend16S, // sign-extend 16-bit value in i32
-    I64Extend8S,  // sign-extend 8-bit value in i64
-    I64Extend16S, // sign-extend 16-bit value in i64
-    I64Extend32S, // sign-extend 32-bit value in i64
+    I32Extend8S,   // i32 → i32 (sign-extend low 8 bits)
+    I32Extend16S,  // i32 → i32 (sign-extend low 16 bits)
+    I64Extend8S,   // i64 → i64 (sign-extend low 8 bits)
+    I64Extend16S,  // i64 → i64 (sign-extend low 16 bits)
+    I64Extend32S,  // i64 → i64 (sign-extend low 32 bits)
 
     // Conversions: float → integer (trapping on NaN/overflow)
     I32TruncF32S,

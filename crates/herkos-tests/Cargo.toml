@@ -13,7 +13,7 @@ herkos-runtime = { path = "../herkos-runtime" }
 [build-dependencies]
 anyhow = { workspace = true }
 wat = { workspace = true }
-herkos = { path = "../herkos" }
+herkos-core = { path = "../herkos-core" }
 
 [dev-dependencies]
 criterion = "0.8.2"

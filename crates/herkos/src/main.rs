@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use herkos::{transpile, TranspileOptions};
+use herkos_core::{transpile, TranspileOptions};
 use std::fs;
 use std::path::PathBuf;
 

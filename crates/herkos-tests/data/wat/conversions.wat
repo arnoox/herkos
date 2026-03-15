@@ -35,6 +35,26 @@
   (func (param i32) (result f32)
     local.get 0
     f32.reinterpret_i32)
+  ;; i32.extend8_s: sign-extend from i8
+  (func (param i32) (result i32)
+    local.get 0
+    i32.extend8_s)
+  ;; i32.extend16_s: sign-extend from i16
+  (func (param i32) (result i32)
+    local.get 0
+    i32.extend16_s)
+  ;; i64.extend8_s: sign-extend i64 from i8
+  (func (param i64) (result i64)
+    local.get 0
+    i64.extend8_s)
+  ;; i64.extend16_s: sign-extend i64 from i16
+  (func (param i64) (result i64)
+    local.get 0
+    i64.extend16_s)
+  ;; i64.extend32_s: sign-extend i64 from i32
+  (func (param i64) (result i64)
+    local.get 0
+    i64.extend32_s)
   (export "wrap_i64" (func 0))
   (export "extend_i32_s" (func 1))
   (export "extend_i32_u" (func 2))
@@ -43,4 +63,9 @@
   (export "demote_f64" (func 5))
   (export "promote_f32" (func 6))
   (export "reinterpret_f32" (func 7))
-  (export "reinterpret_i32" (func 8)))
+  (export "reinterpret_i32" (func 8))
+  (export "extend8_s" (func 9))
+  (export "extend16_s" (func 10))
+  (export "i64_extend8_s" (func 11))
+  (export "i64_extend16_s" (func 12))
+  (export "i64_extend32_s" (func 13)))

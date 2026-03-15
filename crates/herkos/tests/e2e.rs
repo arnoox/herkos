@@ -3,7 +3,7 @@
 //! These tests verify the complete pipeline: Wasm → IR → Rust source.
 
 use anyhow::{Context, Result};
-use herkos::{transpile, TranspileOptions};
+use herkos_core::{transpile, TranspileOptions};
 
 /// Helper to transpile WAT source to Rust code.
 fn transpile_wat(wat_source: &str) -> Result<String> {

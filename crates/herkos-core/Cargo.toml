@@ -1,8 +1,8 @@
 [package]
-name = "herkos"
+name = "herkos-core"
 version = "0.1.1"
 edition = "2021"
-description = "Compile-Time Memory Isolation via WebAssembly and Rust Transpilation"
+description = "Compile-Time Memory Isolation via WebAssembly and Rust Transpilation — core library"
 license = "Apache-2.0"
 repository = "https://github.com/arnoox/herkos"
 homepage = "https://github.com/arnoox/herkos"
@@ -11,10 +11,13 @@ keywords = ["webassembly", "wasm", "transpiler", "rust", "isolation"]
 categories = ["wasm", "development-tools::build-utils"]
 readme = "../../README.md"
 
+[lib]
+crate-type = ["rlib", "cdylib"]
+
 [dependencies]
-herkos-core = { path = "../herkos-core" }
+wasmparser = { workspace = true }
 anyhow = { workspace = true }
-clap = { workspace = true }
+heck = { workspace = true }
 
 [dev-dependencies]
 wat = { workspace = true }
