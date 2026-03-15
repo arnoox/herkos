@@ -28,50 +28,10 @@ pub(super) fn assemble_module_metadata(
     let type_signatures = build_call_indirect_signatures(parsed);
     let func_imports = build_function_imports(parsed);
 
-    // Enrich IR functions with signature metadata (type_idx and needs_host)
-    enrich_ir_functions(
-        parsed,
-        &canonical_type,
-        &mut ir_functions,
-        &imported_globals,
-    )?;
-
-    // Propagate needs_host transitively through direct function calls.
-    // If function A calls function B and B.needs_host is true, then A.needs_host must also be true
-    // (because A's signature must have `host` to pass it to B).
-    // This is a fixpoint algorithm that converges when no more functions are marked.
-    let mut changed = true;
-    while changed {
-        changed = false;
-        // Snapshot current needs_host state to avoid borrow checker issues
-        let needs_host_snapshot: Vec<bool> = ir_functions.iter().map(|f| f.needs_host).collect();
-        let mut to_mark: Vec<usize> = Vec::new();
-
-        for (func_idx, ir_func) in ir_functions.iter().enumerate() {
-            if ir_func.needs_host {
-                continue; // Already marked
-            }
-
-            // Check if this function directly calls any function that needs host
-            let calls_host_needing = ir_func.blocks.iter().any(|block| {
-                block.instructions.iter().any(|instr| {
-                    matches!(instr, IrInstr::Call { func_idx: callee, .. }
-                        if needs_host_snapshot
-                            .get(callee.as_usize())
-                            .copied()
-                            .unwrap_or(false))
-                })
-            });
-
-            if calls_host_needing {
-                to_mark.push(func_idx);
-            }
-        }
-
-        // Apply all changes from this iteration
-        for idx in to_mark {
-            ir_functions[idx].needs_host = true;
-            changed = true;
+    // Set type_idx for all IR functions
+    for (func_idx, func) in parsed.functions.iter().enumerate() {
+        if let Some(ir_func) = ir_functions.get_mut(func_idx) {
+            ir_func.type_idx = TypeIdx::new(canonical_type[func.type_idx as usize]);
         }
     }
 
@@ -179,62 +139,6 @@ fn build_function_exports(parsed: &ParsedModule, num_imported_functions: usize) 
         .collect()
 }
 
-/// Enriches IR functions with signature metadata (type_idx and needs_host).
-///
-/// This iterates through the parsed functions and sets the type_idx and needs_host
-/// fields in the corresponding IR functions.
-fn enrich_ir_functions(
-    parsed: &ParsedModule,
-    canonical_type: &[usize],
-    ir_functions: &mut [IrFunction],
-    imported_globals: &[ImportedGlobalDef],
-) -> Result<()> {
-    let num_imported_globals = imported_globals.len();
-    let has_func_imports = parsed
-        .imports
-        .iter()
-        .any(|i| matches!(i.kind, ImportKind::Function(_)));
-    for (func_idx, func) in parsed.functions.iter().enumerate() {
-        if let Some(ir_func) = ir_functions.get_mut(func_idx) {
-            ir_func.type_idx = TypeIdx::new(canonical_type[func.type_idx as usize]);
-            ir_func.needs_host =
-                function_calls_imports(ir_func, num_imported_globals, has_func_imports);
-        } else {
-            return Err(anyhow::anyhow!(
-                "IR function missing for parsed function index {}",
-                func_idx
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Determines if a function calls imports or accesses imported globals.
-///
-/// Returns true if the function:
-/// - Has a direct CallImport instruction, OR
-/// - Accesses an imported global, OR
-/// - Uses CallIndirect when the module has any function imports
-///   (because call_indirect may dispatch to functions that need the host parameter)
-fn function_calls_imports(
-    ir_func: &IrFunction,
-    num_imported_globals: usize,
-    has_func_imports: bool,
-) -> bool {
-    ir_func.blocks.iter().any(|block| {
-        block.instructions.iter().any(|instr| {
-            matches!(instr, IrInstr::CallImport { .. })
-                || (num_imported_globals > 0
-                    && matches!(
-                        instr,
-                        IrInstr::GlobalGet { index, .. }
-                            | IrInstr::GlobalSet { index, .. }
-                            if index.as_usize() < num_imported_globals
-                    ))
-                || (has_func_imports && matches!(instr, IrInstr::CallIndirect { .. }))
-        })
-    })
-}
 
 /// Builds type signatures for call_indirect type checking.
 fn build_call_indirect_signatures(parsed: &ParsedModule) -> Vec<FuncSignature> {
@@ -255,7 +159,6 @@ fn build_call_indirect_signatures(parsed: &ParsedModule) -> Vec<FuncSignature> {
                 params,
                 return_type,
                 type_idx: TypeIdx::new(0),
-                needs_host: false,
             }
         })
         .collect()

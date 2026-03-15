@@ -1,7 +1,7 @@
 //! Export implementation generation.
 //!
 //! Generates the `impl WasmModule { ... }` block with methods for all functions.
-//! Exported functions use their export names, internal functions use func_N names.
+//! Exported functions are thin wrappers that construct an Env<H> and forward to internal functions.
 
 use crate::backend::Backend;
 use crate::ir::*;
@@ -9,7 +9,7 @@ use crate::ir::*;
 /// Generate the `impl WasmModule { ... }` block with accessor methods for all functions.
 pub fn generate_export_impl<B: Backend>(_backend: &B, info: &ModuleInfo) -> String {
     let mut code = String::new();
-    let has_mut_globals = info.has_mutable_globals();
+    let has_imports = !info.func_imports.is_empty() || !info.imported_globals.is_empty();
 
     code.push_str("impl WasmModule {\n");
 
@@ -31,24 +31,16 @@ pub fn generate_export_impl<B: Backend>(_backend: &B, info: &ModuleInfo) -> Stri
             format!("func_{}", func_idx)
         };
 
-        // Determine trait bounds for this export
-        let trait_bounds_opt = if ir_func.needs_host {
-            crate::codegen::traits::build_trait_bounds(info)
-        } else {
-            None
-        };
-        let has_multiple_bounds = trait_bounds_opt.as_ref().is_some_and(|b| b.contains(" + "));
-
-        // Build generics: handle both H (host) and MP (imported memory size)
+        // Build generics
         let mut generics: Vec<String> = Vec::new();
         if info.has_memory_import {
             generics.push("const MP: usize".to_string());
         }
-        if has_multiple_bounds {
-            generics.push(format!("H: {}", trait_bounds_opt.as_ref().unwrap()));
+        if has_imports {
+            generics.push("H: ModuleHostTrait".to_string());
         }
 
-        // Method signature with optional generic parameter
+        // Method signature
         let mut param_parts: Vec<String> = Vec::new();
         param_parts.push("&mut self".to_string());
         for (i, (_, ty)) in ir_func.params.iter().enumerate() {
@@ -61,15 +53,9 @@ pub fn generate_export_impl<B: Backend>(_backend: &B, info: &ModuleInfo) -> Stri
             param_parts.push("memory: &mut IsolatedMemory<MP>".to_string());
         }
 
-        // Add host parameter if function needs it
-        if let Some(trait_bounds) = &trait_bounds_opt {
-            if has_multiple_bounds {
-                // Use generic parameter H
-                param_parts.push("host: &mut H".to_string());
-            } else {
-                // Single trait bound - use impl directly
-                param_parts.push(format!("host: &mut impl {trait_bounds}"));
-            }
+        // Add host parameter if module has imports
+        if has_imports {
+            param_parts.push("host: &mut H".to_string());
         }
 
         let return_type = crate::codegen::types::format_return_type(ir_func.return_type.as_ref());
@@ -88,18 +74,19 @@ pub fn generate_export_impl<B: Backend>(_backend: &B, info: &ModuleInfo) -> Stri
             return_type
         ));
 
-        // Forward call to internal function
+        // Construct Env and forward call to internal function
+        if has_imports {
+            code.push_str("        let mut env = Env { host, globals: &mut self.0.globals };\n");
+        } else {
+            code.push_str("        let mut __host = herkos_runtime::NoHost;\n");
+            code.push_str("        let mut env = Env { host: &mut __host, globals: &mut self.0.globals };\n");
+        }
+
+        // Build call arguments: wasm params + env + memory (if owned) + table
         let mut call_args: Vec<String> =
             (0..ir_func.params.len()).map(|i| format!("v{i}")).collect();
+        call_args.push("&mut env".to_string());
 
-        // Forward host parameter if needed
-        if ir_func.needs_host {
-            call_args.push("host".to_string());
-        }
-
-        if has_mut_globals {
-            call_args.push("&mut self.0.globals".to_string());
-        }
         if info.has_memory {
             call_args.push("&mut self.0.memory".to_string());
         } else if info.has_memory_import {

@@ -89,14 +89,14 @@ pub fn generate_constructor<B: Backend>(
         && info.element_segments.is_empty()
     {
         code.push_str("pub fn new() -> Result<WasmModule, ConstructionError> {\n");
-        code.push_str("    Ok(WasmModule(LibraryModule::new((), Table::try_new(0)?)))\n");
+        code.push_str("    Ok(WasmModule(LibraryModule::new(Globals {}, Table::try_new(0)?)))\n");
         code.push_str("}\n");
         return Ok(code);
     }
 
     code.push_str("pub fn new() -> WasmResult<WasmModule> {\n");
 
-    // Build globals initializer
+    // Build globals initializer (always generates a Globals struct, empty if no mutable globals)
     let globals_init = if has_mut_globals {
         let mut fields = String::from("Globals { ");
         let mut first = true;
@@ -113,7 +113,7 @@ pub fn generate_constructor<B: Backend>(
         fields.push_str(" }");
         fields
     } else {
-        "()".to_string()
+        "Globals {}".to_string()
     };
 
     // Table initialization
@@ -125,7 +125,8 @@ pub fn generate_constructor<B: Backend>(
 
     if info.has_memory {
         let needs_mut = !info.data_segments.is_empty() || !info.element_segments.is_empty();
-        let globals_type = if has_mut_globals { "Globals" } else { "()" };
+        // Always use Globals type (may be empty struct)
+        let globals_type = "Globals";
         let table_size_str = if info.has_table() { "TABLE_MAX" } else { "0" };
         // Use try_init (in-place initialisation) instead of try_new to avoid
         // materialising a large Result<Module<…>, E> on the call stack. In
