@@ -1,7 +1,0 @@
-[package]
-name = "herkos-bootstrap"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-herkos-runtime = { path = "../../crates/herkos-runtime" }
