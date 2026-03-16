@@ -28,7 +28,7 @@ impl MathHost {
     }
 }
 
-impl math_library_wasm::EnvImports for MathHost {
+impl math_library_wasm::ModuleHostTrait for MathHost {
     fn log_result(&mut self, value: i32) -> WasmResult<()> {
         self.results_log.push(value);
         println!("  [library logged: {}]", value);
@@ -53,14 +53,14 @@ fn main() {
 
     // Step 3: Library borrows memory to compute the sum
     let sum = library
-        .sum_array(0, data.len() as i32, &mut *memory)
+        .sum_array(0, data.len() as i32, &mut *memory, &mut host)
         .expect("sum_array trapped");
     println!("Library computed sum: {}", sum);
 
     // Step 4: Library doubles all values in-place
     println!("\nLibrary doubles array in-place...");
     library
-        .double_array(0, data.len() as i32, &mut *memory)
+        .double_array(0, data.len() as i32, &mut *memory, &mut host)
         .expect("double_array trapped");
 
     // Step 5: Host reads back the modified values
@@ -83,7 +83,7 @@ fn main() {
 
     // Step 7: Show memory info
     let pages = library
-        .memory_info(&mut *memory)
+        .memory_info(&mut *memory, &mut host)
         .expect("memory_info trapped");
     println!("\nMemory size: {} pages ({} bytes)", pages, pages * 65536);
 
