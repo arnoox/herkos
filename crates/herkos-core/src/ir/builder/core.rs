@@ -619,7 +619,6 @@ impl IrBuilder {
             entry_block: entry,
             return_type,
             type_idx: TypeIdx::new(0), // Set by enrich_ir_functions during assembly
-            needs_host: false,         // Set by enrich_ir_functions during assembly
         })
     }
 

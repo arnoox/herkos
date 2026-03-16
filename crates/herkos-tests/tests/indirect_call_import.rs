@@ -17,8 +17,8 @@ impl MockHost {
     }
 }
 
-// Implement the generated EnvImports trait
-impl indirect_call_import::EnvImports for MockHost {
+// Implement the generated ModuleHostTrait
+impl indirect_call_import::ModuleHostTrait for MockHost {
     fn log(&mut self, value: i32) -> WasmResult<()> {
         self.last_logged = Some(value);
         Ok(())

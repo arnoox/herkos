@@ -32,7 +32,7 @@ impl InterModuleHost {
 
 // -- import_memory traits --
 
-impl import_memory::EnvImports for InterModuleHost {
+impl import_memory::ModuleHostTrait for InterModuleHost {
     fn print_i32(&mut self, value: i32) -> WasmResult<()> {
         self.logged_values.push(value);
         Ok(())
@@ -41,7 +41,7 @@ impl import_memory::EnvImports for InterModuleHost {
 
 // -- import_basic traits --
 
-impl import_basic::EnvImports for InterModuleHost {
+impl import_basic::ModuleHostTrait for InterModuleHost {
     fn print_i32(&mut self, value: i32) -> WasmResult<()> {
         self.logged_values.push(value);
         Ok(())
@@ -50,9 +50,7 @@ impl import_basic::EnvImports for InterModuleHost {
     fn read_i32(&mut self) -> WasmResult<i32> {
         Ok(self.read_value)
     }
-}
 
-impl import_basic::WasiSnapshotPreview1Imports for InterModuleHost {
     fn fd_write(&mut self, _: i32, _: i32, _: i32, _: i32) -> WasmResult<i32> {
         Ok(0)
     }
@@ -60,7 +58,7 @@ impl import_basic::WasiSnapshotPreview1Imports for InterModuleHost {
 
 // -- import_multi traits --
 
-impl import_multi::EnvImports for InterModuleHost {
+impl import_multi::ModuleHostTrait for InterModuleHost {
     fn add(&mut self, a: i32, b: i32) -> WasmResult<i32> {
         self.add_call_count += 1;
         Ok(a + b)
@@ -74,9 +72,7 @@ impl import_multi::EnvImports for InterModuleHost {
         self.logged_values.push(value);
         Ok(())
     }
-}
 
-impl import_multi::WasiSnapshotPreview1Imports for InterModuleHost {
     fn fd_write(&mut self, _: i32, _: i32, _: i32, _: i32) -> WasmResult<i32> {
         Ok(0)
     }
@@ -95,19 +91,21 @@ fn test_host_writes_library_reads() {
     memory.store_i32(8, 300).unwrap();
 
     // Library borrows memory and reads back
-    assert_eq!(lib.read_at(0, &mut memory).unwrap(), 100);
-    assert_eq!(lib.read_at(4, &mut memory).unwrap(), 200);
-    assert_eq!(lib.read_at(8, &mut memory).unwrap(), 300);
+    let mut host = InterModuleHost::new();
+    assert_eq!(lib.read_at(0, &mut memory, &mut host).unwrap(), 100);
+    assert_eq!(lib.read_at(4, &mut memory, &mut host).unwrap(), 200);
+    assert_eq!(lib.read_at(8, &mut memory, &mut host).unwrap(), 300);
 }
 
 #[test]
 fn test_library_writes_host_reads() {
     let mut memory = Box::new(IsolatedMemory::<4>::try_new(2).unwrap());
     let mut lib = import_memory::new().unwrap();
+    let mut host = InterModuleHost::new();
 
     // Library writes via borrowed memory
-    lib.write_at(0, 999, &mut memory).unwrap();
-    lib.write_at(4, 888, &mut memory).unwrap();
+    lib.write_at(0, 999, &mut memory, &mut host).unwrap();
+    lib.write_at(4, 888, &mut memory, &mut host).unwrap();
 
     // Host reads directly from its own memory
     assert_eq!(memory.load_i32(0).unwrap(), 999);
@@ -118,16 +116,17 @@ fn test_library_writes_host_reads() {
 fn test_roundtrip_through_library() {
     let mut memory = Box::new(IsolatedMemory::<4>::try_new(2).unwrap());
     let mut lib = import_memory::new().unwrap();
+    let mut host = InterModuleHost::new();
 
     // Host writes initial data
     memory.store_i32(0, 50).unwrap();
 
     // Library reads the value
-    let val = lib.read_at(0, &mut memory).unwrap();
+    let val = lib.read_at(0, &mut memory, &mut host).unwrap();
     assert_eq!(val, 50);
 
     // Library writes a transformed value at a different offset
-    lib.write_at(4, val * 3, &mut memory).unwrap();
+    lib.write_at(4, val * 3, &mut memory, &mut host).unwrap();
 
     // Host reads the transformed value
     assert_eq!(memory.load_i32(4).unwrap(), 150);
@@ -158,20 +157,21 @@ fn test_two_libraries_same_memory() {
     let mut memory = Box::new(IsolatedMemory::<4>::try_new(2).unwrap());
     let mut lib_a = import_memory::new().unwrap();
     let mut lib_b = import_memory::new().unwrap();
+    let mut host = InterModuleHost::new();
 
     // Library A writes to the shared memory
-    lib_a.write_at(0, 111, &mut memory).unwrap();
-    lib_a.write_at(4, 222, &mut memory).unwrap();
+    lib_a.write_at(0, 111, &mut memory, &mut host).unwrap();
+    lib_a.write_at(4, 222, &mut memory, &mut host).unwrap();
 
     // Library B reads from the same memory — should see A's writes
-    assert_eq!(lib_b.read_at(0, &mut memory).unwrap(), 111);
-    assert_eq!(lib_b.read_at(4, &mut memory).unwrap(), 222);
+    assert_eq!(lib_b.read_at(0, &mut memory, &mut host).unwrap(), 111);
+    assert_eq!(lib_b.read_at(4, &mut memory, &mut host).unwrap(), 222);
 
     // Library B overwrites
-    lib_b.write_at(0, 333, &mut memory).unwrap();
+    lib_b.write_at(0, 333, &mut memory, &mut host).unwrap();
 
     // Library A sees B's change
-    assert_eq!(lib_a.read_at(0, &mut memory).unwrap(), 333);
+    assert_eq!(lib_a.read_at(0, &mut memory, &mut host).unwrap(), 333);
 }
 
 #[test]
@@ -194,7 +194,7 @@ fn test_multiple_module_types_shared_host() {
     assert_eq!(host.add_call_count, 1);
 
     // Use import_multi: call_local_only uses no imports at all
-    let result = multi_mod.call_local_only(2, 5).unwrap();
+    let result = multi_mod.call_local_only(2, 5, &mut host).unwrap();
     // local_add(2,5)=7, local_mul(7,3)=21
     assert_eq!(result, 21);
 }
@@ -204,18 +204,19 @@ fn test_memory_grow_visible_across_modules() {
     let mut memory = Box::new(IsolatedMemory::<4>::try_new(1).unwrap());
     let mut lib_a = import_memory::new().unwrap();
     let mut lib_b = import_memory::new().unwrap();
+    let mut host = InterModuleHost::new();
 
     // Initial size: 1 page
-    assert_eq!(lib_a.memory_size(&mut memory).unwrap(), 1);
+    assert_eq!(lib_a.memory_size(&mut memory, &mut host).unwrap(), 1);
 
     // Library A grows memory by 1 page
-    let prev = lib_a.try_grow(1, &mut memory).unwrap();
+    let prev = lib_a.try_grow(1, &mut memory, &mut host).unwrap();
     assert_eq!(prev, 1, "previous size should be 1");
 
     // Library B sees the new size
-    assert_eq!(lib_b.memory_size(&mut memory).unwrap(), 2);
+    assert_eq!(lib_b.memory_size(&mut memory, &mut host).unwrap(), 2);
 
     // Library B can write to the grown region (page 1 = offset 65536)
-    lib_b.write_at(65536, 42, &mut memory).unwrap();
-    assert_eq!(lib_a.read_at(65536, &mut memory).unwrap(), 42);
+    lib_b.write_at(65536, 42, &mut memory, &mut host).unwrap();
+    assert_eq!(lib_a.read_at(65536, &mut memory, &mut host).unwrap(), 42);
 }

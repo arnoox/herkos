@@ -5,10 +5,9 @@
 
 use crate::backend::Backend;
 use crate::codegen::constructor::{emit_const_globals, generate_constructor, rust_code_preamble};
+use crate::codegen::env::generate_env_block;
 use crate::codegen::export::generate_export_impl;
 use crate::codegen::function::generate_function_with_info;
-use crate::codegen::traits::generate_host_traits;
-use crate::codegen::types::wasm_type_to_rust;
 use crate::ir::*;
 use anyhow::{Context, Result};
 
@@ -49,26 +48,15 @@ fn generate_wrapper_module<B: Backend>(backend: &B, info: &ModuleInfo) -> Result
         rust_code.push('\n');
     }
 
-    // Host trait definitions
-    rust_code.push_str(&generate_host_traits(backend, info));
-
-    // Globals struct (mutable globals only)
-    if has_mut_globals {
-        rust_code.push_str("pub struct Globals {\n");
-        for (idx, g) in info.globals.iter().enumerate() {
-            if g.mutable {
-                let rust_ty = wasm_type_to_rust(&g.init_value.ty());
-                rust_code.push_str(&format!("    pub g{idx}: {rust_ty},\n"));
-            }
-        }
-        rust_code.push_str("}\n\n");
-    }
+    // Environment block: ModuleHostTrait, NoHost impl, Globals struct, Env<H> struct
+    rust_code.push_str(&generate_env_block(info));
 
     // Const items for immutable globals
     rust_code.push_str(&emit_const_globals(backend, info));
 
     // Newtype wrapper struct (required to allow `impl WasmModule` on a foreign type)
-    let globals_type = if has_mut_globals { "Globals" } else { "()" };
+    // Always use Globals for the type (it may be empty but is always generated)
+    let globals_type = "Globals";
     let table_size_str = if info.has_table() { "TABLE_MAX" } else { "0" };
     if info.has_memory {
         rust_code.push_str(&format!(

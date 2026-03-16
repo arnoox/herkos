@@ -26,8 +26,8 @@ impl MockHost {
     }
 }
 
-// Implement the EnvImports trait that was generated
-impl import_basic::EnvImports for MockHost {
+// Implement the ModuleHostTrait with all import methods
+impl import_basic::ModuleHostTrait for MockHost {
     fn print_i32(&mut self, arg0: i32) -> WasmResult<()> {
         self.last_printed = Some(arg0);
         Ok(())
@@ -36,10 +36,7 @@ impl import_basic::EnvImports for MockHost {
     fn read_i32(&mut self) -> WasmResult<i32> {
         Ok(self.read_value)
     }
-}
 
-// Implement the WasiSnapshotPreview1Imports trait that was generated
-impl import_basic::WasiSnapshotPreview1Imports for MockHost {
     fn fd_write(&mut self, _arg0: i32, _arg1: i32, _arg2: i32, _arg3: i32) -> WasmResult<i32> {
         Ok(self.fd_write_result)
     }
@@ -52,7 +49,7 @@ fn test_trait_generation() {
     let mut module = import_basic::new().unwrap();
 
     // Counter should start at 0
-    assert_eq!(module.get_counter().unwrap(), 0);
+    assert_eq!(module.get_counter(&mut host).unwrap(), 0);
 
     // Call exported function that uses imports
     let result = module.test_imports(100, &mut host).unwrap();
@@ -68,7 +65,7 @@ fn test_trait_generation() {
     assert_eq!(result, 52, "Should return read_i32() + 10");
 
     // Counter should have been incremented
-    assert_eq!(module.get_counter().unwrap(), 1);
+    assert_eq!(module.get_counter(&mut host).unwrap(), 1);
 }
 
 #[test]
@@ -88,7 +85,7 @@ fn test_multiple_trait_bounds() {
     // This test verifies that a host implementing multiple traits can be used
     struct MultiHost;
 
-    impl import_basic::EnvImports for MultiHost {
+    impl import_basic::ModuleHostTrait for MultiHost {
         fn print_i32(&mut self, _arg0: i32) -> WasmResult<()> {
             Ok(())
         }
@@ -96,9 +93,7 @@ fn test_multiple_trait_bounds() {
         fn read_i32(&mut self) -> WasmResult<i32> {
             Ok(99)
         }
-    }
 
-    impl import_basic::WasiSnapshotPreview1Imports for MultiHost {
         fn fd_write(&mut self, _arg0: i32, _arg1: i32, _arg2: i32, _arg3: i32) -> WasmResult<i32> {
             Ok(77)
         }

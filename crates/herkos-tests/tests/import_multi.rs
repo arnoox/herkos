@@ -29,8 +29,8 @@ impl MultiImportHost {
     }
 }
 
-// Implement EnvImports trait
-impl import_multi::EnvImports for MultiImportHost {
+// Implement ModuleHostTrait with all import methods
+impl import_multi::ModuleHostTrait for MultiImportHost {
     fn add(&mut self, a: i32, b: i32) -> WasmResult<i32> {
         self.add_calls += 1;
         Ok(a + b)
@@ -45,10 +45,7 @@ impl import_multi::EnvImports for MultiImportHost {
         self.log_value = Some(value);
         Ok(())
     }
-}
 
-// Implement WasiSnapshotPreview1Imports trait
-impl import_multi::WasiSnapshotPreview1Imports for MultiImportHost {
     fn fd_write(&mut self, _fd: i32, _iov: i32, _iovlen: i32, _nwritten: i32) -> WasmResult<i32> {
         Ok(self.fd_write_result)
     }
@@ -118,12 +115,13 @@ fn test_call_all_imports() {
 
 #[test]
 fn test_call_local_functions_only() {
+    let mut host = MultiImportHost::new();
     let mut module = import_multi::new().unwrap();
 
     // call_local_only(2, 3) should:
     // 1. Call local add(2, 3) = 5
     // 2. Call local mul(5, 3) = 15
-    let result = module.call_local_only(2, 3).unwrap();
+    let result = module.call_local_only(2, 3, &mut host).unwrap();
     assert_eq!(result, 15);
 }
 
@@ -146,14 +144,14 @@ fn test_counter_management() {
     let mut module = import_multi::new().unwrap();
 
     // Get counter (should start at 0)
-    let counter = module.get_counter().unwrap();
+    let counter = module.get_counter(&mut host).unwrap();
     assert_eq!(counter, 0);
 
     // Call mixed_calls which increments counter
     let _ = module.mixed_calls(1, 1, &mut host).unwrap();
 
     // Check counter was incremented
-    let counter = module.get_counter().unwrap();
+    let counter = module.get_counter(&mut host).unwrap();
     assert_eq!(counter, 1);
 }
 
@@ -210,7 +208,7 @@ fn test_multiple_hosts_with_different_implementations() {
     struct Host1;
     struct Host2;
 
-    impl import_multi::EnvImports for Host1 {
+    impl import_multi::ModuleHostTrait for Host1 {
         fn add(&mut self, a: i32, b: i32) -> WasmResult<i32> {
             Ok(a + b)
         }
@@ -220,9 +218,6 @@ fn test_multiple_hosts_with_different_implementations() {
         fn log(&mut self, _value: i32) -> WasmResult<()> {
             Ok(())
         }
-    }
-
-    impl import_multi::WasiSnapshotPreview1Imports for Host1 {
         fn fd_write(
             &mut self,
             _fd: i32,
@@ -234,7 +229,7 @@ fn test_multiple_hosts_with_different_implementations() {
         }
     }
 
-    impl import_multi::EnvImports for Host2 {
+    impl import_multi::ModuleHostTrait for Host2 {
         fn add(&mut self, a: i32, b: i32) -> WasmResult<i32> {
             Ok(a - b) // Different implementation
         }
@@ -244,9 +239,6 @@ fn test_multiple_hosts_with_different_implementations() {
         fn log(&mut self, _value: i32) -> WasmResult<()> {
             Ok(())
         }
-    }
-
-    impl import_multi::WasiSnapshotPreview1Imports for Host2 {
         fn fd_write(
             &mut self,
             _fd: i32,

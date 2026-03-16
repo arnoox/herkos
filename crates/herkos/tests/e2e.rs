@@ -539,8 +539,8 @@ fn test_module_with_mutable_global() -> Result<()> {
     assert!(rust_code.contains("pub fn new() -> WasmResult<WasmModule>"));
     assert!(rust_code.contains("Globals { g0: 0i32 }"));
     // Internal functions should be private
-    assert!(rust_code.contains("fn func_0("));
-    assert!(!rust_code.contains("pub fn func_0("));
+    assert!(rust_code.contains("fn func_0<") || rust_code.contains("fn func_0("));
+    assert!(!rust_code.contains("pub fn func_0<") && !rust_code.contains("pub fn func_0("));
     // Export methods
     assert!(rust_code.contains("impl WasmModule"));
     assert!(rust_code.contains("pub fn increment(&mut self) -> WasmResult<i32>"));
@@ -568,10 +568,10 @@ fn test_module_with_data_segment() -> Result<()> {
     println!("Generated Rust code:\n{}", rust_code);
 
     // Should generate module wrapper (data segment triggers it)
-    assert!(rust_code.contains("pub struct WasmModule(pub Module<(), MAX_PAGES, 0>)"));
+    assert!(rust_code.contains("pub struct WasmModule(pub Module<Globals, MAX_PAGES, 0>)"));
     assert!(rust_code.contains("pub fn new() -> WasmResult<WasmModule>"));
     assert!(rust_code.contains(
-        "Module::try_init(&mut __slot, 1, (), Table::try_new(0)?).map_err(|_| WasmTrap::OutOfBounds)?"
+        "Module::try_init(&mut __slot, 1, Globals {}, Table::try_new(0)?).map_err(|_| WasmTrap::OutOfBounds)?"
     ));
     // Data segment initialization — bulk call
     assert!(rust_code.contains("module.memory.init_data(0,"));
@@ -987,9 +987,10 @@ fn test_module_with_globals_and_memory() -> Result<()> {
     // Constructor initializes both
     assert!(rust_code.contains("Globals { g0: 100i32 }"));
     assert!(rust_code.contains("module.memory.init_data("));
-    // Function gets both globals and memory params
-    assert!(rust_code.contains("globals: &mut Globals"));
+    // Function gets env and memory params (globals is in env)
+    assert!(rust_code.contains("env: &mut Env"));
     assert!(rust_code.contains("memory: &mut IsolatedMemory<MAX_PAGES>"));
+    assert!(rust_code.contains("pub globals: &"));
     // Export forwards both
     assert!(rust_code.contains("&mut self.0.globals"));
     assert!(rust_code.contains("&mut self.0.memory"));
