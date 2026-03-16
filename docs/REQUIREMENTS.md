@@ -88,6 +88,23 @@ memory.grow shall not perform heap allocation. New pages shall be zero-initializ
 within pre-allocated storage. Returns previous page count on success, -1 on failure.
 ```
 
+```{req} Bulk Memory Operations
+:id: REQ_MEM_BULK_OPS
+:status: open
+:tags: memory, bulk-operations, wasm-spec
+The transpiler shall support WebAssembly bulk memory operations: memory.fill,
+memory.init, and data.drop. All operations shall be bounds-checked. Out-of-bounds
+operations shall trap with WasmTrap::OutOfBounds, never panic.
+```
+
+```{req} Data Segment Support
+:id: REQ_MEM_DATA_SEGMENTS
+:status: open
+:tags: memory, data-segments
+Passive data segments shall be stored as compile-time constants in the generated
+output. memory.init shall copy from these constants into the module's linear memory.
+```
+
 ### 4.2 Module Representation
 
 ```{req} Two Module Types
@@ -197,6 +214,15 @@ Type equivalence shall be resolved at transpile time.
 Transpiled code shall be self-contained, depending only on herkos-runtime. Output
 shall be formatted (rustfmt), readable, and auditable. No panics, no unwinding —
 only Result<T, WasmTrap> for error handling.
+```
+
+```{req} Version Information in Generated Code
+:id: REQ_TRANS_VERSION_INFO
+:status: open
+:tags: transpilation, output, metadata
+Generated code shall include version information: the herkos transpiler version
+and the WebAssembly binary format version. This enables traceability and debugging
+of transpiled modules.
 ```
 
 ```{req} Deterministic Code Generation

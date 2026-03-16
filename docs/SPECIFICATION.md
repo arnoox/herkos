@@ -6,7 +6,7 @@ Where the requirements say *what* the system must do, this specification says *h
 
 For features that are planned but not yet implemented (verified/hybrid backends, temporal isolation, etc.), see [FUTURE.md](FUTURE.md).
 
-**Document Status**: Draft — Version 0.2 — 2026-02-25
+**Document Status**: Draft — Version 0.2 — 2026-03-16
 
 ---
 
@@ -48,6 +48,12 @@ herkos input.wasm --mode safe --output output.rs
 | `--mode` | Code generation mode (currently only `safe` is implemented) | No |
 | `--output` | Output Rust file path | No |
 | `--max-pages` | Maximum memory pages when module declares no maximum | No |
+
+**Environment variables:**
+
+| Variable | Values | Default | Effect |
+|----------|--------|---------|--------|
+| `HERKOS_OPTIMIZE` | `1` or any other value | Unset (disabled) | When `HERKOS_OPTIMIZE=1`, enables IR optimization passes (currently dead block elimination). Set during transpilation, affects generated code size and performance. |
 
 > **Current limitations**: Only the `safe` backend is implemented. The `--mode` flag accepts `safe`, `hybrid`, and `verified` but all behave identically. `--max-pages` has no effect. See [FUTURE.md](FUTURE.md) for the verified and hybrid backend plans.
 
@@ -500,27 +506,27 @@ let result = lib.call_export_transform(&mut app.memory, ptr, len)?;
 ### 3.1 Component Overview
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                       herkos workspace                           │
-│                                                                  │
+┌─────────────────────────────────────────────────────────────────┐
+│                       herkos workspace                          │
+│                                                                 │
 │  ┌─────────────────┐  ┌──────────────────┐  ┌────────────────┐  │
 │  │  herkos (CLI)   │  │ herkos-runtime   │  │ herkos-tests   │  │
 │  │  ┌───────────┐  │  │  #![no_std]      │  │                │  │
 │  │  │ Parser    │  │  │                  │  │  WAT/C/Rust    │  │
-│  │  │(wasmparser)│  │  │  IsolatedMemory │  │  sources       │  │
+│  │  │(wasmparser)│ │  │  IsolatedMemory  │  │  sources       │  │
 │  │  ├───────────┤  │  │  Table, FuncRef  │  │  → .wasm       │  │
 │  │  │ IR Builder│  │  │  Module types    │  │  → transpile   │  │
-│  │  │ (SSA-form)│  │  │  WasmTrap       │  │  → test        │  │
-│  │  ├───────────┤  │  │  Wasm ops       │  │                │  │
+│  │  │ (SSA-form)│  │  │  WasmTrap        │  │  → test        │  │
+│  │  ├───────────┤  │  │  Wasm ops        │  │                │  │
 │  │  │ Optimizer │  │  │                  │  │  benches/      │  │
 │  │  ├───────────┤  │  └──────────────────┘  └────────────────┘  │
-│  │  │ Backend   │  │           ▲                     ▲           │
-│  │  │ (safe)    │  │           │ depends on           │ depends  │
+│  │  │ Backend   │  │           │                     ▲          │
+│  │  │ (safe)    │  │           │ depends on          │  depends │
 │  │  ├───────────┤  │           │                     │ on both  │
-│  │  │ Codegen   │  │           └─────────────────────┘           │
-│  │  └───────────┘  │                                             │
-│  └─────────────────┘                                             │
-└──────────────────────────────────────────────────────────────────┘
+│  │  │ Codegen   │  │           └─────────────────────┘          │
+│  │  └───────────┘  │                                            │
+│  └─────────────────┘                                            │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ### 3.2 Runtime (`herkos-runtime`)
@@ -809,6 +815,61 @@ Type 2: (i32) → i32       →  canonical = 2  (new signature)
 
 The transpiler builds a canonical type index mapping at transpile time. Both `FuncRef.type_index` and the type check use canonical indices. At runtime, the check is a simple integer comparison.
 
+### 4.6 Bulk Memory Operations
+
+> Implementation: [crates/herkos-runtime/src/memory.rs](../crates/herkos-runtime/src/memory.rs) lines 149–174
+
+The WebAssembly bulk memory operations allow efficient copying and initialization of memory regions without scalar load/store loops.
+
+#### 4.6.1 `memory.fill`
+
+Fills a region of memory with a byte value. Per Wasm spec, only the low 8 bits of the value are used.
+
+```rust
+impl<const MAX_PAGES: usize> IsolatedMemory<MAX_PAGES> {
+    pub fn fill(&mut self, dst: usize, val: u8, len: usize) -> WasmResult<()>;
+}
+```
+
+Generated code:
+```rust
+// Wasm: memory.fill $dst $val $len
+memory.fill(dst as usize, val as u8, len as usize)?;
+```
+
+Traps `OutOfBounds` if `[dst, dst + len)` exceeds active memory. Length zero is a no-op.
+
+#### 4.6.2 `memory.init`
+
+Copies data from a passive data segment into memory at runtime. Each data segment is stored as a constant `&'static [u8]` in the generated code.
+
+```rust
+impl<const MAX_PAGES: usize> IsolatedMemory<MAX_PAGES> {
+    pub fn init_data_partial(&mut self, dst: usize, data: &[u8], src_offset: usize, len: usize) -> WasmResult<()>;
+}
+```
+
+Generated code:
+```rust
+// Wasm: memory.init $data_segment $dst $src_offset $len
+memory.init_data_partial(dst as usize, &DATA_SEGMENT_0, src_offset as usize, len as usize)?;
+```
+
+Traps `OutOfBounds` if either region (source or destination) exceeds bounds:
+- Source: `[src_offset, src_offset + len)` must be within the data segment
+- Destination: `[dst, dst + len)` must be within active memory
+
+#### 4.6.3 `data.drop`
+
+Marks a data segment as dropped (per Wasm spec). In the safe backend this is a no-op because data segments are stored as constant references and cannot actually be deallocated.
+
+```rust
+// Wasm: data.drop $segment
+// (no-op in safe backend — const slices persist)
+```
+
+In future verified and hybrid backends, `data.drop` may enable optimizations: proving that dropped segments are never accessed again could allow proving certain addresses as never-in-bounds.
+
 ---
 
 ## 5. Integration
@@ -829,7 +890,53 @@ let result = module.process_data(&mut host, ptr, len)?;
 
 Full type safety, zero `unsafe`, zero-cost dispatch via monomorphization.
 
-### 5.2 C-Compatible ABI (Optional)
+### 5.2 The Env<H> Context Pattern
+
+> Implementation: [crates/herkos-core/src/codegen/env.rs](../crates/herkos-core/src/codegen/env.rs)
+
+Generated modules use a unified **Env<H>** context struct that bundles the host (generic parameter `H`) and mutable globals, simplifying parameter threading throughout function calls.
+
+```rust
+// Generated by transpiler
+pub struct Env<'a, H: ModuleHostTrait + ?Sized> {
+    pub host: &'a mut H,
+    pub globals: &'a mut Globals,
+}
+
+// Every function that needs imports or mutable state receives Env<H>
+fn process<H: ModuleHostTrait>(
+    memory: &mut IsolatedMemory<MAX_PAGES>,
+    env: &mut Env<H>,
+    input: i32,
+) -> WasmResult<i32> {
+    // Call imported function via trait
+    let result = env.host.some_import(input)?;
+    // Read/write mutable global
+    env.globals.my_global += 1;
+    Ok(result)
+}
+```
+
+**Design rationale:**
+- **Unified state**: Avoids threading `host`, `globals`, and other mutable state as separate parameters
+- **Type safety**: All imports must be present in the host's trait implementation — checked at compile time
+- **Zero overhead**: The Env struct is a thin wrapper; LLVM inlines and optimizes away the indirection
+- **Extensibility**: Adding new imports or globals requires only modifying the trait, not all function signatures
+
+**Generated trait:**
+
+```rust
+pub trait ModuleHostTrait {
+    // One method per function import
+    fn imported_function(&mut self, arg: i32) -> WasmResult<i32>;
+
+    // Getter/setter methods for each imported global
+    fn get_imported_global(&self) -> i32;
+    fn set_imported_global(&mut self, value: i32);
+}
+```
+
+### 5.4 C-Compatible ABI (Optional)
 
 For integration with non-Rust systems, an optional `extern "C"` wrapper erases generics:
 
@@ -849,7 +956,7 @@ pub extern "C" fn module_call(
 
 The C ABI wrapper uses `unsafe` and raw pointers. Capability enforcement still applies inside — the wrapper calls through trait-bounded functions. This is an escape hatch, not the default.
 
-### 5.3 Native Rust Integration
+### 5.5 Native Rust Integration
 
 Native Rust code integrates by implementing import traits directly:
 

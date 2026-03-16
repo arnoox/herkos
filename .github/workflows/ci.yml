@@ -49,5 +49,8 @@ jobs:
       - name: Example (C → Wasm → Rust)
         run: ./examples/c-to-wasm-to-rust/run.sh
 
+      - name: Example FFT (C → Wasm → Rust)
+        run: ./examples/c-fft/run.sh
+
       - name: Example (Inter-Module Lending)
         run: ./examples/inter-module-lending/run.sh

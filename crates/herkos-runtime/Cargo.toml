@@ -1,6 +1,6 @@
 [package]
 name = "herkos-runtime"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 description = "Runtime library for herkos transpiled output — IsolatedMemory, WasmTrap, capability traits"
 license = "Apache-2.0"
