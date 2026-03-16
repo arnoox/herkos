@@ -1,6 +1,6 @@
 [package]
 name = "herkos"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 description = "Compile-Time Memory Isolation via WebAssembly and Rust Transpilation"
 license = "Apache-2.0"
@@ -12,7 +12,7 @@ categories = ["wasm", "development-tools::build-utils"]
 readme = "../../README.md"
 
 [dependencies]
-herkos-core = { path = "../herkos-core" }
+herkos-core = { version = "0.2.0", path = "../herkos-core" }
 anyhow = { workspace = true }
 clap = { workspace = true }
 

@@ -1,6 +1,6 @@
 [package]
 name = "herkos-tests"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 publish = false
 description = "End-to-end compilation tests for herkos transpiler"
@@ -13,7 +13,7 @@ herkos-runtime = { path = "../herkos-runtime" }
 [build-dependencies]
 anyhow = { workspace = true }
 wat = { workspace = true }
-herkos-core = { path = "../herkos-core" }
+herkos-core = { version = "0.2.0", path = "../herkos-core" }
 
 [dev-dependencies]
 criterion = "0.8.2"
