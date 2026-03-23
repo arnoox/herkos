@@ -23,6 +23,7 @@ docs/.ub_cache/
 **/*.so
 **/*.dylib
 **/*.wasm
+**/*.wasm.rs
 
 # Test artifacts
 *.profraw
