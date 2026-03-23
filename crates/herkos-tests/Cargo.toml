@@ -18,6 +18,9 @@ herkos-core = { version = "0.2.0", path = "../herkos-core" }
 [dev-dependencies]
 criterion = "0.8.2"
 
+[features]
+baseline_benches = []
+
 [[bench]]
 name = "herkos_runtime_benchmark"
 harness = false

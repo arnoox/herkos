@@ -31,3 +31,4 @@ docs/.ub_cache/
 # Temporary files
 *.tmp
 *.bak
+*.pyc

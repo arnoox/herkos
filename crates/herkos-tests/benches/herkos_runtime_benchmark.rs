@@ -9,6 +9,7 @@ fn fibo_5_wasm_bench(c: &mut Criterion) {
     });
 }
 
+#[cfg(feature = "baseline_benches")]
 fn fibo_5_orig_bench(c: &mut Criterion) {
     c.bench_function("fib 5 plain rust", |b| b.iter(|| fibo_orig(black_box(5))));
 }
@@ -20,6 +21,7 @@ fn fibo_20_wasm_bench(c: &mut Criterion) {
     });
 }
 
+#[cfg(feature = "baseline_benches")]
 fn fibo_20_orig_bench(c: &mut Criterion) {
     c.bench_function("fib 20 plain rust", |b| b.iter(|| fibo_orig(black_box(20))));
 }
@@ -33,6 +35,7 @@ fn memsort_100_wasm_bench(c: &mut Criterion) {
     });
 }
 
+#[cfg(feature = "baseline_benches")]
 fn memsort_100_orig_bench(c: &mut Criterion) {
     c.bench_function("memsort 100 plain rust", |b| {
         b.iter(|| mem_fill_sort_sum_orig(black_box(100), black_box(42)))
@@ -48,6 +51,7 @@ fn collatz_27_wasm_bench(c: &mut Criterion) {
     });
 }
 
+#[cfg(feature = "baseline_benches")]
 fn collatz_27_orig_bench(c: &mut Criterion) {
     c.bench_function("collatz 27 plain rust", |b| {
         b.iter(|| collatz_steps_orig(black_box(27)))
@@ -61,6 +65,7 @@ fn collatz_871_wasm_bench(c: &mut Criterion) {
     });
 }
 
+#[cfg(feature = "baseline_benches")]
 fn collatz_871_orig_bench(c: &mut Criterion) {
     c.bench_function("collatz 871 plain rust", |b| {
         b.iter(|| collatz_steps_orig(black_box(871)))
@@ -76,6 +81,7 @@ fn isqrt_wasm_bench(c: &mut Criterion) {
     });
 }
 
+#[cfg(feature = "baseline_benches")]
 fn isqrt_orig_bench(c: &mut Criterion) {
     c.bench_function("isqrt 1000000 plain rust", |b| {
         b.iter(|| isqrt_orig(black_box(1_000_000)))
@@ -89,6 +95,7 @@ fn gcd_wasm_bench(c: &mut Criterion) {
     });
 }
 
+#[cfg(feature = "baseline_benches")]
 fn gcd_orig_bench(c: &mut Criterion) {
     c.bench_function("gcd(46368,28657) plain rust", |b| {
         b.iter(|| gcd_orig(black_box(46368), black_box(28657)))
@@ -104,6 +111,7 @@ fn popcount_wasm_bench(c: &mut Criterion) {
     });
 }
 
+#[cfg(feature = "baseline_benches")]
 fn popcount_orig_bench(c: &mut Criterion) {
     c.bench_function("popcount 0xDEADBEEF plain rust", |b| {
         b.iter(|| popcount_orig(black_box(0xDEADBEEFu32 as i32)))
@@ -119,12 +127,35 @@ fn sum_recursive_100_wasm_bench(c: &mut Criterion) {
     });
 }
 
+#[cfg(feature = "baseline_benches")]
 fn sum_recursive_100_orig_bench(c: &mut Criterion) {
     c.bench_function("sum_recursive 100 plain rust", |b| {
         b.iter(|| sum_recursive_orig(black_box(100)))
     });
 }
 
+#[cfg(not(feature = "baseline_benches"))]
+criterion_group!(
+    benches,
+    // Fibonacci (pure computation)
+    fibo_5_wasm_bench,
+    fibo_20_wasm_bench,
+    // Memory-intensive (bounds-checking overhead)
+    memsort_100_wasm_bench,
+    // Branchy control flow (division + conditionals)
+    collatz_27_wasm_bench,
+    collatz_871_wasm_bench,
+    // Binary search loop (multiplication + comparison)
+    isqrt_wasm_bench,
+    // Euclidean algorithm (modular arithmetic loop)
+    gcd_wasm_bench,
+    // Bitwise tight loop
+    popcount_wasm_bench,
+    // Recursive function call overhead
+    sum_recursive_100_wasm_bench,
+);
+
+#[cfg(feature = "baseline_benches")]
 criterion_group!(
     benches,
     // Fibonacci (pure computation)
@@ -153,4 +184,5 @@ criterion_group!(
     sum_recursive_100_wasm_bench,
     sum_recursive_100_orig_bench,
 );
+
 criterion_main!(benches);
