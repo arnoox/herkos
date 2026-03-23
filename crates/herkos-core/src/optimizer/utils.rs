@@ -111,7 +111,12 @@ pub fn for_each_use<F: FnMut(VarId)>(instr: &IrInstr, mut f: F) {
             f(*val);
             f(*len);
         }
-        IrInstr::MemoryInit { dst, src_offset, len, .. } => {
+        IrInstr::MemoryInit {
+            dst,
+            src_offset,
+            len,
+            ..
+        } => {
             f(*dst);
             f(*src_offset);
             f(*len);
@@ -297,7 +302,12 @@ pub fn replace_uses_of(instr: &mut IrInstr, old: VarId, new: VarId) {
             sub(val);
             sub(len);
         }
-        IrInstr::MemoryInit { dst, src_offset, len, .. } => {
+        IrInstr::MemoryInit {
+            dst,
+            src_offset,
+            len,
+            ..
+        } => {
             sub(dst);
             sub(src_offset);
             sub(len);
