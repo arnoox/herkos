@@ -15,6 +15,7 @@ target/
 docs/_build/
 docs/.ub_cache/
 .venv/
+*.html
 
 # Compiled object files
 **/*.o

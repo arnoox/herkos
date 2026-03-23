@@ -2,10 +2,6 @@
   "name": "Rust",
   "image": "mcr.microsoft.com/devcontainers/rust:1",
   "features": {
-    "ghcr.io/devcontainers/features/rust:1": {
-      "version": "latest",
-      "profile": "default"
-    },
     "ghcr.io/devcontainers/features/node:1": {},
     "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {},
     "ghcr.io/devcontainers/features/github-cli:1": {}
@@ -22,5 +18,5 @@
       }
     }
   },
-  "postCreateCommand": "rustc --version && cargo --version && cargo install --locked kani-verifier && cargo kani setup && sudo apt-get install clang lld -y && rustup target add wasm32-unknown-unknown"
+  "postCreateCommand": "rustc --version && cargo --version && cargo install --locked kani-verifier && sudo mkdir -p /usr/local/cargo/bin && sudo ln -sf \"$(which rustup)\" /usr/local/cargo/bin/rustup-init && cargo kani setup && sudo apt-get install clang lld python3-pip -y && rustup target add wasm32-unknown-unknown && pip install plotly --break-system-packages"
 }
