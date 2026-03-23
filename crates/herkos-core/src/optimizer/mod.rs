@@ -36,7 +36,7 @@ pub fn optimize_ir(module_info: ModuleInfo, do_opt: bool) -> Result<ModuleInfo> 
             dead_blocks::eliminate(func)?;
             const_prop::eliminate(func);
             algebraic::eliminate(func);
-            copy_prop::eliminate(func);
+            // copy_prop::eliminate(func); // TODO: fix Phi handling in pre-lowering
         }
     }
     Ok(module_info)

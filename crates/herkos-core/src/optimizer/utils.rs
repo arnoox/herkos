@@ -122,7 +122,11 @@ pub fn for_each_use<F: FnMut(VarId)>(instr: &IrInstr, mut f: F) {
             f(*len);
         }
         IrInstr::DataDrop { .. } => {}
-        IrInstr::Phi { .. } => unreachable!("Phi nodes must be lowered before optimization"),
+        IrInstr::Phi { srcs, .. } => {
+            for (_, src) in srcs {
+                f(*src);
+            }
+        }
     }
 }
 
@@ -168,9 +172,8 @@ pub fn instr_dest(instr: &IrInstr) -> Option<VarId> {
         | IrInstr::MemoryCopy { .. }
         | IrInstr::MemoryFill { .. }
         | IrInstr::MemoryInit { .. }
-        | IrInstr::DataDrop { .. } => None,
-
-        IrInstr::Phi { .. } => unreachable!("Phi nodes must be lowered before optimization"),
+        | IrInstr::DataDrop { .. }
+        | IrInstr::Phi { .. } => None,
     }
 }
 
@@ -202,9 +205,8 @@ pub fn set_instr_dest(instr: &mut IrInstr, new_dest: VarId) {
         | IrInstr::MemoryCopy { .. }
         | IrInstr::MemoryFill { .. }
         | IrInstr::MemoryInit { .. }
-        | IrInstr::DataDrop { .. } => {}
-
-        IrInstr::Phi { .. } => unreachable!("Phi nodes must be lowered before optimization"),
+        | IrInstr::DataDrop { .. }
+        | IrInstr::Phi { .. } => {}
     }
 }
 
@@ -313,7 +315,11 @@ pub fn replace_uses_of(instr: &mut IrInstr, old: VarId, new: VarId) {
             sub(len);
         }
         IrInstr::DataDrop { .. } => {}
-        IrInstr::Phi { .. } => unreachable!("Phi nodes must be lowered before optimization"),
+        IrInstr::Phi { srcs, .. } => {
+            for (_, src) in srcs.iter_mut() {
+                sub(src);
+            }
+        }
     }
 }
 
@@ -426,7 +432,7 @@ pub fn is_side_effect_free(instr: &IrInstr) -> bool {
         | IrInstr::Select { .. }
         | IrInstr::GlobalGet { .. }
         | IrInstr::MemorySize { .. } => true,
-        IrInstr::Phi { .. } => unreachable!("Phi nodes must be lowered before optimization"),
+        IrInstr::Phi { .. } => false,
         _ => false,
     }
 }
