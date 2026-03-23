@@ -3,14 +3,23 @@
 //! This module implements optimizations on the intermediate representation (IR)
 //! to improve code generation quality and runtime performance.
 //!
-//! Each optimization is a self-contained sub-module. The top-level
-//! [`optimize_ir`] function runs all passes in order.
+//! Passes are split into two phases:
+//! - **Pre-lowering** ([`optimize_ir`]): operates on SSA IR with phi nodes
+//! - **Post-lowering** ([`optimize_lowered_ir`]): operates on lowered IR after phi destruction
 
 use crate::ir::{LoweredModuleInfo, ModuleInfo};
 use anyhow::Result;
 
-// ── Passes ───────────────────────────────────────────────────────────────────
+// ── Shared utilities ─────────────────────────────────────────────────────────
+pub(crate) mod utils;
+
+// ── Pre-lowering passes ──────────────────────────────────────────────────────
 mod dead_blocks;
+
+// ── Post-lowering passes ─────────────────────────────────────────────────────
+mod dead_instrs;
+mod empty_blocks;
+mod merge_blocks;
 
 /// Optimizes the pure SSA IR before phi lowering.
 ///
@@ -31,14 +40,33 @@ pub fn optimize_ir(module_info: ModuleInfo, do_opt: bool) -> Result<ModuleInfo> 
 ///
 /// Passes here operate on [`LoweredModuleInfo`] where all `IrInstr::Phi`
 /// nodes have been replaced by `IrInstr::Assign` in predecessor blocks.
+///
+/// ## Structural passes
+///
+/// Run multiple passes of structural cleanup: dead_instrs may leave empty blocks,
+/// which empty_blocks and merge_blocks then eliminate, potentially exposing new
+/// dead instructions. We repeat until reaching a fixed point (typically 2 iterations).
 pub fn optimize_lowered_ir(
     module_info: LoweredModuleInfo,
-    _do_opt: bool,
+    do_opt: bool,
 ) -> Result<LoweredModuleInfo> {
+    let mut module_info = module_info;
+    if do_opt {
+        for func in &mut module_info.ir_functions {
+            // Two passes: dead_instrs may create empty blocks.
+            for _ in 0..2 {
+                empty_blocks::eliminate(func);
+                dead_blocks::eliminate(func)?;
+                merge_blocks::eliminate(func);
+                dead_blocks::eliminate(func)?;
+                dead_instrs::eliminate(func);
+            }
+        }
+    }
     Ok(module_info)
 }
 
-// ── optimize_ir integration tests ─────────────────────────────────────────────
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
