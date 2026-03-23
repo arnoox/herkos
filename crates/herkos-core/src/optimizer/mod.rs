@@ -14,10 +14,10 @@ use anyhow::Result;
 pub(crate) mod utils;
 
 // ── Pre-lowering passes ──────────────────────────────────────────────────────
-mod dead_blocks;
 mod algebraic;
 mod const_prop;
 mod copy_prop;
+mod dead_blocks;
 
 // ── Post-lowering passes ─────────────────────────────────────────────────────
 mod dead_instrs;
