@@ -3,20 +3,31 @@
 //! This module implements optimizations on the intermediate representation (IR)
 //! to improve code generation quality and runtime performance.
 //!
-//! Each optimization is a self-contained sub-module. The top-level
-//! [`optimize_ir`] function runs all passes in order.
+//! Passes are split into two phases:
+//! - **Pre-lowering** ([`optimize_ir`]): operates on SSA IR with phi nodes
+//! - **Post-lowering** ([`optimize_lowered_ir`]): operates on lowered IR after phi destruction
 
 use crate::ir::{LoweredModuleInfo, ModuleInfo};
 use anyhow::Result;
 
-// ── Passes ───────────────────────────────────────────────────────────────────
+// ── Shared utilities ─────────────────────────────────────────────────────────
+pub(crate) mod utils;
+
+// ── Pre-lowering passes ──────────────────────────────────────────────────────
 mod dead_blocks;
+
+// ── Post-lowering passes ─────────────────────────────────────────────────────
+mod dead_instrs;
+mod empty_blocks;
+mod merge_blocks;
+mod branch_fold;
+mod gvn;
+mod licm;
+mod local_cse;
 
 /// Optimizes the pure SSA IR before phi lowering.
 ///
 /// Passes here operate on [`ModuleInfo`] with phi nodes still intact.
-/// Control-flow based passes (e.g. dead block elimination) belong here
-/// because reachability is identical in SSA and lowered form.
 pub fn optimize_ir(module_info: ModuleInfo, do_opt: bool) -> Result<ModuleInfo> {
     let mut module_info = module_info;
     if do_opt {
@@ -29,12 +40,30 @@ pub fn optimize_ir(module_info: ModuleInfo, do_opt: bool) -> Result<ModuleInfo> 
 
 /// Optimizes the lowered IR after phi nodes have been eliminated.
 ///
-/// Passes here operate on [`LoweredModuleInfo`] where all `IrInstr::Phi`
-/// nodes have been replaced by `IrInstr::Assign` in predecessor blocks.
+/// Runs all post-lowering optimization passes: structural cleanup, redundancy
+/// elimination (CSE/GVN), loop optimizations (LICM), and branch simplification.
 pub fn optimize_lowered_ir(
     module_info: LoweredModuleInfo,
-    _do_opt: bool,
+    do_opt: bool,
 ) -> Result<LoweredModuleInfo> {
+    let mut module_info = module_info;
+    if do_opt {
+        for func in &mut module_info.ir_functions {
+            for _ in 0..2 {
+                empty_blocks::eliminate(func);
+                dead_blocks::eliminate(func)?;
+                merge_blocks::eliminate(func);
+                dead_blocks::eliminate(func)?;
+                local_cse::eliminate(func);
+                gvn::eliminate(func);
+                dead_instrs::eliminate(func);
+                branch_fold::eliminate(func);
+                dead_instrs::eliminate(func);
+                licm::eliminate(func);
+                dead_instrs::eliminate(func);
+            }
+        }
+    }
     Ok(module_info)
 }
 
