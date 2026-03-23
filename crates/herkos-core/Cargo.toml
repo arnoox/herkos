@@ -15,6 +15,7 @@ readme = "../../README.md"
 wasmparser = { workspace = true }
 anyhow = { workspace = true }
 heck = { workspace = true }
+herkos-runtime = { path = "../herkos-runtime", version = "0.2.0" }
 
 [dev-dependencies]
 wat = { workspace = true }

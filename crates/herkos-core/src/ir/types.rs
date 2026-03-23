@@ -409,7 +409,7 @@ pub enum IrTerminator {
 }
 
 /// Constant value in the IR.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum IrValue {
     I32(i32),
     I64(i64),
