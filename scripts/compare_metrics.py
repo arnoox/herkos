@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
-compare_metrics.py [--format {table|sparkline|html}]
+compare_metrics.py [--format {table|sparkline|html}] [--branch NAME]
 
 Fetches bench_history.csv and size_history.csv from the metrics branch,
-groups by benchmark/metric name, and displays evolution over time.
+groups by benchmark/metric name, filters by branch, and displays evolution over time.
 
 Output formats:
   table      - Simple ASCII table (default)
   sparkline  - Compact sparkline visualization
   html       - Interactive HTML report
+
+Options:
+  --branch NAME  - Filter by git branch name (default: current branch)
 """
 
 import sys
@@ -43,6 +46,20 @@ def fetch_csv_from_branch(filename: str, branch: str = "metrics") -> List[Dict]:
         return []
 
 
+def get_current_branch() -> str:
+    """Get the current git branch name."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip()
+    except subprocess.CalledProcessError:
+        return "main"
+
+
 def parse_timestamp(ts: str) -> datetime:
     """Parse ISO timestamp."""
     try:
@@ -51,12 +68,14 @@ def parse_timestamp(ts: str) -> datetime:
         return datetime.min
 
 
-def group_metrics(bench_rows: List[Dict], size_rows: List[Dict]) -> Dict[str, List[Dict]]:
-    """Group metrics by name (benchmark_name or metric_name) with timestamps."""
+def group_metrics(bench_rows: List[Dict], size_rows: List[Dict], branch: str = None) -> Dict[str, List[Dict]]:
+    """Group metrics by name, filtered by branch and sorted by timestamp."""
     groups = defaultdict(list)
 
     # Group benchmarks
     for row in bench_rows:
+        if branch and row.get("branch", "") != branch:
+            continue
         name = row.get("benchmark_name", "").strip()
         if name:
             groups[f"bench/{name}"].append({
@@ -70,6 +89,8 @@ def group_metrics(bench_rows: List[Dict], size_rows: List[Dict]) -> Dict[str, Li
 
     # Group file sizes
     for row in size_rows:
+        if branch and row.get("branch", "") != branch:
+            continue
         name = row.get("metric_name", "").strip()
         if name:
             groups[f"size/{name}"].append({
@@ -134,9 +155,11 @@ def sparkline(values: List[float], width: int = 10) -> str:
     return sparkline_str
 
 
-def display_table(groups: Dict[str, List[Dict]]) -> None:
+def display_table(groups: Dict[str, List[Dict]], branch: str = None) -> None:
     """Display metrics as ASCII table."""
     print("\n" + "=" * 120)
+    if branch:
+        print(f"Metrics for branch: {branch}")
     print(f"{'Metric':<40} {'Latest':<20} {'Prev':<20} {'Change':<15} {'Trend':<20}")
     print("=" * 120)
 
@@ -166,9 +189,11 @@ def display_table(groups: Dict[str, List[Dict]]) -> None:
     print("=" * 120)
 
 
-def display_sparkline(groups: Dict[str, List[Dict]]) -> None:
+def display_sparkline(groups: Dict[str, List[Dict]], branch: str = None) -> None:
     """Display metrics with sparklines for compact view."""
     print("\n" + "─" * 100)
+    if branch:
+        print(f"Metrics for branch: {branch}")
     print(f"{'Metric':<45} {'Sparkline':<40} {'Latest':<15}")
     print("─" * 100)
 
@@ -186,7 +211,7 @@ def display_sparkline(groups: Dict[str, List[Dict]]) -> None:
     print("─" * 100)
 
 
-def display_html(groups: Dict[str, List[Dict]], output_path: str = "metrics_report.html") -> None:
+def display_html(groups: Dict[str, List[Dict]], output_path: str = "metrics_report.html", branch: str = None) -> None:
     """Generate an interactive HTML report (requires plotly)."""
     try:
         import plotly.graph_objects as go
@@ -226,8 +251,12 @@ def display_html(groups: Dict[str, List[Dict]], output_path: str = "metrics_repo
             col=col,
         )
 
+    title = "herkos Metrics Evolution"
+    if branch:
+        title += f" (branch: {branch})"
+
     fig.update_layout(
-        title_text="herkos Metrics Evolution",
+        title_text=title,
         height=300 * ((num_metrics + 1) // 2),
         showlegend=False,
     )
@@ -251,8 +280,16 @@ def main() -> int:
         default="metrics_report.html",
         help="Output file for HTML format (default: metrics_report.html)",
     )
+    parser.add_argument(
+        "--branch",
+        default=None,
+        help="Filter metrics by branch name (default: current git branch)",
+    )
 
     args = parser.parse_args()
+
+    # Use current branch as default if not specified
+    target_branch = args.branch or get_current_branch()
 
     print("Fetching metrics from 'metrics' branch...")
     bench_rows = fetch_csv_from_branch("bench_history.csv")
@@ -263,19 +300,20 @@ def main() -> int:
         return 1
 
     print(f"  Loaded {len(bench_rows)} benchmark entries, {len(size_rows)} size entries")
+    print(f"  Filtering for branch: {target_branch}")
 
-    groups = group_metrics(bench_rows, size_rows)
+    groups = group_metrics(bench_rows, size_rows, target_branch)
 
     if not groups:
-        print("No metrics found.", file=sys.stderr)
+        print(f"No metrics found for branch '{target_branch}'.", file=sys.stderr)
         return 1
 
     if args.format == "table":
-        display_table(groups)
+        display_table(groups, target_branch)
     elif args.format == "sparkline":
-        display_sparkline(groups)
+        display_sparkline(groups, target_branch)
     elif args.format == "html":
-        display_html(groups, args.output)
+        display_html(groups, args.output, target_branch)
 
     return 0
 
