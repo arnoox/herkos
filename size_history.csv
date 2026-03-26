@@ -15,3 +15,5 @@ timestamp,branch,commit_sha,metric_name,value,comments
 2026-03-23T11:54:40Z,main,25fef85f6606b2fed323f64e61a677407b692c8f,fft_wasm_lines,1232,
 2026-03-23T16:06:13Z,main,31708c433d5d0e94e29e48d72980a94560afd5b1,fft_wasm_bytes,35142,
 2026-03-23T16:06:13Z,main,31708c433d5d0e94e29e48d72980a94560afd5b1,fft_wasm_lines,1106,
+2026-03-26T08:25:01Z,pr-e/value-optimizations,0cee192b97a5ac7f14dac934c639cbf56b8c709d,fft_wasm_bytes,26295,
+2026-03-26T08:25:01Z,pr-e/value-optimizations,0cee192b97a5ac7f14dac934c639cbf56b8c709d,fft_wasm_lines,804,
