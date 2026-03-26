@@ -14,6 +14,9 @@ use anyhow::Result;
 pub(crate) mod utils;
 
 // ── Pre-lowering passes ──────────────────────────────────────────────────────
+mod algebraic;
+mod const_prop;
+mod copy_prop;
 mod dead_blocks;
 
 // ── Post-lowering passes ─────────────────────────────────────────────────────
@@ -24,13 +27,18 @@ mod merge_blocks;
 /// Optimizes the pure SSA IR before phi lowering.
 ///
 /// Passes here operate on [`ModuleInfo`] with phi nodes still intact.
-/// Control-flow based passes (e.g. dead block elimination) belong here
-/// because reachability is identical in SSA and lowered form.
+/// Runs value optimizations (const_prop, algebraic) and copy propagation
+/// to simplify the IR before SSA destruction.
 pub fn optimize_ir(module_info: ModuleInfo, do_opt: bool) -> Result<ModuleInfo> {
     let mut module_info = module_info;
     if do_opt {
         for func in &mut module_info.ir_functions {
-            dead_blocks::eliminate(func)?;
+            for _ in 0..2 {
+                dead_blocks::eliminate(func)?;
+                const_prop::eliminate(func)?;
+                algebraic::eliminate(func);
+                copy_prop::eliminate(func);
+            }
         }
     }
     Ok(module_info)
@@ -41,11 +49,13 @@ pub fn optimize_ir(module_info: ModuleInfo, do_opt: bool) -> Result<ModuleInfo> 
 /// Passes here operate on [`LoweredModuleInfo`] where all `IrInstr::Phi`
 /// nodes have been replaced by `IrInstr::Assign` in predecessor blocks.
 ///
-/// ## Structural passes
+/// ## Structural and copy passes
 ///
-/// Run multiple passes of structural cleanup: dead_instrs may leave empty blocks,
-/// which empty_blocks and merge_blocks then eliminate, potentially exposing new
-/// dead instructions. We repeat until reaching a fixed point (typically 2 iterations).
+/// Run multiple iterations of structural cleanup + copy propagation.
+/// dead_instrs may leave empty blocks, which empty_blocks and merge_blocks then
+/// eliminate, potentially exposing new dead instructions. copy_prop forwards the
+/// assignments that lower_phis inserted. We repeat until reaching a fixed point
+/// (typically 2 iterations).
 pub fn optimize_lowered_ir(
     module_info: LoweredModuleInfo,
     do_opt: bool,
@@ -53,12 +63,14 @@ pub fn optimize_lowered_ir(
     let mut module_info = module_info;
     if do_opt {
         for func in &mut module_info.ir_functions {
-            // Two passes: dead_instrs may create empty blocks.
+            // Two passes: dead_instrs may create empty blocks, and copy_prop
+            // may reveal new dead instrs.
             for _ in 0..2 {
                 empty_blocks::eliminate(func);
                 dead_blocks::eliminate(func)?;
                 merge_blocks::eliminate(func);
                 dead_blocks::eliminate(func)?;
+                copy_prop::eliminate(func);
                 dead_instrs::eliminate(func);
             }
         }
