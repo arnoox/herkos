@@ -33,10 +33,12 @@ pub fn optimize_ir(module_info: ModuleInfo, do_opt: bool) -> Result<ModuleInfo> 
     let mut module_info = module_info;
     if do_opt {
         for func in &mut module_info.ir_functions {
-            dead_blocks::eliminate(func)?;
-            const_prop::eliminate(func)?;
-            algebraic::eliminate(func);
-            copy_prop::eliminate(func);
+            for _ in 0..2 {
+                dead_blocks::eliminate(func)?;
+                const_prop::eliminate(func)?;
+                algebraic::eliminate(func);
+                copy_prop::eliminate(func);
+            }
         }
     }
     Ok(module_info)
