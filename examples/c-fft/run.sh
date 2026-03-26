@@ -55,7 +55,7 @@ echo "==> Transpiling WebAssembly to Rust..."
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -p herkos -- \
-    "$SCRIPT_DIR/$WASM_FILE" --output "$SCRIPT_DIR/$GENERATED_RS"
+    "$SCRIPT_DIR/$WASM_FILE" --output "$SCRIPT_DIR/$GENERATED_RS" -O
 
 echo "    Created $GENERATED_RS"
 

@@ -14,6 +14,9 @@ use anyhow::Result;
 pub(crate) mod utils;
 
 // ── Pre-lowering passes ──────────────────────────────────────────────────────
+mod algebraic;
+mod const_prop;
+mod copy_prop;
 mod dead_blocks;
 
 // ── Post-lowering passes ─────────────────────────────────────────────────────
@@ -28,11 +31,18 @@ mod local_cse;
 /// Optimizes the pure SSA IR before phi lowering.
 ///
 /// Passes here operate on [`ModuleInfo`] with phi nodes still intact.
+/// Runs value optimizations (const_prop, algebraic) and copy propagation
+/// to simplify the IR before SSA destruction.
 pub fn optimize_ir(module_info: ModuleInfo, do_opt: bool) -> Result<ModuleInfo> {
     let mut module_info = module_info;
     if do_opt {
         for func in &mut module_info.ir_functions {
-            dead_blocks::eliminate(func)?;
+            for _ in 0..2 {
+                dead_blocks::eliminate(func)?;
+                const_prop::eliminate(func)?;
+                algebraic::eliminate(func);
+                copy_prop::eliminate(func);
+            }
         }
     }
     Ok(module_info)
@@ -54,20 +64,20 @@ pub fn optimize_lowered_ir(
                 dead_blocks::eliminate(func)?;
                 merge_blocks::eliminate(func);
                 dead_blocks::eliminate(func)?;
+                copy_prop::eliminate(func);
                 local_cse::eliminate(func);
                 gvn::eliminate(func);
                 dead_instrs::eliminate(func);
                 branch_fold::eliminate(func);
                 dead_instrs::eliminate(func);
                 licm::eliminate(func);
-                dead_instrs::eliminate(func);
             }
         }
     }
     Ok(module_info)
 }
 
-// ── optimize_ir integration tests ─────────────────────────────────────────────
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

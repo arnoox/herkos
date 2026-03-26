@@ -194,6 +194,147 @@ pub fn i64_rem_u(lhs: i64, rhs: i64) -> WasmResult<i64> {
         .ok_or(WasmTrap::DivisionByZero)
 }
 
+// ── Wasm float min/max/nearest ────────────────────────────────────────────────
+
+/// Wasm `f32.min`: propagates NaN (unlike Rust's `f32::min` which ignores it).
+/// Also preserves the Wasm rule `min(-0.0, +0.0) = -0.0`.
+pub fn wasm_min_f32(a: f32, b: f32) -> f32 {
+    if a.is_nan() || b.is_nan() {
+        return f32::NAN;
+    }
+    if a == 0.0 && b == 0.0 {
+        return if a.is_sign_negative() { a } else { b };
+    }
+    if a <= b {
+        a
+    } else {
+        b
+    }
+}
+
+/// Wasm `f32.max`: propagates NaN. `max(-0.0, +0.0) = +0.0`.
+pub fn wasm_max_f32(a: f32, b: f32) -> f32 {
+    if a.is_nan() || b.is_nan() {
+        return f32::NAN;
+    }
+    if a == 0.0 && b == 0.0 {
+        return if a.is_sign_positive() { a } else { b };
+    }
+    if a >= b {
+        a
+    } else {
+        b
+    }
+}
+
+/// Wasm `f64.min`: propagates NaN. `min(-0.0, +0.0) = -0.0`.
+pub fn wasm_min_f64(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        return f64::NAN;
+    }
+    if a == 0.0 && b == 0.0 {
+        return if a.is_sign_negative() { a } else { b };
+    }
+    if a <= b {
+        a
+    } else {
+        b
+    }
+}
+
+/// Wasm `f64.max`: propagates NaN. `max(-0.0, +0.0) = +0.0`.
+pub fn wasm_max_f64(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        return f64::NAN;
+    }
+    if a == 0.0 && b == 0.0 {
+        return if a.is_sign_positive() { a } else { b };
+    }
+    if a >= b {
+        a
+    } else {
+        b
+    }
+}
+
+/// Wasm `f32.nearest` — round to nearest even (banker's rounding).
+///
+/// Uses `as i32` for truncation-toward-zero (safe since we guard against values >= 2^23,
+/// which have no fractional bits). Avoids `f32::round`/`f32::trunc`
+/// which are not available in `no_std` without `libm`.
+pub fn wasm_nearest_f32(v: f32) -> f32 {
+    if v.is_nan() || v.is_infinite() || v == 0.0 {
+        return v;
+    }
+    // Floats >= 2^23 have no fractional bits — already an integer.
+    const NO_FRAC: f32 = 8_388_608.0; // 2^23
+    if v >= NO_FRAC || v <= -NO_FRAC {
+        return v;
+    }
+    let trunc_i = v as i32; // truncates toward zero; safe since |v| < 2^23
+    let trunc_f = trunc_i as f32;
+    let frac = v - trunc_f; // in (-1.0, 1.0), same sign as v
+    if frac > 0.5 {
+        (trunc_i + 1) as f32
+    } else if frac < -0.5 {
+        (trunc_i - 1) as f32
+    } else if frac == 0.5 {
+        // Tie: round to even (trunc_i is the floor for positive v).
+        if trunc_i % 2 == 0 {
+            trunc_f
+        } else {
+            (trunc_i + 1) as f32
+        }
+    } else if frac == -0.5 {
+        // Tie: round to even. copysign preserves -0.0 when trunc_i == 0.
+        if trunc_i % 2 == 0 {
+            f32::copysign(trunc_f, v)
+        } else {
+            (trunc_i - 1) as f32
+        }
+    } else {
+        trunc_f
+    }
+}
+
+/// Wasm `f64.nearest` — round to nearest even (banker's rounding).
+///
+/// Uses `as i64` for truncation-toward-zero (safe since we guard against values >= 2^52,
+/// which have no fractional bits). Avoids `f64::round`/`f64::trunc`
+/// which are not available in `no_std` without `libm`.
+pub fn wasm_nearest_f64(v: f64) -> f64 {
+    if v.is_nan() || v.is_infinite() || v == 0.0 {
+        return v;
+    }
+    // Floats >= 2^52 have no fractional bits — already an integer.
+    const NO_FRAC: f64 = 4_503_599_627_370_496.0; // 2^52
+    if v >= NO_FRAC || v <= -NO_FRAC {
+        return v;
+    }
+    let trunc_i = v as i64; // truncates toward zero; safe since |v| < 2^52
+    let trunc_f = trunc_i as f64;
+    let frac = v - trunc_f;
+    if frac > 0.5 {
+        (trunc_i + 1) as f64
+    } else if frac < -0.5 {
+        (trunc_i - 1) as f64
+    } else if frac == 0.5 {
+        if trunc_i % 2 == 0 {
+            trunc_f
+        } else {
+            (trunc_i + 1) as f64
+        }
+    } else if frac == -0.5 {
+        if trunc_i % 2 == 0 {
+            f64::copysign(trunc_f, v)
+        } else {
+            (trunc_i - 1) as f64
+        }
+    } else {
+        trunc_f
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -574,5 +715,352 @@ mod tests {
     #[test]
     fn i64_rem_u_zero_divisor() {
         assert_eq!(i64_rem_u(5, 0), Err(WasmTrap::DivisionByZero));
+    }
+
+    // ── wasm_min_f32 ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn wasm_min_f32_normal() {
+        assert_eq!(wasm_min_f32(3.0, 5.0), 3.0);
+        assert_eq!(wasm_min_f32(5.0, 3.0), 3.0);
+    }
+
+    #[test]
+    fn wasm_min_f32_equal() {
+        assert_eq!(wasm_min_f32(2.5, 2.5), 2.5);
+    }
+
+    #[test]
+    fn wasm_min_f32_nan_left() {
+        assert!(wasm_min_f32(f32::NAN, 5.0).is_nan());
+    }
+
+    #[test]
+    fn wasm_min_f32_nan_right() {
+        assert!(wasm_min_f32(5.0, f32::NAN).is_nan());
+    }
+
+    #[test]
+    fn wasm_min_f32_both_nan() {
+        assert!(wasm_min_f32(f32::NAN, f32::NAN).is_nan());
+    }
+
+    #[test]
+    fn wasm_min_f32_neg_zero_pos_zero() {
+        // min(-0.0, +0.0) should return -0.0
+        let result = wasm_min_f32(-0.0, 0.0);
+        assert_eq!(result, 0.0);
+        assert!(result.is_sign_negative());
+    }
+
+    #[test]
+    fn wasm_min_f32_pos_zero_neg_zero() {
+        // min(+0.0, -0.0) should return -0.0
+        let result = wasm_min_f32(0.0, -0.0);
+        assert_eq!(result, 0.0);
+        assert!(result.is_sign_negative());
+    }
+
+    #[test]
+    fn wasm_min_f32_infinity() {
+        assert_eq!(wasm_min_f32(f32::INFINITY, 100.0), 100.0);
+        assert_eq!(wasm_min_f32(100.0, f32::INFINITY), 100.0);
+    }
+
+    #[test]
+    fn wasm_min_f32_neg_infinity() {
+        assert_eq!(wasm_min_f32(f32::NEG_INFINITY, 100.0), f32::NEG_INFINITY);
+        assert_eq!(wasm_min_f32(100.0, f32::NEG_INFINITY), f32::NEG_INFINITY);
+    }
+
+    // ── wasm_max_f32 ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn wasm_max_f32_normal() {
+        assert_eq!(wasm_max_f32(3.0, 5.0), 5.0);
+        assert_eq!(wasm_max_f32(5.0, 3.0), 5.0);
+    }
+
+    #[test]
+    fn wasm_max_f32_equal() {
+        assert_eq!(wasm_max_f32(2.5, 2.5), 2.5);
+    }
+
+    #[test]
+    fn wasm_max_f32_nan_left() {
+        assert!(wasm_max_f32(f32::NAN, 5.0).is_nan());
+    }
+
+    #[test]
+    fn wasm_max_f32_nan_right() {
+        assert!(wasm_max_f32(5.0, f32::NAN).is_nan());
+    }
+
+    #[test]
+    fn wasm_max_f32_neg_zero_pos_zero() {
+        // max(-0.0, +0.0) should return +0.0
+        let result = wasm_max_f32(-0.0, 0.0);
+        assert_eq!(result, 0.0);
+        assert!(result.is_sign_positive());
+    }
+
+    #[test]
+    fn wasm_max_f32_pos_zero_neg_zero() {
+        // max(+0.0, -0.0) should return +0.0
+        let result = wasm_max_f32(0.0, -0.0);
+        assert_eq!(result, 0.0);
+        assert!(result.is_sign_positive());
+    }
+
+    #[test]
+    fn wasm_max_f32_infinity() {
+        assert_eq!(wasm_max_f32(f32::INFINITY, 100.0), f32::INFINITY);
+        assert_eq!(wasm_max_f32(100.0, f32::INFINITY), f32::INFINITY);
+    }
+
+    #[test]
+    fn wasm_max_f32_neg_infinity() {
+        assert_eq!(wasm_max_f32(f32::NEG_INFINITY, 100.0), 100.0);
+        assert_eq!(wasm_max_f32(100.0, f32::NEG_INFINITY), 100.0);
+    }
+
+    // ── wasm_min_f64 ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn wasm_min_f64_normal() {
+        assert_eq!(wasm_min_f64(3.0, 5.0), 3.0);
+        assert_eq!(wasm_min_f64(5.0, 3.0), 3.0);
+    }
+
+    #[test]
+    fn wasm_min_f64_equal() {
+        assert_eq!(wasm_min_f64(2.5, 2.5), 2.5);
+    }
+
+    #[test]
+    fn wasm_min_f64_nan_left() {
+        assert!(wasm_min_f64(f64::NAN, 5.0).is_nan());
+    }
+
+    #[test]
+    fn wasm_min_f64_nan_right() {
+        assert!(wasm_min_f64(5.0, f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn wasm_min_f64_both_nan() {
+        assert!(wasm_min_f64(f64::NAN, f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn wasm_min_f64_neg_zero_pos_zero() {
+        // min(-0.0, +0.0) should return -0.0
+        let result = wasm_min_f64(-0.0, 0.0);
+        assert_eq!(result, 0.0);
+        assert!(result.is_sign_negative());
+    }
+
+    #[test]
+    fn wasm_min_f64_pos_zero_neg_zero() {
+        // min(+0.0, -0.0) should return -0.0
+        let result = wasm_min_f64(0.0, -0.0);
+        assert_eq!(result, 0.0);
+        assert!(result.is_sign_negative());
+    }
+
+    // ── wasm_max_f64 ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn wasm_max_f64_normal() {
+        assert_eq!(wasm_max_f64(3.0, 5.0), 5.0);
+        assert_eq!(wasm_max_f64(5.0, 3.0), 5.0);
+    }
+
+    #[test]
+    fn wasm_max_f64_equal() {
+        assert_eq!(wasm_max_f64(2.5, 2.5), 2.5);
+    }
+
+    #[test]
+    fn wasm_max_f64_nan_left() {
+        assert!(wasm_max_f64(f64::NAN, 5.0).is_nan());
+    }
+
+    #[test]
+    fn wasm_max_f64_nan_right() {
+        assert!(wasm_max_f64(5.0, f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn wasm_max_f64_neg_zero_pos_zero() {
+        // max(-0.0, +0.0) should return +0.0
+        let result = wasm_max_f64(-0.0, 0.0);
+        assert_eq!(result, 0.0);
+        assert!(result.is_sign_positive());
+    }
+
+    #[test]
+    fn wasm_max_f64_pos_zero_neg_zero() {
+        // max(+0.0, -0.0) should return +0.0
+        let result = wasm_max_f64(0.0, -0.0);
+        assert_eq!(result, 0.0);
+        assert!(result.is_sign_positive());
+    }
+
+    // ── wasm_nearest_f32 ─────────────────────────────────────────────────────
+
+    #[test]
+    fn wasm_nearest_f32_integer() {
+        assert_eq!(wasm_nearest_f32(5.0), 5.0);
+        assert_eq!(wasm_nearest_f32(-3.0), -3.0);
+    }
+
+    #[test]
+    fn wasm_nearest_f32_round_up() {
+        // 2.7 rounds to 3.0 (frac = 0.7 > 0.5)
+        assert_eq!(wasm_nearest_f32(2.7), 3.0);
+    }
+
+    #[test]
+    fn wasm_nearest_f32_round_down() {
+        // 2.2 rounds to 2.0 (frac = 0.2 < 0.5)
+        assert_eq!(wasm_nearest_f32(2.2), 2.0);
+    }
+
+    #[test]
+    fn wasm_nearest_f32_tie_round_to_even_down() {
+        // 2.5: trunc_i = 2 (even), so round toward zero to 2
+        assert_eq!(wasm_nearest_f32(2.5), 2.0);
+    }
+
+    #[test]
+    fn wasm_nearest_f32_tie_round_to_even_up() {
+        // 3.5: trunc_i = 3 (odd), so round away from zero to 4 (even)
+        assert_eq!(wasm_nearest_f32(3.5), 4.0);
+    }
+
+    #[test]
+    fn wasm_nearest_f32_negative_round_up() {
+        // -2.7: frac = -0.7 < -0.5, so round toward zero is -2, away is -3
+        // frac < -0.5 means round down (toward -inf) → -3
+        assert_eq!(wasm_nearest_f32(-2.7), -3.0);
+    }
+
+    #[test]
+    fn wasm_nearest_f32_negative_round_down() {
+        // -2.2: frac = -0.2 > -0.5, so stays at -2
+        assert_eq!(wasm_nearest_f32(-2.2), -2.0);
+    }
+
+    #[test]
+    fn wasm_nearest_f32_negative_tie_round_to_even() {
+        // -2.5: trunc_i = -2 (even), so round toward zero → -2.0
+        let result = wasm_nearest_f32(-2.5);
+        assert_eq!(result, -2.0);
+        // Verify sign is preserved
+        assert!(result.is_sign_negative() || result == 0.0);
+    }
+
+    #[test]
+    fn wasm_nearest_f32_nan() {
+        assert!(wasm_nearest_f32(f32::NAN).is_nan());
+    }
+
+    #[test]
+    fn wasm_nearest_f32_infinity() {
+        assert_eq!(wasm_nearest_f32(f32::INFINITY), f32::INFINITY);
+        assert_eq!(wasm_nearest_f32(f32::NEG_INFINITY), f32::NEG_INFINITY);
+    }
+
+    #[test]
+    fn wasm_nearest_f32_zero() {
+        assert_eq!(wasm_nearest_f32(0.0), 0.0);
+        assert_eq!(wasm_nearest_f32(-0.0), -0.0);
+    }
+
+    #[test]
+    fn wasm_nearest_f32_large_no_frac() {
+        // Values >= 2^23 have no fractional bits
+        let large = 8_388_608.0f32; // 2^23
+        assert_eq!(wasm_nearest_f32(large), large);
+        assert_eq!(wasm_nearest_f32(large + 1.0), large + 1.0);
+    }
+
+    // ── wasm_nearest_f64 ─────────────────────────────────────────────────────
+
+    #[test]
+    fn wasm_nearest_f64_integer() {
+        assert_eq!(wasm_nearest_f64(5.0), 5.0);
+        assert_eq!(wasm_nearest_f64(-3.0), -3.0);
+    }
+
+    #[test]
+    fn wasm_nearest_f64_round_up() {
+        // 2.7 rounds to 3.0
+        assert_eq!(wasm_nearest_f64(2.7), 3.0);
+    }
+
+    #[test]
+    fn wasm_nearest_f64_round_down() {
+        // 2.2 rounds to 2.0
+        assert_eq!(wasm_nearest_f64(2.2), 2.0);
+    }
+
+    #[test]
+    fn wasm_nearest_f64_tie_round_to_even_down() {
+        // 2.5: trunc_i = 2 (even), so round toward zero to 2
+        assert_eq!(wasm_nearest_f64(2.5), 2.0);
+    }
+
+    #[test]
+    fn wasm_nearest_f64_tie_round_to_even_up() {
+        // 3.5: trunc_i = 3 (odd), so round away from zero to 4 (even)
+        assert_eq!(wasm_nearest_f64(3.5), 4.0);
+    }
+
+    #[test]
+    fn wasm_nearest_f64_negative_round_up() {
+        // -2.7: frac = -0.7 < -0.5, rounds down (toward -inf) → -3
+        assert_eq!(wasm_nearest_f64(-2.7), -3.0);
+    }
+
+    #[test]
+    fn wasm_nearest_f64_negative_round_down() {
+        // -2.2: frac = -0.2 > -0.5, rounds to -2
+        assert_eq!(wasm_nearest_f64(-2.2), -2.0);
+    }
+
+    #[test]
+    fn wasm_nearest_f64_negative_tie_round_to_even() {
+        // -2.5: trunc_i = -2 (even), round toward zero → -2.0
+        let result = wasm_nearest_f64(-2.5);
+        assert_eq!(result, -2.0);
+        // Verify sign is preserved (or -0.0)
+        assert!(result.is_sign_negative() || result == 0.0);
+    }
+
+    #[test]
+    fn wasm_nearest_f64_nan() {
+        assert!(wasm_nearest_f64(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn wasm_nearest_f64_infinity() {
+        assert_eq!(wasm_nearest_f64(f64::INFINITY), f64::INFINITY);
+        assert_eq!(wasm_nearest_f64(f64::NEG_INFINITY), f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn wasm_nearest_f64_zero() {
+        assert_eq!(wasm_nearest_f64(0.0), 0.0);
+        assert_eq!(wasm_nearest_f64(-0.0), -0.0);
+    }
+
+    #[test]
+    fn wasm_nearest_f64_large_no_frac() {
+        // Values >= 2^52 have no fractional bits
+        let large = 4_503_599_627_370_496.0f64; // 2^52
+        assert_eq!(wasm_nearest_f64(large), large);
+        assert_eq!(wasm_nearest_f64(large + 1.0), large + 1.0);
     }
 }

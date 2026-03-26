@@ -7,7 +7,7 @@
 //! upcoming optimization passes (const_prop, dead_instrs, local_cse, licm).
 #![allow(dead_code)]
 
-use crate::ir::{BinOp, BlockId, IrFunction, IrInstr, IrTerminator, UnOp, VarId};
+use crate::ir::{BinOp, BlockId, IrFunction, IrInstr, IrTerminator, IrValue, UnOp, VarId};
 use std::collections::{HashMap, HashSet};
 
 // ── Terminator successors ────────────────────────────────────────────────────
@@ -106,10 +106,27 @@ pub fn for_each_use<F: FnMut(VarId)>(instr: &IrInstr, mut f: F) {
             f(*val2);
             f(*condition);
         }
-        IrInstr::MemoryFill { dst, val, len } => { f(*dst); f(*val); f(*len); }
-        IrInstr::MemoryInit { dst, src_offset, len, .. } => { f(*dst); f(*src_offset); f(*len); }
+        IrInstr::MemoryFill { dst, val, len } => {
+            f(*dst);
+            f(*val);
+            f(*len);
+        }
+        IrInstr::MemoryInit {
+            dst,
+            src_offset,
+            len,
+            ..
+        } => {
+            f(*dst);
+            f(*src_offset);
+            f(*len);
+        }
         IrInstr::DataDrop { .. } => {}
-        IrInstr::Phi { .. } => unreachable!("Phi nodes must be lowered before optimization"),
+        IrInstr::Phi { srcs, .. } => {
+            for (_, src) in srcs {
+                f(*src);
+            }
+        }
     }
 }
 
@@ -150,12 +167,13 @@ pub fn instr_dest(instr: &IrInstr) -> Option<VarId> {
         | IrInstr::CallImport { dest, .. }
         | IrInstr::CallIndirect { dest, .. } => *dest,
 
-        IrInstr::Store { .. } | IrInstr::GlobalSet { .. } | IrInstr::MemoryCopy { .. } => None,
-
-        IrInstr::MemoryFill { dst, val, len } => { f(*dst); f(*val); f(*len); }
-        IrInstr::MemoryInit { dst, src_offset, len, .. } => { f(*dst); f(*src_offset); f(*len); }
-        IrInstr::DataDrop { .. } => {}
-        IrInstr::Phi { .. } => unreachable!("Phi nodes must be lowered before optimization"),
+        IrInstr::Store { .. }
+        | IrInstr::GlobalSet { .. }
+        | IrInstr::MemoryCopy { .. }
+        | IrInstr::MemoryFill { .. }
+        | IrInstr::MemoryInit { .. }
+        | IrInstr::DataDrop { .. }
+        | IrInstr::Phi { .. } => None,
     }
 }
 
@@ -182,12 +200,24 @@ pub fn set_instr_dest(instr: &mut IrInstr, new_dest: VarId) {
             *dest = Some(new_dest);
         }
         // No dest — unreachable given precondition, but harmless to ignore.
-        IrInstr::Store { .. } | IrInstr::GlobalSet { .. } | IrInstr::MemoryCopy { .. } => {}
+        IrInstr::Store { .. }
+        | IrInstr::GlobalSet { .. }
+        | IrInstr::MemoryCopy { .. }
+        | IrInstr::MemoryFill { .. }
+        | IrInstr::MemoryInit { .. }
+        | IrInstr::DataDrop { .. }
+        | IrInstr::Phi { .. } => {}
+    }
+}
 
-        IrInstr::MemoryFill { dst, val, len } => { f(*dst); f(*val); f(*len); }
-        IrInstr::MemoryInit { dst, src_offset, len, .. } => { f(*dst); f(*src_offset); f(*len); }
-        IrInstr::DataDrop { .. } => {}
-        IrInstr::Phi { .. } => unreachable!("Phi nodes must be lowered before optimization"),
+// ── Instruction iteration ───────────────────────────────────────────────────
+
+/// Call `f` for each instruction across all blocks in the function.
+pub fn for_each_instr<F: FnMut(&IrInstr)>(func: &IrFunction, mut f: F) {
+    for block in &func.blocks {
+        for instr in &block.instructions {
+            f(instr);
+        }
     }
 }
 
@@ -280,10 +310,27 @@ pub fn replace_uses_of(instr: &mut IrInstr, old: VarId, new: VarId) {
             sub(val2);
             sub(condition);
         }
-        IrInstr::MemoryFill { dst, val, len } => { f(*dst); f(*val); f(*len); }
-        IrInstr::MemoryInit { dst, src_offset, len, .. } => { f(*dst); f(*src_offset); f(*len); }
+        IrInstr::MemoryFill { dst, val, len } => {
+            sub(dst);
+            sub(val);
+            sub(len);
+        }
+        IrInstr::MemoryInit {
+            dst,
+            src_offset,
+            len,
+            ..
+        } => {
+            sub(dst);
+            sub(src_offset);
+            sub(len);
+        }
         IrInstr::DataDrop { .. } => {}
-        IrInstr::Phi { .. } => unreachable!("Phi nodes must be lowered before optimization"),
+        IrInstr::Phi { srcs, .. } => {
+            for (_, src) in srcs.iter_mut() {
+                sub(src);
+            }
+        }
     }
 }
 
@@ -312,16 +359,33 @@ pub fn replace_uses_of_terminator(term: &mut IrTerminator, old: VarId, new: VarI
 
 // ── Global use-count ─────────────────────────────────────────────────────────
 
+/// Counts how many times each variable is *defined* across the entire function.
+/// Function parameters count as one definition each.
+pub fn build_global_def_count(func: &IrFunction) -> HashMap<VarId, usize> {
+    let mut counts: HashMap<VarId, usize> = HashMap::new();
+    // Params count as definitions.
+    for (param_var, _) in &func.params {
+        *counts.entry(*param_var).or_insert(0) += 1;
+    }
+    // Each instruction that produces a value is a definition.
+    for_each_instr(func, |instr| {
+        if let Some(dest) = instr_dest(instr) {
+            *counts.entry(dest).or_insert(0) += 1;
+        }
+    });
+    counts
+}
+
 /// Counts how many times each variable is *read* across the entire function
 /// (all blocks, all instructions, all terminators).
 pub fn build_global_use_count(func: &IrFunction) -> HashMap<VarId, usize> {
     let mut counts: HashMap<VarId, usize> = HashMap::new();
+    for_each_instr(func, |instr| {
+        for_each_use(instr, |v| {
+            *counts.entry(v).or_insert(0) += 1;
+        });
+    });
     for block in &func.blocks {
-        for instr in &block.instructions {
-            for_each_use(instr, |v| {
-                *counts.entry(v).or_insert(0) += 1;
-            });
-        }
         for_each_use_terminator(&block.terminator, |v| {
             *counts.entry(v).or_insert(0) += 1;
         });
@@ -337,15 +401,16 @@ pub fn prune_dead_locals(func: &mut IrFunction) {
     // Collect all variables still referenced anywhere in the function.
     let mut live: HashSet<VarId> = HashSet::new();
 
-    for block in &func.blocks {
-        for instr in &block.instructions {
-            for_each_use(instr, |v| {
-                live.insert(v);
-            });
-            if let Some(dest) = instr_dest(instr) {
-                live.insert(dest);
-            }
+    for_each_instr(func, |instr| {
+        for_each_use(instr, |v| {
+            live.insert(v);
+        });
+        if let Some(dest) = instr_dest(instr) {
+            live.insert(dest);
         }
+    });
+
+    for block in &func.blocks {
         for_each_use_terminator(&block.terminator, |v| {
             live.insert(v);
         });
@@ -396,10 +461,7 @@ pub fn is_side_effect_free(instr: &IrInstr) -> bool {
         | IrInstr::Select { .. }
         | IrInstr::GlobalGet { .. }
         | IrInstr::MemorySize { .. } => true,
-        IrInstr::MemoryFill { dst, val, len } => { f(*dst); f(*val); f(*len); }
-        IrInstr::MemoryInit { dst, src_offset, len, .. } => { f(*dst); f(*src_offset); f(*len); }
-        IrInstr::DataDrop { .. } => {}
-        IrInstr::Phi { .. } => unreachable!("Phi nodes must be lowered before optimization"),
+        IrInstr::Phi { .. } => false,
         _ => false,
     }
 }
@@ -431,6 +493,35 @@ pub fn rewrite_terminator_target(term: &mut IrTerminator, old: BlockId, new: Blo
         }
         IrTerminator::Return { .. } | IrTerminator::Unreachable => {}
     }
+}
+
+/// Variables with exactly one definition across the function that is a `Const`
+/// instruction. These can be treated as constants in any block that uses them.
+pub fn build_global_const_map(func: &IrFunction) -> HashMap<VarId, IrValue> {
+    // Count total definitions per variable (any instruction with a dest).
+    let mut total_defs: HashMap<VarId, usize> = HashMap::new();
+    let mut const_defs: HashMap<VarId, IrValue> = HashMap::new();
+
+    for_each_instr(func, |instr| {
+        if let Some(dest) = instr_dest(instr) {
+            *total_defs.entry(dest).or_insert(0) += 1;
+            if let IrInstr::Const { dest, value } = instr {
+                const_defs.insert(*dest, *value);
+            }
+        }
+    });
+
+    // In strict SSA form, each variable is defined at most once, so count should
+    // be 0 or 1. We check count == 1 defensively: only include variables whose
+    // sole definition is a Const instruction, ensuring we don't propagate a
+    // variable that is never defined or has multiple definitions (which would
+    // violate SSA invariants).
+
+    // Only include variables whose sole definition is a Const instruction.
+    const_defs
+        .into_iter()
+        .filter(|(v, _)| total_defs.get(v).copied().unwrap_or(0) == 1)
+        .collect()
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────

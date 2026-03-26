@@ -368,6 +368,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "heck",
+ "herkos-runtime",
  "wasmparser 0.227.1",
  "wat",
 ]
