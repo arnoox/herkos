@@ -52,15 +52,6 @@ use std::collections::HashMap;
 
 /// Eliminate single-use Assign copies and prune now-dead locals.
 pub fn eliminate(func: &mut IrFunction) {
-    // ── Global (cross-block) copy propagation ────────────────────────────────
-    //
-    // In SSA form every `Assign { dest, src }` is a global fact: `dest` is
-    // defined exactly once and always equals `src`.  We collect all Assigns,
-    // build a substitution map chasing chains to their root, and rewrite every
-    // use across the entire function.  The now-dead Assign instructions are
-    // left for dead_instrs to clean up (or the backward pass below).
-    global_copy_prop(func);
-
     // ── Backward pass: redirect I_def dest through single-use Assigns ────────
     //
     // We rebuild the global use-count map before each round because a successful
@@ -108,139 +99,6 @@ pub fn eliminate(func: &mut IrFunction) {
     prune_dead_locals(func);
 }
 
-// ── Global (cross-block) copy propagation ─────────────────────────────────────
-
-/// Replaces every use of an Assign's `dest` with its `src`, chasing chains.
-///
-/// In SSA form, `Assign { dest, src }` means `dest == src` globally.  We
-/// collect all such pairs, resolve transitive chains (e.g. `v25 → v24 → v19`
-/// stops at `v19` if `v19` is not itself an Assign dest), and rewrite all
-/// variable reads across every block.
-fn global_copy_prop(func: &mut IrFunction) {
-    // Disable global copy prop for multi-block functions due to a bug where
-    // variables captured via Assign and then redefined in loops cause incorrect
-    // substitution. See: https://github.com/arnoox/herkos/issues/[issue-number]
-    if func.blocks.len() > 1 {
-        return;
-    }
-
-    // Step 0: count definitions per variable. Only variables defined exactly
-    // once (true SSA) are safe for global substitution.
-    let def_count = super::utils::build_global_def_count(func);
-
-    // Step 1: collect Assign { dest, src } pairs where dest has exactly one def.
-    let mut copy_map: HashMap<VarId, VarId> = HashMap::new();
-    let mut assign_block_positions: HashMap<VarId, (usize, usize)> = HashMap::new();
-
-    for (block_idx, block) in func.blocks.iter().enumerate() {
-        for (instr_idx, instr) in block.instructions.iter().enumerate() {
-            if let IrInstr::Assign { dest, src } = instr {
-                // Both dest and src must have at most one definition.
-                // dest must have exactly 1 (this Assign). src must have 0
-                // (function parameter) or 1 (another instruction). If src has
-                // multiple definitions, replacing uses of dest with src could
-                // pick up a wrong definition.
-                let dest_ok = def_count.get(dest).copied() == Some(1);
-                let src_ok = def_count.get(src).copied().unwrap_or(0) <= 1;
-                if dest != src && dest_ok && src_ok {
-                    copy_map.insert(*dest, *src);
-                    assign_block_positions.insert(*dest, (block_idx, instr_idx));
-                }
-            }
-        }
-    }
-
-    if copy_map.is_empty() {
-        return;
-    }
-
-    // Step 2: chase chains to find the root for each key.
-    // E.g. if v25 → v24 and v24 → v19, then v25's root is v19.
-    let resolved: HashMap<VarId, VarId> = copy_map
-        .keys()
-        .map(|&var| {
-            let mut root = var;
-            // Follow the chain with a depth limit to avoid infinite loops
-            // (shouldn't happen in well-formed SSA, but defensive).
-            let mut steps = 0;
-            while let Some(&next) = copy_map.get(&root) {
-                root = next;
-                steps += 1;
-                if steps > copy_map.len() {
-                    break; // cycle guard
-                }
-            }
-            (var, root)
-        })
-        .filter(|(var, root)| var != root)
-        .collect();
-
-    if resolved.is_empty() {
-        return;
-    }
-
-    // Step 2.5: Safety check - filter out substitutions where the source chain
-    // contains any variable that is redefined after the Assign in the same block.
-    // This prevents incorrect substitution in loops where a variable is captured
-    // via Assign and then later updated in the same block iteration.
-    let mut safe_resolved = HashMap::new();
-
-    for (&dest, &root) in &resolved {
-        if let Some((assign_block_idx, assign_instr_idx)) = assign_block_positions.get(&dest) {
-            let block = &func.blocks[*assign_block_idx];
-
-            // Collect all variables in the source chain (all steps from dest to root)
-            let mut chain_vars = std::collections::HashSet::new();
-            let mut var = dest;
-            chain_vars.insert(var);
-
-            while let Some(&next) = copy_map.get(&var) {
-                var = next;
-                chain_vars.insert(var);
-            }
-
-            // Check if any variable in the chain is redefined after this Assign
-            let chain_redefined = block.instructions[assign_instr_idx + 1..]
-                .iter()
-                .any(|instr| {
-                    if let Some(dest_var) = instr_dest(instr) {
-                        chain_vars.contains(&dest_var)
-                    } else {
-                        false
-                    }
-                });
-
-            // Only perform this substitution if no variable in the chain is redefined
-            if !chain_redefined {
-                safe_resolved.insert(dest, root);
-            }
-        }
-    }
-
-    // Step 3: rewrite all uses across the entire function.
-    for block in &mut func.blocks {
-        for instr in &mut block.instructions {
-            for (&old, &new) in &safe_resolved {
-                replace_uses_of(instr, old, new);
-            }
-        }
-        for (&old, &new) in &safe_resolved {
-            replace_uses_of_terminator(&mut block.terminator, old, new);
-        }
-    }
-
-    // Remove Assign instructions whose dest was resolved (they're now dead:
-    // all uses of their dest have been rewritten to the root).
-    for block in &mut func.blocks {
-        block.instructions.retain(|instr| {
-            if let IrInstr::Assign { dest, .. } = instr {
-                !safe_resolved.contains_key(dest)
-            } else {
-                true
-            }
-        });
-    }
-}
 
 // ── Core coalescing logic ─────────────────────────────────────────────────────
 
@@ -476,6 +334,7 @@ mod tests {
     // ── Basic: Const → Assign ─────────────────────────────────────────────
 
     #[test]
+    #[ignore]  // global copy prop removed
     fn const_assign_coalesced() {
         // v7 = Const(2); v1 = Assign(v7)
         // Global copy prop: v1→v7, removes Assign. Result: v7 = Const(2).
@@ -507,6 +366,7 @@ mod tests {
     // ── Basic: BinOp → Assign ─────────────────────────────────────────────
 
     #[test]
+    #[ignore]  // global copy prop removed
     fn binop_assign_coalesced() {
         // v16 = v4 + v3; v5 = Assign(v16)
         // Global copy prop: v5→v16, removes Assign. Result: v16 = v4 + v3.
@@ -537,6 +397,7 @@ mod tests {
     // ── Multi-use src: must NOT coalesce ─────────────────────────────────
 
     #[test]
+    #[ignore]  // global copy prop removed
     fn multi_use_src_global_prop_removes_both() {
         // v7 = Const(2); v1 = Assign(v7); v2 = Assign(v7)
         // Global copy prop: v1→v7, v2→v7, removes both Assigns.
@@ -658,6 +519,7 @@ mod tests {
     // ── Chain coalescing ──────────────────────────────────────────────────
 
     #[test]
+    #[ignore]  // global copy prop removed
     fn chain_coalesced() {
         // v7 = Const(2); v10 = Assign(v7); v1 = Assign(v10)
         // Global copy prop: v10→v7, v1→v10→v7. Both Assigns removed.
@@ -693,6 +555,7 @@ mod tests {
     // ── Dead local pruning ────────────────────────────────────────────────
 
     #[test]
+    #[ignore]  // global copy prop removed
     fn dead_local_pruned_after_coalesce() {
         // v7 = Const(2); v1 = Assign(v7)
         // Global copy prop: v1→v7, Assign removed. v7 survives, v1 is dead.
@@ -752,6 +615,7 @@ mod tests {
     // ── Realistic fibo B0 pattern ─────────────────────────────────────────
 
     #[test]
+    #[ignore]  // global copy prop removed
     fn fibo_b0_pattern() {
         // v7 = Const(2); v1 = Assign(v7); v8 = Const(2); v9 = BinOp(v0, v8)
         // Global copy prop: v1→v7, Assign removed. 3 instrs remain.
@@ -1194,9 +1058,7 @@ mod tests {
     }
 
     // ── Cross-block copy propagation ────────────────────────────────────
-    // NOTE: Cross-block global copy prop is disabled due to a bug where
-    // variables captured via Assign and then redefined in loops cause incorrect
-    // substitution. See global_copy_prop() for details.
+    // NOTE: Global copy propagation has been removed. See future ticket for re-introduction.
 
     #[test]
     #[ignore]
