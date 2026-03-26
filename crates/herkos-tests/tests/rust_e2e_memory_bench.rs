@@ -120,7 +120,10 @@ fn test_deterministic_across_calls() {
     let mut m = new_module();
     let first = m.mem_fill_sort_sum(64, 9999).unwrap();
     let second = m.mem_fill_sort_sum(64, 9999).unwrap();
-    assert_eq!(first, second, "same (n, seed) must always yield the same checksum");
+    assert_eq!(
+        first, second,
+        "same (n, seed) must always yield the same checksum"
+    );
 }
 
 // ── Sequential calls with distinct inputs remain independent ──────────────────
