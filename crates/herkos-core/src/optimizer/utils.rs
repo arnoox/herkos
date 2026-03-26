@@ -210,6 +210,17 @@ pub fn set_instr_dest(instr: &mut IrInstr, new_dest: VarId) {
     }
 }
 
+// ── Instruction iteration ───────────────────────────────────────────────────
+
+/// Call `f` for each instruction across all blocks in the function.
+pub fn for_each_instr<F: FnMut(&IrInstr)>(func: &IrFunction, mut f: F) {
+    for block in &func.blocks {
+        for instr in &block.instructions {
+            f(instr);
+        }
+    }
+}
+
 // ── Use-count helpers ────────────────────────────────────────────────────────
 
 /// Count how many times `var` appears as an operand (read) in `instr`.
@@ -352,12 +363,12 @@ pub fn replace_uses_of_terminator(term: &mut IrTerminator, old: VarId, new: VarI
 /// (all blocks, all instructions, all terminators).
 pub fn build_global_use_count(func: &IrFunction) -> HashMap<VarId, usize> {
     let mut counts: HashMap<VarId, usize> = HashMap::new();
+    for_each_instr(func, |instr| {
+        for_each_use(instr, |v| {
+            *counts.entry(v).or_insert(0) += 1;
+        });
+    });
     for block in &func.blocks {
-        for instr in &block.instructions {
-            for_each_use(instr, |v| {
-                *counts.entry(v).or_insert(0) += 1;
-            });
-        }
         for_each_use_terminator(&block.terminator, |v| {
             *counts.entry(v).or_insert(0) += 1;
         });
@@ -373,15 +384,16 @@ pub fn prune_dead_locals(func: &mut IrFunction) {
     // Collect all variables still referenced anywhere in the function.
     let mut live: HashSet<VarId> = HashSet::new();
 
-    for block in &func.blocks {
-        for instr in &block.instructions {
-            for_each_use(instr, |v| {
-                live.insert(v);
-            });
-            if let Some(dest) = instr_dest(instr) {
-                live.insert(dest);
-            }
+    for_each_instr(func, |instr| {
+        for_each_use(instr, |v| {
+            live.insert(v);
+        });
+        if let Some(dest) = instr_dest(instr) {
+            live.insert(dest);
         }
+    });
+
+    for block in &func.blocks {
         for_each_use_terminator(&block.terminator, |v| {
             live.insert(v);
         });
@@ -473,16 +485,14 @@ pub fn build_global_const_map(func: &IrFunction) -> HashMap<VarId, IrValue> {
     let mut total_defs: HashMap<VarId, usize> = HashMap::new();
     let mut const_defs: HashMap<VarId, IrValue> = HashMap::new();
 
-    for block in &func.blocks {
-        for instr in &block.instructions {
-            if let Some(dest) = super::utils::instr_dest(instr) {
-                *total_defs.entry(dest).or_insert(0) += 1;
-                if let IrInstr::Const { dest, value } = instr {
-                    const_defs.insert(*dest, *value);
-                }
+    for_each_instr(func, |instr| {
+        if let Some(dest) = instr_dest(instr) {
+            *total_defs.entry(dest).or_insert(0) += 1;
+            if let IrInstr::Const { dest, value } = instr {
+                const_defs.insert(*dest, *value);
             }
         }
-    }
+    });
 
     // In strict SSA form, each variable is defined at most once, so count should
     // be 0 or 1. We check count == 1 defensively: only include variables whose
