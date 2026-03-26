@@ -110,10 +110,40 @@ fn test_n_capped_at_1024() {
 
 // ── Sorting invariant ─────────────────────────────────────────────────────────
 //
-// We cannot read the sorted buffer directly through the transpiled API, but we
-// can verify that the checksum is independent of argument order (i.e. the sort
-// produces a deterministic total regardless of how the LCG happens to seed).
-// The key property is: two calls with the same (n, seed) must always agree.
+// After each call we read back every element via mem_read_element and confirm
+// the buffer is non-decreasing.  Note: a wrapping sum is commutative, so sum
+// equality alone is not sufficient to verify that sorting occurred.
+
+fn assert_sorted(m: &mut rust_e2e_memory_bench::WasmModule, n: i32, label: &str) {
+    for i in 0..(n - 1) {
+        let a = m.mem_read_element(i).unwrap();
+        let b = m.mem_read_element(i + 1).unwrap();
+        assert!(
+            a <= b,
+            "{label}: buf[{i}]={a} > buf[{}]={b} — buffer is not sorted",
+            i + 1
+        );
+    }
+}
+
+#[test]
+fn test_buffer_is_sorted_after_call() {
+    let mut m = new_module();
+    let cases: &[(i32, i32)] = &[
+        (1, 0),
+        (2, 0),
+        (10, 42),
+        (32, -99),
+        (64, 9999),
+        (128, i32::MAX),
+        (256, i32::MIN),
+        (1024, 7),
+    ];
+    for &(n, seed) in cases {
+        m.mem_fill_sort_sum(n, seed).unwrap();
+        assert_sorted(&mut m, n, &format!("n={n} seed={seed}"));
+    }
+}
 
 #[test]
 fn test_deterministic_across_calls() {
