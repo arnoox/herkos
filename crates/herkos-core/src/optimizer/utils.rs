@@ -7,7 +7,7 @@
 //! upcoming optimization passes (const_prop, dead_instrs, local_cse, licm).
 #![allow(dead_code)]
 
-use crate::ir::{BinOp, BlockId, IrFunction, IrInstr, IrTerminator, UnOp, VarId};
+use crate::ir::{BinOp, BlockId, IrFunction, IrInstr, IrTerminator, IrValue, UnOp, VarId};
 use std::collections::{HashMap, HashSet};
 
 // ── Terminator successors ────────────────────────────────────────────────────
@@ -464,6 +464,37 @@ pub fn rewrite_terminator_target(term: &mut IrTerminator, old: BlockId, new: Blo
         }
         IrTerminator::Return { .. } | IrTerminator::Unreachable => {}
     }
+}
+
+/// Variables with exactly one definition across the function that is a `Const`
+/// instruction. These can be treated as constants in any block that uses them.
+pub fn build_global_const_map(func: &IrFunction) -> HashMap<VarId, IrValue> {
+    // Count total definitions per variable (any instruction with a dest).
+    let mut total_defs: HashMap<VarId, usize> = HashMap::new();
+    let mut const_defs: HashMap<VarId, IrValue> = HashMap::new();
+
+    for block in &func.blocks {
+        for instr in &block.instructions {
+            if let Some(dest) = super::utils::instr_dest(instr) {
+                *total_defs.entry(dest).or_insert(0) += 1;
+                if let IrInstr::Const { dest, value } = instr {
+                    const_defs.insert(*dest, *value);
+                }
+            }
+        }
+    }
+
+    // In strict SSA form, each variable is defined at most once, so count should
+    // be 0 or 1. We check count == 1 defensively: only include variables whose
+    // sole definition is a Const instruction, ensuring we don't propagate a
+    // variable that is never defined or has multiple definitions (which would
+    // violate SSA invariants).
+
+    // Only include variables whose sole definition is a Const instruction.
+    const_defs
+        .into_iter()
+        .filter(|(v, _)| total_defs.get(v).copied().unwrap_or(0) == 1)
+        .collect()
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────

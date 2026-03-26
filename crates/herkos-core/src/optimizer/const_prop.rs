@@ -39,7 +39,11 @@
 //! - `TruncF*` with NaN or out-of-range float
 
 use super::utils::instr_dest;
-use crate::ir::{BinOp, IrFunction, IrInstr, IrValue, UnOp, VarId};
+use crate::{
+    ir::{BinOp, IrFunction, IrInstr, IrValue, UnOp, VarId},
+    optimizer::utils::build_global_const_map,
+};
+use anyhow::Result;
 use herkos_runtime::{
     i32_trunc_f32_s, i32_trunc_f32_u, i32_trunc_f64_s, i32_trunc_f64_u, i64_trunc_f32_s,
     i64_trunc_f32_u, i64_trunc_f64_s, i64_trunc_f64_u, wasm_max_f32, wasm_max_f64, wasm_min_f32,
@@ -49,33 +53,8 @@ use std::collections::HashMap;
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
-/// Variables with exactly one definition across the function that is a `Const`
-/// instruction. These can be treated as constants in any block that uses them.
-fn build_global_const_map(func: &IrFunction) -> HashMap<VarId, IrValue> {
-    // Count total definitions per variable (any instruction with a dest).
-    let mut total_defs: HashMap<VarId, usize> = HashMap::new();
-    let mut const_defs: HashMap<VarId, IrValue> = HashMap::new();
-
-    for block in &func.blocks {
-        for instr in &block.instructions {
-            if let Some(dest) = super::utils::instr_dest(instr) {
-                *total_defs.entry(dest).or_insert(0) += 1;
-                if let IrInstr::Const { dest, value } = instr {
-                    const_defs.insert(*dest, *value);
-                }
-            }
-        }
-    }
-
-    // Only include variables whose sole definition is a Const instruction.
-    const_defs
-        .into_iter()
-        .filter(|(v, _)| total_defs.get(v).copied().unwrap_or(0) == 1)
-        .collect()
-}
-
 /// Run constant propagation and folding to fixpoint.
-pub fn eliminate(func: &mut IrFunction) {
+pub fn eliminate(func: &mut IrFunction) -> Result<()> {
     loop {
         // Seed each block's known-constants map with variables that are defined
         // exactly once as a Const across the whole function. This enables
@@ -151,7 +130,12 @@ pub fn eliminate(func: &mut IrFunction) {
                 // is defined exactly once, so this is always a no-op).
                 if !folded {
                     if let Some(dest) = instr_dest(instr) {
-                        known.remove(&dest);
+                        if known.contains_key(&dest) {
+                            return Err(anyhow::anyhow!(
+                                "SSA violation: variable {:?} defined twice",
+                                dest
+                            ));
+                        }
                     }
                 }
             }
@@ -160,6 +144,7 @@ pub fn eliminate(func: &mut IrFunction) {
             break;
         }
     }
+    Ok(())
 }
 
 // ── Binary operation folding ──────────────────────────────────────────────────
@@ -517,7 +502,7 @@ mod tests {
             ],
             ret_none(),
         ));
-        eliminate(&mut func);
+        eliminate(&mut func).unwrap();
         match &func.blocks[0].instructions[1] {
             IrInstr::Const {
                 dest,
@@ -551,7 +536,7 @@ mod tests {
             ],
             ret_none(),
         ));
-        eliminate(&mut func);
+        eliminate(&mut func).unwrap();
         match &func.blocks[0].instructions[2] {
             IrInstr::Const {
                 dest,
@@ -583,7 +568,7 @@ mod tests {
             ],
             ret_none(),
         ));
-        eliminate(&mut func);
+        eliminate(&mut func).unwrap();
         match &func.blocks[0].instructions[2] {
             IrInstr::Const {
                 value: IrValue::I32(1),
@@ -616,7 +601,7 @@ mod tests {
             ],
             ret_none(),
         ));
-        eliminate(&mut func);
+        eliminate(&mut func).unwrap();
         assert!(
             matches!(&func.blocks[0].instructions[2], IrInstr::BinOp { .. }),
             "div-by-zero must not be folded"
@@ -645,7 +630,7 @@ mod tests {
             ],
             ret_none(),
         ));
-        eliminate(&mut func);
+        eliminate(&mut func).unwrap();
         assert!(matches!(
             &func.blocks[0].instructions[2],
             IrInstr::BinOp { .. }
@@ -674,7 +659,7 @@ mod tests {
             ],
             ret_none(),
         ));
-        eliminate(&mut func);
+        eliminate(&mut func).unwrap();
         match &func.blocks[0].instructions[2] {
             IrInstr::Const {
                 value: IrValue::I32(0),
@@ -703,7 +688,7 @@ mod tests {
             ],
             ret_none(),
         ));
-        eliminate(&mut func);
+        eliminate(&mut func).unwrap();
         match &func.blocks[0].instructions[1] {
             IrInstr::Const {
                 value: IrValue::I32(1),
@@ -730,7 +715,7 @@ mod tests {
             ],
             ret_none(),
         ));
-        eliminate(&mut func);
+        eliminate(&mut func).unwrap();
         match &func.blocks[0].instructions[1] {
             IrInstr::Const {
                 value: IrValue::I32(31),
@@ -758,7 +743,7 @@ mod tests {
             ],
             ret_none(),
         ));
-        eliminate(&mut func);
+        eliminate(&mut func).unwrap();
         assert!(
             matches!(&func.blocks[0].instructions[1], IrInstr::UnOp { .. }),
             "trunc(NaN) must not be folded"
@@ -781,7 +766,7 @@ mod tests {
             ],
             ret_none(),
         ));
-        eliminate(&mut func);
+        eliminate(&mut func).unwrap();
         match &func.blocks[0].instructions[1] {
             IrInstr::Const {
                 value: IrValue::I32(3),
@@ -819,7 +804,7 @@ mod tests {
             ],
             ret_none(),
         ));
-        eliminate(&mut func);
+        eliminate(&mut func).unwrap();
         match &func.blocks[0].instructions[3] {
             IrInstr::Const {
                 value: IrValue::I32(8),
@@ -856,7 +841,7 @@ mod tests {
             return_type: None,
             type_idx: TypeIdx::new(0),
         };
-        eliminate(&mut func);
+        eliminate(&mut func).unwrap();
         assert!(
             matches!(&func.blocks[0].instructions[1], IrInstr::BinOp { .. }),
             "BinOp with non-const operand must not be folded"
@@ -881,7 +866,7 @@ mod tests {
             ],
             ret_none(),
         ));
-        eliminate(&mut func);
+        eliminate(&mut func).unwrap();
         match &func.blocks[0].instructions[1] {
             IrInstr::Const {
                 value: IrValue::I32(5),
@@ -913,7 +898,7 @@ mod tests {
             ],
             ret_none(),
         ));
-        eliminate(&mut func);
+        eliminate(&mut func).unwrap();
         match &func.blocks[0].instructions[2] {
             IrInstr::Const {
                 value: IrValue::I32(v),
@@ -947,7 +932,7 @@ mod tests {
             ],
             ret_none(),
         ));
-        eliminate(&mut func);
+        eliminate(&mut func).unwrap();
         match &func.blocks[0].instructions[2] {
             IrInstr::Const {
                 value: IrValue::I32(2),
@@ -980,7 +965,7 @@ mod tests {
             ],
             ret_none(),
         ));
-        eliminate(&mut func);
+        eliminate(&mut func).unwrap();
         match &func.blocks[0].instructions[2] {
             IrInstr::Const {
                 value: IrValue::I32(v),
@@ -1013,7 +998,7 @@ mod tests {
             ],
             ret_none(),
         ));
-        eliminate(&mut func);
+        eliminate(&mut func).unwrap();
         match &func.blocks[0].instructions[2] {
             IrInstr::Const {
                 value: IrValue::F64(v),
@@ -1051,7 +1036,7 @@ mod tests {
                 terminator: IrTerminator::Return { value: None },
             },
         ]);
-        eliminate(&mut func);
+        eliminate(&mut func).unwrap();
         // The Assign in B1 should be folded: v0 is a single-definition global constant.
         assert!(
             matches!(
@@ -1100,7 +1085,7 @@ mod tests {
                 terminator: IrTerminator::Return { value: None },
             },
         ]);
-        eliminate(&mut func);
+        eliminate(&mut func).unwrap();
         // v0 has 2 definitions → NOT a global constant → Assign in B2 must remain.
         assert!(
             matches!(&func.blocks[2].instructions[0], IrInstr::Assign { .. }),

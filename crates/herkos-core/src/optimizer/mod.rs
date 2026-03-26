@@ -34,9 +34,9 @@ pub fn optimize_ir(module_info: ModuleInfo, do_opt: bool) -> Result<ModuleInfo> 
     if do_opt {
         for func in &mut module_info.ir_functions {
             dead_blocks::eliminate(func)?;
-            const_prop::eliminate(func);
+            const_prop::eliminate(func)?;
             algebraic::eliminate(func);
-            // copy_prop::eliminate(func); // TODO: fix Phi handling in pre-lowering
+            copy_prop::eliminate(func);
         }
     }
     Ok(module_info)

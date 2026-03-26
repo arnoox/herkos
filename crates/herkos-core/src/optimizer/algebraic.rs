@@ -22,20 +22,40 @@
 //! | `x == x`           | `1`          |
 //! | `x != x`           | `0`          |
 
-use super::utils::instr_dest;
-use crate::ir::{BinOp, IrFunction, IrInstr, IrValue, VarId};
-use std::collections::HashMap;
+use crate::{
+    ir::{BinOp, IrFunction, IrInstr, IrValue, VarId},
+    optimizer::utils::build_global_const_map,
+};
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
+/// Eliminates algebraic identities and annihilators until reaching a fixed point.
+///
+/// Runs multiple passes because simplifications from one pass can expose new
+/// optimization opportunities. For example, `(x * 1) + 0` requires two passes:
+/// first `x * 1 → x`, then `x + 0 → x`.
 pub fn eliminate(func: &mut IrFunction) {
+    // Run passes until reaching a fixed point (no more changes)
+    loop {
+        if !eliminate_once(func) {
+            break;
+        }
+    }
+}
+
+fn eliminate_once(func: &mut IrFunction) -> bool {
     let global_consts = build_global_const_map(func);
+    let mut changed = false;
 
     for block in &mut func.blocks {
         let mut local_consts = global_consts.clone();
 
         for instr in &mut block.instructions {
-            // Track constants defined in this block.
+            // Track constants defined in this block. We walk forward and update
+            // local_consts as we encounter Const instructions, so that later BinOp
+            // instructions in the same block can see newly-defined constants.
+            // (global_consts only captures constants with a single def across the
+            // entire function, not block-local defs discovered during forward walk.)
             if let IrInstr::Const { dest, value } = instr {
                 local_consts.insert(*dest, *value);
                 continue;
@@ -50,6 +70,7 @@ pub fn eliminate(func: &mut IrFunction) {
             if lhs == rhs {
                 if let Some(replacement) = same_operand_rule(op, dest, lhs) {
                     *instr = replacement;
+                    changed = true;
                     if let IrInstr::Const { dest, value } = instr {
                         local_consts.insert(*dest, *value);
                     }
@@ -62,35 +83,15 @@ pub fn eliminate(func: &mut IrFunction) {
 
             if let Some(replacement) = constant_operand_rule(op, dest, lhs, rhs, lhs_val, rhs_val) {
                 *instr = replacement;
+                changed = true;
                 if let IrInstr::Const { dest, value } = instr {
                     local_consts.insert(*dest, *value);
                 }
             }
         }
     }
-}
 
-// ── Global constant map ───────────────────────────────────────────────────────
-
-fn build_global_const_map(func: &IrFunction) -> HashMap<VarId, IrValue> {
-    let mut total_defs: HashMap<VarId, usize> = HashMap::new();
-    let mut const_defs: HashMap<VarId, IrValue> = HashMap::new();
-
-    for block in &func.blocks {
-        for instr in &block.instructions {
-            if let Some(dest) = instr_dest(instr) {
-                *total_defs.entry(dest).or_insert(0) += 1;
-                if let IrInstr::Const { dest, value } = instr {
-                    const_defs.insert(*dest, *value);
-                }
-            }
-        }
-    }
-
-    const_defs
-        .into_iter()
-        .filter(|(v, _)| total_defs.get(v).copied().unwrap_or(0) == 1)
-        .collect()
+    changed
 }
 
 // ── Same-operand rules ────────────────────────────────────────────────────────
@@ -108,32 +109,34 @@ fn same_operand_rule(op: BinOp, dest: VarId, operand: VarId) -> Option<IrInstr> 
         }),
 
         // x == x → 1 (integers only; floats have NaN)
-        BinOp::I32Eq | BinOp::I32LeS | BinOp::I32LeU | BinOp::I32GeS | BinOp::I32GeU => {
-            Some(IrInstr::Const {
-                dest,
-                value: IrValue::I32(1),
-            })
-        }
-        BinOp::I64Eq | BinOp::I64LeS | BinOp::I64LeU | BinOp::I64GeS | BinOp::I64GeU => {
-            Some(IrInstr::Const {
-                dest,
-                value: IrValue::I32(1),
-            })
-        }
+        BinOp::I32Eq
+        | BinOp::I32LeS
+        | BinOp::I32LeU
+        | BinOp::I32GeS
+        | BinOp::I32GeU
+        | BinOp::I64Eq
+        | BinOp::I64LeS
+        | BinOp::I64LeU
+        | BinOp::I64GeS
+        | BinOp::I64GeU => Some(IrInstr::Const {
+            dest,
+            value: IrValue::I32(1),
+        }),
 
         // x != x → 0 (integers only)
-        BinOp::I32Ne | BinOp::I32LtS | BinOp::I32LtU | BinOp::I32GtS | BinOp::I32GtU => {
-            Some(IrInstr::Const {
-                dest,
-                value: IrValue::I32(0),
-            })
-        }
-        BinOp::I64Ne | BinOp::I64LtS | BinOp::I64LtU | BinOp::I64GtS | BinOp::I64GtU => {
-            Some(IrInstr::Const {
-                dest,
-                value: IrValue::I32(0),
-            })
-        }
+        BinOp::I32Ne
+        | BinOp::I32LtS
+        | BinOp::I32LtU
+        | BinOp::I32GtS
+        | BinOp::I32GtU
+        | BinOp::I64Ne
+        | BinOp::I64LtS
+        | BinOp::I64LtU
+        | BinOp::I64GtS
+        | BinOp::I64GtU => Some(IrInstr::Const {
+            dest,
+            value: IrValue::I32(0),
+        }),
 
         // x - x → 0 (integers only; floats have Inf - Inf = NaN)
         BinOp::I32Sub => Some(IrInstr::Const {
@@ -775,6 +778,55 @@ mod tests {
             IrInstr::Assign {
                 dest: VarId(1),
                 src: VarId(0)
+            }
+        ));
+    }
+
+    // ── Cascading optimizations (multiple passes needed) ───────────────────
+
+    #[test]
+    fn cascading_mul_one_and_add_zero() {
+        // v1 = 1; v2 = v0 * v1; v3 = 0; v4 = v2 + v3
+        // Pass 1: v2 = v0 * 1 → v2 = Assign(v0)
+        //         v4 = v2 + 0 → NOT YET (v2 is not recognized as const)
+        // Pass 2: v4 = v2 + 0 → v4 = Assign(v2) → v4 = Assign(v0)
+        let mut func = make_func(single_block(vec![
+            IrInstr::Const {
+                dest: VarId(1),
+                value: IrValue::I32(1),
+            },
+            IrInstr::BinOp {
+                dest: VarId(2),
+                op: BinOp::I32Mul,
+                lhs: VarId(0),
+                rhs: VarId(1),
+            },
+            IrInstr::Const {
+                dest: VarId(3),
+                value: IrValue::I32(0),
+            },
+            IrInstr::BinOp {
+                dest: VarId(4),
+                op: BinOp::I32Add,
+                lhs: VarId(2),
+                rhs: VarId(3),
+            },
+        ]));
+        eliminate(&mut func);
+        // After multiple passes, both simplifications should be applied.
+        // v2 should be Assign(v0) and v4 should be Assign(v0) (through v2).
+        assert!(matches!(
+            func.blocks[0].instructions[1],
+            IrInstr::Assign {
+                dest: VarId(2),
+                src: VarId(0)
+            }
+        ));
+        assert!(matches!(
+            func.blocks[0].instructions[3],
+            IrInstr::Assign {
+                dest: VarId(4),
+                src: VarId(2)
             }
         ));
     }
