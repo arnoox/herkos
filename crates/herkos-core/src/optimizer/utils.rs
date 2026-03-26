@@ -359,6 +359,23 @@ pub fn replace_uses_of_terminator(term: &mut IrTerminator, old: VarId, new: VarI
 
 // ── Global use-count ─────────────────────────────────────────────────────────
 
+/// Counts how many times each variable is *defined* across the entire function.
+/// Function parameters count as one definition each.
+pub fn build_global_def_count(func: &IrFunction) -> HashMap<VarId, usize> {
+    let mut counts: HashMap<VarId, usize> = HashMap::new();
+    // Params count as definitions.
+    for (param_var, _) in &func.params {
+        *counts.entry(*param_var).or_insert(0) += 1;
+    }
+    // Each instruction that produces a value is a definition.
+    for_each_instr(func, |instr| {
+        if let Some(dest) = instr_dest(instr) {
+            *counts.entry(dest).or_insert(0) += 1;
+        }
+    });
+    counts
+}
+
 /// Counts how many times each variable is *read* across the entire function
 /// (all blocks, all instructions, all terminators).
 pub fn build_global_use_count(func: &IrFunction) -> HashMap<VarId, usize> {

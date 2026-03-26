@@ -118,19 +118,8 @@ pub fn eliminate(func: &mut IrFunction) {
 /// variable reads across every block.
 fn global_copy_prop(func: &mut IrFunction) {
     // Step 0: count definitions per variable. Only variables defined exactly
-    // once (true SSA) are safe for global substitution.  Function parameters
-    // count as one definition each.
-    let mut def_count: HashMap<VarId, usize> = HashMap::new();
-    for (param_var, _) in &func.params {
-        *def_count.entry(*param_var).or_insert(0) += 1;
-    }
-    for block in &func.blocks {
-        for instr in &block.instructions {
-            if let Some(dest) = instr_dest(instr) {
-                *def_count.entry(dest).or_insert(0) += 1;
-            }
-        }
-    }
+    // once (true SSA) are safe for global substitution.
+    let def_count = super::utils::build_global_def_count(func);
 
     // Step 1: collect Assign { dest, src } pairs where dest has exactly one def.
     let mut copy_map: HashMap<VarId, VarId> = HashMap::new();
