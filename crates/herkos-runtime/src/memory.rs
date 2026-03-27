@@ -34,7 +34,7 @@ impl<const MAX_PAGES: usize> IsolatedMemory<MAX_PAGES> {
     /// # Errors
     /// Returns `ConstructionError::MemoryInitialPagesExceedsMax` if `initial_pages > MAX_PAGES`.
     #[inline(never)]
-    pub fn try_new(initial_pages: usize) -> Result<Self, crate::ConstructionError> {
+    pub const fn try_new(initial_pages: usize) -> Result<Self, crate::ConstructionError> {
         if initial_pages > MAX_PAGES {
             return Err(crate::ConstructionError::MemoryInitialPagesExceedsMax {
                 initial: initial_pages,
@@ -81,13 +81,13 @@ impl<const MAX_PAGES: usize> IsolatedMemory<MAX_PAGES> {
 
     /// Current number of active pages.
     #[inline(always)]
-    pub fn page_count(&self) -> usize {
+    pub const fn page_count(&self) -> usize {
         self.active_pages
     }
 
     /// Current active size in bytes.
     #[inline(always)]
-    pub fn active_size(&self) -> usize {
+    pub const fn active_size(&self) -> usize {
         self.active_pages * PAGE_SIZE
     }
 
@@ -109,7 +109,7 @@ impl<const MAX_PAGES: usize> IsolatedMemory<MAX_PAGES> {
 
     /// Wasm `memory.size` — returns current page count.
     #[inline(always)]
-    pub fn size(&self) -> i32 {
+    pub const fn size(&self) -> i32 {
         self.active_pages as i32
     }
 

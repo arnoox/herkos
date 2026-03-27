@@ -45,7 +45,7 @@ impl<const MAX_SIZE: usize> Table<MAX_SIZE> {
     ///
     /// # Errors
     /// Returns `ConstructionError::TableInitialSizeExceedsMax` if `initial_size > MAX_SIZE`.
-    pub fn try_new(initial_size: usize) -> Result<Self, crate::ConstructionError> {
+    pub const fn try_new(initial_size: usize) -> Result<Self, crate::ConstructionError> {
         if initial_size > MAX_SIZE {
             return Err(crate::ConstructionError::TableInitialSizeExceedsMax {
                 initial: initial_size,
@@ -60,7 +60,7 @@ impl<const MAX_SIZE: usize> Table<MAX_SIZE> {
 
     /// Current number of active table slots.
     #[inline(always)]
-    pub fn size(&self) -> usize {
+    pub const fn size(&self) -> usize {
         self.active_size
     }
 

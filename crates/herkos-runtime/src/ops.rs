@@ -131,7 +131,7 @@ pub fn i32_div_u(lhs: i32, rhs: i32) -> WasmResult<i32> {
 /// for this case (because the underlying division overflows), so we handle it
 /// with an explicit branch.
 #[inline(never)]
-pub fn i32_rem_s(lhs: i32, rhs: i32) -> WasmResult<i32> {
+pub const fn i32_rem_s(lhs: i32, rhs: i32) -> WasmResult<i32> {
     if rhs == 0 {
         return Err(WasmTrap::DivisionByZero);
     }
@@ -174,7 +174,7 @@ pub fn i64_div_u(lhs: i64, rhs: i64) -> WasmResult<i64> {
 ///
 /// Same special case as `i32_rem_s`: `i64::MIN rem_s -1 = 0` per Wasm spec.
 #[inline(never)]
-pub fn i64_rem_s(lhs: i64, rhs: i64) -> WasmResult<i64> {
+pub const fn i64_rem_s(lhs: i64, rhs: i64) -> WasmResult<i64> {
     if rhs == 0 {
         return Err(WasmTrap::DivisionByZero);
     }
@@ -198,7 +198,7 @@ pub fn i64_rem_u(lhs: i64, rhs: i64) -> WasmResult<i64> {
 
 /// Wasm `f32.min`: propagates NaN (unlike Rust's `f32::min` which ignores it).
 /// Also preserves the Wasm rule `min(-0.0, +0.0) = -0.0`.
-pub fn wasm_min_f32(a: f32, b: f32) -> f32 {
+pub const fn wasm_min_f32(a: f32, b: f32) -> f32 {
     if a.is_nan() || b.is_nan() {
         return f32::NAN;
     }
@@ -213,7 +213,7 @@ pub fn wasm_min_f32(a: f32, b: f32) -> f32 {
 }
 
 /// Wasm `f32.max`: propagates NaN. `max(-0.0, +0.0) = +0.0`.
-pub fn wasm_max_f32(a: f32, b: f32) -> f32 {
+pub const fn wasm_max_f32(a: f32, b: f32) -> f32 {
     if a.is_nan() || b.is_nan() {
         return f32::NAN;
     }
@@ -228,7 +228,7 @@ pub fn wasm_max_f32(a: f32, b: f32) -> f32 {
 }
 
 /// Wasm `f64.min`: propagates NaN. `min(-0.0, +0.0) = -0.0`.
-pub fn wasm_min_f64(a: f64, b: f64) -> f64 {
+pub const fn wasm_min_f64(a: f64, b: f64) -> f64 {
     if a.is_nan() || b.is_nan() {
         return f64::NAN;
     }
@@ -243,7 +243,7 @@ pub fn wasm_min_f64(a: f64, b: f64) -> f64 {
 }
 
 /// Wasm `f64.max`: propagates NaN. `max(-0.0, +0.0) = +0.0`.
-pub fn wasm_max_f64(a: f64, b: f64) -> f64 {
+pub const fn wasm_max_f64(a: f64, b: f64) -> f64 {
     if a.is_nan() || b.is_nan() {
         return f64::NAN;
     }
