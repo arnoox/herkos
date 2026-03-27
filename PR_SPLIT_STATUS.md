@@ -16,7 +16,10 @@ This document tracks the progress of splitting PR #12 ("feat: introduce new ir o
 | A | `pr-a/wasm-float-ops` | Runtime float ops | ✅ Complete | #28 | ✅ Pass | Ready for review |
 | D | `pr-d/optimizer-infrastructure` | Optimizer infrastructure | ✅ Complete | #29 | ✅ Pass | Ready for review |
 | E | `pr-e/value-optimizations` | Value optimization passes | ✅ Complete | #30 | ✅ Pass | Ready for review |
-| F | `pr-f/redundancy-loop-passes` | Redundancy + loop passes | ⚠️ WIP | #31 | ❌ Needs fix | Pattern match errors in utils |
+| F1 | `pr-f1/branch-fold` | Branch condition folding | ⚠️ WIP | #31 | ❌ Needs fix | Split from old PR F |
+| F2 | `pr-f2/local-cse` | Local common subexpression elimination | ❌ Not started | — | — | Split from old PR F |
+| F3 | `pr-f3/gvn` | Global value numbering | ❌ Not started | — | — | Split from old PR F |
+| F4 | `pr-f4/licm` | Loop invariant code motion | ❌ Not started | — | — | Split from old PR F, last |
 | G | `pr-g/backend-codegen` | Backend + codegen updates | ❌ Not started | — | — | Planned |
 
 ---
@@ -135,45 +138,154 @@ This document tracks the progress of splitting PR #12 ("feat: introduce new ir o
 
 ---
 
-### PR F #31: Redundancy Elimination + Loop Passes ⚠️ WIP
+### PR F1 #31: Branch Condition Folding ⚠️ WIP
 
-**Status**: WIP — files copied, needs test fixes
+**Status**: WIP — file exists on current branch, needs pattern match fixes
 
-**Files** (from PR #12, needs adjustment):
-- `crates/herkos-core/src/optimizer/local_cse.rs` (+575, new)
-  - Local common subexpression elimination within blocks
-- `crates/herkos-core/src/optimizer/gvn.rs` (+619, new)
-  - Global value numbering across blocks using dominator tree
-- `crates/herkos-core/src/optimizer/licm.rs` (+1,307, new)
-  - Loop invariant code motion
+**Branch**: `pr-f1/branch-fold` (rename/split from `pr-f/redundancy-loop-passes`)
+
+**Files**:
 - `crates/herkos-core/src/optimizer/branch_fold.rs` (+366, new)
-  - Branch condition simplification
+  - Simplifies branch conditions: constant branches, always-taken jumps
 - `crates/herkos-core/src/optimizer/mod.rs` (updated)
-  - Registers all 4 passes in `optimize_lowered_ir` pipeline
+  - Registers `branch_fold::eliminate` in `optimize_lowered_ir` pipeline
 
-**Tests**: ❌ Compile errors — pattern matching incomplete
+**Tests**: ❌ Compile errors — missing pattern match arms
 
 **Known Issues**:
-1. Missing pattern match arms for `MemoryFill`, `MemoryInit`, `DataDrop` in several functions
-   - Affects: branch_fold, gvn, licm, local_cse tests
-   - Fix: Add cases to all `match instr` blocks that pattern match IR instructions
-2. Tests reference removed `IrFunction.needs_host` field
-   - Already fixed for PRs D & E, needs same fix in PR F files
+1. Missing pattern match arms for `MemoryFill`, `MemoryInit`, `DataDrop` in test helpers
+   - Fix: Add exhaustive arms to all `match instr` blocks in branch_fold tests
+2. Tests may reference removed `IrFunction.needs_host` field — verify and remove
 
-**Passes Registered** (post-lowering, in iteration loop):
-- `local_cse` → `gvn` → `branch_fold` → `licm` (with dead_instrs between)
+**Passes Registered** (post-lowering, added to iteration loop):
+- `branch_fold::eliminate` (after `dead_instrs`)
 
 **Dependencies**:
 - ✅ Requires PR D (optimizer infrastructure + utils)
 - ✅ Requires PR E (value optimizations)
 
 **TODO Before Merge**:
-- [ ] Fix missing IR instruction pattern matches (MemoryFill, MemoryInit, DataDrop)
-- [ ] Remove remaining `needs_host` references in test code
-- [ ] Run full test suite: `cargo test -p herkos-core --lib`
-- [ ] Verify dominator tree construction in GVN
-- [ ] Check LICM loop detection correctness
+- [ ] Create branch `pr-f1/branch-fold` from PR E base
+- [ ] Cherry-pick only `branch_fold.rs` + `mod.rs` changes
+- [ ] Fix missing IR instruction pattern matches in branch_fold tests
+- [ ] Run `cargo test -p herkos-core --lib`
+- [ ] Run `cargo clippy` and `cargo fmt --check`
+
+---
+
+### PR F2: Local Common Subexpression Elimination ❌ Not Started
+
+**Status**: Not started — code exists in `pr-f/redundancy-loop-passes`, needs isolation
+
+**Branch**: `pr-f2/local-cse` (to be created from PR F1)
+
+**Files**:
+- `crates/herkos-core/src/optimizer/local_cse.rs` (+575, new)
+  - Eliminates redundant computations within a single basic block
+  - Keyed on instruction structure (opcode + operands), no cross-block analysis
+- `crates/herkos-core/src/optimizer/mod.rs` (updated)
+  - Registers `local_cse::eliminate` in `optimize_lowered_ir` pipeline
+
+**Tests**: ❌ Compile errors (same pattern match issues as F1)
+
+**Known Issues**:
+- Same missing `MemoryFill`, `MemoryInit`, `DataDrop` pattern arms as F1
+- Fix: Add exhaustive arms to all `match instr` blocks in local_cse tests
+
+**Passes Registered** (post-lowering, in iteration loop):
+- `local_cse::eliminate` (after structural passes, before GVN)
+
+**Dependencies**:
+- ✅ Requires PR D (optimizer infrastructure + utils)
+- ✅ Requires PR E (value optimizations)
+- ✅ Requires PR F1 (branch fold reduces branches before CSE runs)
+
+**TODO Before Merge**:
+- [ ] Create branch `pr-f2/local-cse` from PR F1 base
+- [ ] Cherry-pick only `local_cse.rs` + `mod.rs` changes
+- [ ] Fix missing IR instruction pattern matches in local_cse tests
+- [ ] Run `cargo test -p herkos-core --lib`
+- [ ] Run `cargo clippy` and `cargo fmt --check`
+
+---
+
+### PR F3: Global Value Numbering ❌ Not Started
+
+**Status**: Not started — code exists in `pr-f/redundancy-loop-passes`, needs isolation
+
+**Branch**: `pr-f3/gvn` (to be created from PR F2)
+
+**Files**:
+- `crates/herkos-core/src/optimizer/gvn.rs` (+619, new)
+  - Value numbering across basic blocks using dominator tree traversal
+  - Eliminates redundant computations that `local_cse` cannot catch across blocks
+- `crates/herkos-core/src/optimizer/mod.rs` (updated)
+  - Registers `gvn::eliminate` in `optimize_lowered_ir` pipeline
+
+**Tests**: ❌ Compile errors (same pattern match issues as F1/F2)
+
+**Known Issues**:
+- Same missing `MemoryFill`, `MemoryInit`, `DataDrop` pattern arms
+- Dominator tree construction correctness should be carefully verified
+
+**Passes Registered** (post-lowering, in iteration loop):
+- `gvn::eliminate` (after `local_cse`, before `dead_instrs`)
+
+**Dependencies**:
+- ✅ Requires PR D (optimizer infrastructure + utils, including `build_predecessors`)
+- ✅ Requires PR E (value optimizations)
+- ✅ Requires PR F2 (local CSE runs first, GVN handles cross-block residuals)
+
+**TODO Before Merge**:
+- [ ] Create branch `pr-f3/gvn` from PR F2 base
+- [ ] Cherry-pick only `gvn.rs` + `mod.rs` changes
+- [ ] Fix missing IR instruction pattern matches in gvn tests
+- [ ] Verify dominator tree construction correctness
+- [ ] Run `cargo test -p herkos-core --lib`
+- [ ] Run `cargo clippy` and `cargo fmt --check`
+
+---
+
+### PR F4: Loop Invariant Code Motion ❌ Not Started
+
+**Status**: Not started — code exists in `pr-f/redundancy-loop-passes`, needs isolation
+
+**Branch**: `pr-f4/licm` (to be created from PR F3, **last of the F series**)
+
+**Files**:
+- `crates/herkos-core/src/optimizer/licm.rs` (+1,307, new)
+  - Detects natural loops via back-edges and dominator tree
+  - Hoists side-effect-free loop-invariant instructions to loop preheaders
+- `crates/herkos-core/src/optimizer/mod.rs` (updated)
+  - Uncomments and registers `licm::eliminate` in `optimize_lowered_ir` pipeline
+  - Currently commented out: `// licm::eliminate(func);`
+
+**Tests**: ❌ Compile errors (same pattern match issues + licm is currently commented out)
+
+**Known Issues**:
+- Same missing `MemoryFill`, `MemoryInit`, `DataDrop` pattern arms
+- Loop detection may be conservative — verify back-edge identification
+- LICM must not hoist instructions with side effects (memory writes, traps)
+
+**Passes Registered** (post-lowering, end of iteration loop):
+- `licm::eliminate` (after GVN and `dead_instrs`, final pass in loop body)
+
+**Dependencies**:
+- ✅ Requires PR D (optimizer infrastructure + utils, `is_side_effect_free`)
+- ✅ Requires PR E (value optimizations)
+- ✅ Requires PR F1 (branch fold first simplifies loop exit conditions)
+- ✅ Requires PR F2 (local CSE)
+- ✅ Requires PR F3 (GVN — hoisting is most effective after redundancies removed)
+
+**TODO Before Merge**:
+- [ ] Create branch `pr-f4/licm` from PR F3 base
+- [ ] Cherry-pick only `licm.rs` + `mod.rs` changes (uncomment licm call)
+- [ ] Fix missing IR instruction pattern matches in licm tests
+- [ ] Verify loop detection and preheader insertion correctness
+- [ ] Check `is_side_effect_free` covers all hoistable instructions
 - [ ] Test with loop-heavy Wasm (e.g., array operations)
+- [ ] Run `cargo test -p herkos-core --lib`
+- [ ] Run `cargo clippy` and `cargo fmt --check`
 
 ---
 
@@ -227,24 +339,33 @@ main
   ├─ main + A + D
   ↓ merge PR E
   ├─ main + A + D + E
-  ↓ merge PR F (after fixes)
-  ├─ main + A + D + E + F
+  ↓ merge PR F1 (branch fold)
+  ├─ main + A + D + E + F1
+  ↓ merge PR F2 (local CSE)
+  ├─ main + A + D + E + F1 + F2
+  ↓ merge PR F3 (GVN)
+  ├─ main + A + D + E + F1 + F2 + F3
+  ↓ merge PR F4 (LICM — last)
+  ├─ main + A + D + E + F1 + F2 + F3 + F4
   ↓ merge PR G
-  └─ main + A + D + E + F + G (complete)
+  └─ main + A + D + E + F1–F4 + G (complete)
 ```
 
 ### Rationale
 - A is independent (pure runtime addition)
 - D is infrastructure foundation
 - E depends on A (float ops) + D (utilities)
-- F depends on E (builds on value passes)
+- F1 depends on E — branch fold simplifies control flow for later passes
+- F2 depends on F1 — local CSE runs after branches are simplified
+- F3 depends on F2 — GVN extends CSE globally across blocks
+- F4 depends on F3 — LICM is most effective after redundancies are removed (last pass)
 - G depends on A (must have runtime ops to codegen)
 
 ---
 
 ## Current Blockers
 
-### PR F Compilation Errors
+### PR F1–F4 Compilation Errors
 
 **Error Pattern**:
 ```
@@ -256,7 +377,7 @@ error[E0004]: non-exhaustive patterns: `MemoryFill`, `MemoryInit`, `DataDrop`
 **Solution**: Add pattern match arms to all functions in optimizer files:
 
 ```rust
-// Example fix for for_each_use in utils.rs
+// Example fix pattern
 IrInstr::MemoryFill { dst, val, len } => {
     f(*dst);
     f(*val);
@@ -270,13 +391,13 @@ IrInstr::MemoryInit { dst, src_offset, len, .. } => {
 IrInstr::DataDrop { .. } => {}
 ```
 
-**Affected Files in PR F**:
-- branch_fold.rs (test code)
-- gvn.rs (test code)
-- licm.rs (test code)
-- local_cse.rs (test code)
+**Affected files (fix needed in each isolated PR)**:
+- `branch_fold.rs` test code → fix in PR F1
+- `local_cse.rs` test code → fix in PR F2
+- `gvn.rs` test code → fix in PR F3
+- `licm.rs` test code → fix in PR F4
 
-**Action Item**: Apply pattern match fixes and re-run tests before final review.
+**Action Item**: Apply pattern match fixes per file when working on each isolated PR branch.
 
 ---
 
@@ -286,7 +407,10 @@ IrInstr::DataDrop { .. } => {}
 - [x] PR A: `cargo test -p herkos-runtime` ✅ 121 pass
 - [x] PR D: `cargo test -p herkos-core --lib` ✅ 117 pass
 - [x] PR E: `cargo test -p herkos-core --lib` ✅ 201 pass
-- [ ] PR F: `cargo test -p herkos-core --lib` ❌ Needs fixes
+- [ ] PR F1: `cargo test -p herkos-core --lib` ❌ Needs fixes
+- [ ] PR F2: `cargo test -p herkos-core --lib` ❌ Needs fixes
+- [ ] PR F3: `cargo test -p herkos-core --lib` ❌ Needs fixes
+- [ ] PR F4: `cargo test -p herkos-core --lib` ❌ Needs fixes
 - [ ] PR G: `cargo test` (all crates) ⏳ Not started
 
 ### Integration Tests (After Merge)
@@ -297,7 +421,10 @@ IrInstr::DataDrop { .. } => {}
 - [x] PR A: `cargo clippy` ✅ clean
 - [x] PR D: `cargo clippy` ✅ clean
 - [x] PR E: `cargo clippy` ✅ clean
-- [ ] PR F: `cargo clippy` ⏳ Not checked (blocked on compile)
+- [ ] PR F1: `cargo clippy` ⏳ Blocked on compile
+- [ ] PR F2: `cargo clippy` ⏳ Not started
+- [ ] PR F3: `cargo clippy` ⏳ Not started
+- [ ] PR F4: `cargo clippy` ⏳ Not started
 - [ ] PR G: `cargo clippy` ⏳ Not started
 
 ### Format Check (All PRs)
@@ -339,10 +466,10 @@ Optimizer Passes:
 │   ├── const_prop.rs               [pre-lowering, PR E]
 │   ├── algebraic.rs                [pre-lowering, PR E]
 │   ├── copy_prop.rs                [pre + post, PR E]
-│   ├── local_cse.rs                [post-lowering, PR F]
-│   ├── gvn.rs                      [post-lowering, PR F]
-│   ├── licm.rs                     [post-lowering, PR F]
-│   ├── branch_fold.rs              [post-lowering, PR F]
+│   ├── branch_fold.rs              [post-lowering, PR F1]
+│   ├── local_cse.rs                [post-lowering, PR F2]
+│   ├── gvn.rs                      [post-lowering, PR F3]
+│   ├── licm.rs                     [post-lowering, PR F4]
 │   └── mod.rs                      [pipeline coordination]
 
 Runtime:
@@ -361,11 +488,36 @@ Codegen (PR G):
 
 ## Next Steps
 
-### Immediate (Complete PR F)
-1. [ ] Fix pattern matches for MemoryFill/MemoryInit/DataDrop in PR F
-2. [ ] Run `cargo test -p herkos-core --lib` and confirm all pass
-3. [ ] Run `cargo clippy` and `cargo fmt --check`
-4. [ ] Push fixes to `pr-f/redundancy-loop-passes`
+### Immediate (Create PR F1 — branch fold)
+1. [ ] Create branch `pr-f1/branch-fold` from PR E tip
+2. [ ] Cherry-pick only `branch_fold.rs` + `mod.rs` (branch_fold registration) from old `pr-f/redundancy-loop-passes`
+3. [ ] Fix missing `MemoryFill`/`MemoryInit`/`DataDrop` pattern arms in `branch_fold.rs` tests
+4. [ ] Run `cargo test -p herkos-core --lib` — confirm all pass
+5. [ ] Run `cargo clippy` and `cargo fmt --check`
+6. [ ] Push and open PR against PR E branch (or main if E is merged)
+
+### Next (PR F2 — local CSE)
+1. [ ] Create branch `pr-f2/local-cse` from PR F1 tip
+2. [ ] Cherry-pick only `local_cse.rs` + `mod.rs` changes
+3. [ ] Fix pattern match arms in `local_cse.rs` tests
+4. [ ] Run tests, clippy, fmt
+5. [ ] Open PR
+
+### Then (PR F3 — GVN)
+1. [ ] Create branch `pr-f3/gvn` from PR F2 tip
+2. [ ] Cherry-pick only `gvn.rs` + `mod.rs` changes
+3. [ ] Fix pattern match arms in `gvn.rs` tests
+4. [ ] Verify dominator tree construction
+5. [ ] Run tests, clippy, fmt
+6. [ ] Open PR
+
+### Then (PR F4 — LICM, last)
+1. [ ] Create branch `pr-f4/licm` from PR F3 tip
+2. [ ] Cherry-pick only `licm.rs` + `mod.rs` changes (uncomment `licm::eliminate`)
+3. [ ] Fix pattern match arms in `licm.rs` tests
+4. [ ] Verify loop detection and preheader insertion
+5. [ ] Run tests, clippy, fmt
+6. [ ] Open PR
 
 ### Short Term (Prepare PR G)
 1. [ ] Extract codegen changes from PR #12
@@ -390,5 +542,5 @@ Codegen (PR G):
 
 ---
 
-*Last updated: 2026-03-23*
-*Status: 4 of 5 PRs complete, PR F WIP, PR G planned*
+*Last updated: 2026-03-27*
+*Status: 3 of 8 PRs complete (A, D, E); PR F split into F1–F4 (one pass each, LICM last); PR G planned*
