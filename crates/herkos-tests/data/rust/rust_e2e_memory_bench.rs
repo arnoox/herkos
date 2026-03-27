@@ -25,3 +25,15 @@ static mut BUF: [i32; 1024] = [0i32; 1024];
 pub extern "C" fn mem_fill_sort_sum(n: i32, seed: i32) -> i32 {
     unsafe { fill_sort_sum_impl(&mut BUF, n, seed) }
 }
+
+/// Read one element from the work buffer by index.
+///
+/// Returns 0 for out-of-range indices.  Intended for tests that need to
+/// inspect the buffer after a `mem_fill_sort_sum` call.
+#[no_mangle]
+pub extern "C" fn mem_read_element(idx: i32) -> i32 {
+    if idx < 0 || idx as usize >= 1024 {
+        return 0;
+    }
+    unsafe { BUF[idx as usize] }
+}
