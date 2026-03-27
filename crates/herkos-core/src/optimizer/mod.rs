@@ -23,6 +23,7 @@ mod dead_blocks;
 mod branch_fold;
 mod dead_instrs;
 mod empty_blocks;
+mod local_cse;
 mod merge_blocks;
 
 /// Optimizes the pure SSA IR before phi lowering.
@@ -47,11 +48,9 @@ pub fn optimize_ir(module_info: ModuleInfo, do_opt: bool) -> Result<ModuleInfo> 
 
 /// Optimizes the lowered IR after phi nodes have been eliminated.
 ///
-/// Runs post-lowering structural passes and branch condition folding.
-/// dead_instrs may leave empty blocks, which empty_blocks and merge_blocks then
-/// eliminate, potentially exposing new dead instructions. branch_fold simplifies
-/// `BranchIf` terminators whose condition is a known comparison. We repeat until
-/// reaching a fixed point (typically 2 iterations).
+/// Runs post-lowering structural passes, local common subexpression elimination,
+/// and branch condition folding. We repeat until reaching a fixed point
+/// (typically 2 iterations).
 pub fn optimize_lowered_ir(
     module_info: LoweredModuleInfo,
     do_opt: bool,
@@ -65,6 +64,7 @@ pub fn optimize_lowered_ir(
                 merge_blocks::eliminate(func);
                 dead_blocks::eliminate(func)?;
                 copy_prop::eliminate(func);
+                local_cse::eliminate(func);
                 dead_instrs::eliminate(func);
                 branch_fold::eliminate(func);
                 dead_instrs::eliminate(func);
