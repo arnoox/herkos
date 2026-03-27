@@ -495,6 +495,14 @@ pub fn rewrite_terminator_target(term: &mut IrTerminator, old: BlockId, new: Blo
     }
 }
 
+/// Returns `true` if `var` is known to be zero according to `consts`.
+pub fn is_zero(var: VarId, consts: &HashMap<VarId, IrValue>) -> bool {
+    matches!(
+        consts.get(&var),
+        Some(IrValue::I32(0)) | Some(IrValue::I64(0))
+    )
+}
+
 /// Variables with exactly one definition across the function that is a `Const`
 /// instruction. These can be treated as constants in any block that uses them.
 pub fn build_global_const_map(func: &IrFunction) -> HashMap<VarId, IrValue> {

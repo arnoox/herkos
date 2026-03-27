@@ -20,6 +20,7 @@ mod copy_prop;
 mod dead_blocks;
 
 // ── Post-lowering passes ─────────────────────────────────────────────────────
+mod branch_fold;
 mod dead_instrs;
 mod empty_blocks;
 mod merge_blocks;
@@ -46,16 +47,11 @@ pub fn optimize_ir(module_info: ModuleInfo, do_opt: bool) -> Result<ModuleInfo> 
 
 /// Optimizes the lowered IR after phi nodes have been eliminated.
 ///
-/// Passes here operate on [`LoweredModuleInfo`] where all `IrInstr::Phi`
-/// nodes have been replaced by `IrInstr::Assign` in predecessor blocks.
-///
-/// ## Structural and copy passes
-///
-/// Run multiple iterations of structural cleanup + copy propagation.
+/// Runs post-lowering structural passes and branch condition folding.
 /// dead_instrs may leave empty blocks, which empty_blocks and merge_blocks then
-/// eliminate, potentially exposing new dead instructions. copy_prop forwards the
-/// assignments that lower_phis inserted. We repeat until reaching a fixed point
-/// (typically 2 iterations).
+/// eliminate, potentially exposing new dead instructions. branch_fold simplifies
+/// `BranchIf` terminators whose condition is a known comparison. We repeat until
+/// reaching a fixed point (typically 2 iterations).
 pub fn optimize_lowered_ir(
     module_info: LoweredModuleInfo,
     do_opt: bool,
@@ -63,14 +59,14 @@ pub fn optimize_lowered_ir(
     let mut module_info = module_info;
     if do_opt {
         for func in &mut module_info.ir_functions {
-            // Two passes: dead_instrs may create empty blocks, and copy_prop
-            // may reveal new dead instrs.
             for _ in 0..2 {
                 empty_blocks::eliminate(func);
                 dead_blocks::eliminate(func)?;
                 merge_blocks::eliminate(func);
                 dead_blocks::eliminate(func)?;
                 copy_prop::eliminate(func);
+                dead_instrs::eliminate(func);
+                branch_fold::eliminate(func);
                 dead_instrs::eliminate(func);
             }
         }
