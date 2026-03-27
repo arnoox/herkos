@@ -10,14 +10,15 @@
 //! After substitution, the defining instruction becomes dead (single use was
 //! the branch) and is cleaned up by `dead_instrs`.
 
-use super::utils::{build_global_use_count, instr_dest};
+use super::utils::{build_global_const_map, build_global_use_count, instr_dest, is_zero};
 use crate::ir::{BinOp, IrFunction, IrInstr, IrTerminator, IrValue, UnOp, VarId};
 use std::collections::HashMap;
 
 pub fn eliminate(func: &mut IrFunction) {
     loop {
         let global_uses = build_global_use_count(func);
-        if !fold_one(func, &global_uses) {
+        let global_consts = build_global_const_map(func);
+        if !fold_one(func, &global_uses, &global_consts) {
             break;
         }
     }
@@ -25,21 +26,17 @@ pub fn eliminate(func: &mut IrFunction) {
 
 /// Attempt a single branch fold across the function. Returns `true` if a
 /// change was made.
-fn fold_one(func: &mut IrFunction, global_uses: &HashMap<VarId, usize>) -> bool {
+fn fold_one(
+    func: &mut IrFunction,
+    global_uses: &HashMap<VarId, usize>,
+    global_consts: &HashMap<VarId, IrValue>,
+) -> bool {
     // Build a map of VarId → defining instruction info.
     // We only care about single-use vars defined by Eqz, Ne(x,0), or Eq(x,0).
     let mut var_defs: HashMap<VarId, VarDef> = HashMap::new();
 
-    // Also build a global constant map for checking if an operand is zero.
-    let global_consts = build_global_const_map(func);
-
     for block in &func.blocks {
-        let mut local_consts = global_consts.clone();
         for instr in &block.instructions {
-            if let IrInstr::Const { dest, value } = instr {
-                local_consts.insert(*dest, *value);
-            }
-
             if let Some(dest) = instr_dest(instr) {
                 match instr {
                     IrInstr::UnOp {
@@ -55,9 +52,9 @@ fn fold_one(func: &mut IrFunction, global_uses: &HashMap<VarId, usize>) -> bool 
                         rhs,
                         ..
                     } => {
-                        if is_zero(rhs, &local_consts) {
+                        if is_zero(*rhs, global_consts) {
                             var_defs.insert(dest, VarDef::NeZero(*lhs));
-                        } else if is_zero(lhs, &local_consts) {
+                        } else if is_zero(*lhs, global_consts) {
                             var_defs.insert(dest, VarDef::NeZero(*rhs));
                         }
                     }
@@ -67,9 +64,9 @@ fn fold_one(func: &mut IrFunction, global_uses: &HashMap<VarId, usize>) -> bool 
                         rhs,
                         ..
                     } => {
-                        if is_zero(rhs, &local_consts) {
+                        if is_zero(*rhs, global_consts) {
                             var_defs.insert(dest, VarDef::EqZero(*lhs));
-                        } else if is_zero(lhs, &local_consts) {
+                        } else if is_zero(*lhs, global_consts) {
                             var_defs.insert(dest, VarDef::EqZero(*rhs));
                         }
                     }
@@ -131,34 +128,6 @@ enum VarDef {
     Eqz(VarId),
     NeZero(VarId),
     EqZero(VarId),
-}
-
-fn is_zero(var: &VarId, consts: &HashMap<VarId, IrValue>) -> bool {
-    matches!(
-        consts.get(var),
-        Some(IrValue::I32(0)) | Some(IrValue::I64(0))
-    )
-}
-
-fn build_global_const_map(func: &IrFunction) -> HashMap<VarId, IrValue> {
-    let mut total_defs: HashMap<VarId, usize> = HashMap::new();
-    let mut const_defs: HashMap<VarId, IrValue> = HashMap::new();
-
-    for block in &func.blocks {
-        for instr in &block.instructions {
-            if let Some(dest) = instr_dest(instr) {
-                *total_defs.entry(dest).or_insert(0) += 1;
-                if let IrInstr::Const { dest, value } = instr {
-                    const_defs.insert(*dest, *value);
-                }
-            }
-        }
-    }
-
-    const_defs
-        .into_iter()
-        .filter(|(v, _)| total_defs.get(v).copied().unwrap_or(0) == 1)
-        .collect()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

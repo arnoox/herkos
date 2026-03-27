@@ -466,6 +466,37 @@ pub fn is_side_effect_free(instr: &IrInstr) -> bool {
     }
 }
 
+// ── Commutative op detection ─────────────────────────────────────────────────
+
+/// Returns true for operations where `op(a, b) == op(b, a)`.
+pub fn is_commutative(op: &BinOp) -> bool {
+    matches!(
+        op,
+        BinOp::I32Add
+            | BinOp::I32Mul
+            | BinOp::I32And
+            | BinOp::I32Or
+            | BinOp::I32Xor
+            | BinOp::I32Eq
+            | BinOp::I32Ne
+            | BinOp::I64Add
+            | BinOp::I64Mul
+            | BinOp::I64And
+            | BinOp::I64Or
+            | BinOp::I64Xor
+            | BinOp::I64Eq
+            | BinOp::I64Ne
+            | BinOp::F32Add
+            | BinOp::F32Mul
+            | BinOp::F32Eq
+            | BinOp::F32Ne
+            | BinOp::F64Add
+            | BinOp::F64Mul
+            | BinOp::F64Eq
+            | BinOp::F64Ne
+    )
+}
+
 // ── Rewrite terminator block targets ─────────────────────────────────────────
 
 /// Rewrite all block-ID references in a terminator from `old` to `new`.
@@ -493,6 +524,14 @@ pub fn rewrite_terminator_target(term: &mut IrTerminator, old: BlockId, new: Blo
         }
         IrTerminator::Return { .. } | IrTerminator::Unreachable => {}
     }
+}
+
+/// Returns `true` if `var` is known to be zero according to `consts`.
+pub fn is_zero(var: VarId, consts: &HashMap<VarId, IrValue>) -> bool {
+    matches!(
+        consts.get(&var),
+        Some(IrValue::I32(0)) | Some(IrValue::I64(0))
+    )
 }
 
 /// Variables with exactly one definition across the function that is a `Const`
