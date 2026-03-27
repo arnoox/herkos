@@ -8,7 +8,7 @@
 use crate::ir::{BinOp, IrFunction, IrInstr, IrValue, UnOp, VarId};
 use std::collections::HashMap;
 
-use super::utils::prune_dead_locals;
+use super::utils::{is_commutative, prune_dead_locals};
 
 // ── Value key ────────────────────────────────────────────────────────────────
 
@@ -45,37 +45,6 @@ impl From<IrValue> for ConstKey {
     }
 }
 
-// ── Commutative op detection ─────────────────────────────────────────────────
-
-/// Returns true for operations where `op(a, b) == op(b, a)`.
-fn is_commutative(op: &BinOp) -> bool {
-    matches!(
-        op,
-        BinOp::I32Add
-            | BinOp::I32Mul
-            | BinOp::I32And
-            | BinOp::I32Or
-            | BinOp::I32Xor
-            | BinOp::I32Eq
-            | BinOp::I32Ne
-            | BinOp::I64Add
-            | BinOp::I64Mul
-            | BinOp::I64And
-            | BinOp::I64Or
-            | BinOp::I64Xor
-            | BinOp::I64Eq
-            | BinOp::I64Ne
-            | BinOp::F32Add
-            | BinOp::F32Mul
-            | BinOp::F32Eq
-            | BinOp::F32Ne
-            | BinOp::F64Add
-            | BinOp::F64Mul
-            | BinOp::F64Eq
-            | BinOp::F64Ne
-    )
-}
-
 /// Build a `ValueKey` for a `BinOp`, normalizing operand order for commutative ops.
 fn binop_key(op: BinOp, lhs: VarId, rhs: VarId) -> ValueKey {
     let (lhs, rhs) = if is_commutative(&op) && lhs.0 > rhs.0 {
@@ -97,8 +66,11 @@ pub fn eliminate(func: &mut IrFunction) {
         let mut value_map: HashMap<ValueKey, VarId> = HashMap::new();
 
         for instr in &mut block.instructions {
-            // In strict SSA form each variable is defined exactly once, so there
-            // is no need to invalidate cached CSE entries on redefinition.
+            // This pass runs on lowered (post-phi) IR. While the function is no
+            // longer globally in SSA form, within any single block each BinOp,
+            // UnOp, and Const dest is still defined at most once: phi lowering
+            // only inserts Assigns into predecessor blocks, never into the block
+            // being processed. So value_map entries are never stale.
             match instr {
                 IrInstr::Const { dest, value } => {
                     let key = ValueKey::Const(ConstKey::from(*value));
