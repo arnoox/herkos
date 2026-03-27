@@ -24,6 +24,7 @@ mod branch_fold;
 mod dead_instrs;
 mod empty_blocks;
 mod gvn;
+mod licm;
 mod local_cse;
 mod merge_blocks;
 
@@ -50,8 +51,8 @@ pub fn optimize_ir(module_info: ModuleInfo, do_opt: bool) -> Result<ModuleInfo> 
 /// Optimizes the lowered IR after phi nodes have been eliminated.
 ///
 /// Runs post-lowering structural passes, redundancy elimination (local CSE,
-/// GVN), and branch condition folding. We repeat until reaching a fixed point
-/// (typically 2 iterations).
+/// GVN), branch condition folding, and loop invariant code motion. We repeat
+/// until reaching a fixed point (typically 2 iterations).
 pub fn optimize_lowered_ir(
     module_info: LoweredModuleInfo,
     do_opt: bool,
@@ -70,6 +71,7 @@ pub fn optimize_lowered_ir(
                 dead_instrs::eliminate(func);
                 branch_fold::eliminate(func);
                 dead_instrs::eliminate(func);
+                licm::eliminate(func);
             }
         }
     }
