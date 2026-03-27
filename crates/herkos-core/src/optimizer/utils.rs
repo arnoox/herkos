@@ -466,6 +466,37 @@ pub fn is_side_effect_free(instr: &IrInstr) -> bool {
     }
 }
 
+// ── Commutative op detection ─────────────────────────────────────────────────
+
+/// Returns true for operations where `op(a, b) == op(b, a)`.
+pub fn is_commutative(op: &BinOp) -> bool {
+    matches!(
+        op,
+        BinOp::I32Add
+            | BinOp::I32Mul
+            | BinOp::I32And
+            | BinOp::I32Or
+            | BinOp::I32Xor
+            | BinOp::I32Eq
+            | BinOp::I32Ne
+            | BinOp::I64Add
+            | BinOp::I64Mul
+            | BinOp::I64And
+            | BinOp::I64Or
+            | BinOp::I64Xor
+            | BinOp::I64Eq
+            | BinOp::I64Ne
+            | BinOp::F32Add
+            | BinOp::F32Mul
+            | BinOp::F32Eq
+            | BinOp::F32Ne
+            | BinOp::F64Add
+            | BinOp::F64Mul
+            | BinOp::F64Eq
+            | BinOp::F64Ne
+    )
+}
+
 // ── Rewrite terminator block targets ─────────────────────────────────────────
 
 /// Rewrite all block-ID references in a terminator from `old` to `new`.

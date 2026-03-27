@@ -238,14 +238,16 @@ def display_html(groups: Dict[str, List[Dict]], output_path: str = "metrics_repo
 
         timestamps = [parse_timestamp(e["timestamp"]).isoformat() for e in entries]
         values = [e["value"] for e in entries]
+        indices = list(range(len(entries)))
 
         fig.add_trace(
             go.Scatter(
-                x=timestamps,
+                x=indices,
                 y=values,
                 mode="lines+markers",
                 name=name,
-                hovertemplate=f"<b>{name}</b><br>Timestamp: %{{x}}<br>Value: %{{y:.2f}}<extra></extra>",
+                customdata=timestamps,
+                hovertemplate=f"<b>{name}</b><br>Timestamp: %{{customdata}}<br>Value: %{{y:.2f}}<extra></extra>",
             ),
             row=row,
             col=col,
