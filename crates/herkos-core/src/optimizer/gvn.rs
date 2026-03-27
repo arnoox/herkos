@@ -124,13 +124,23 @@ fn build_multi_def_vars(func: &IrFunction) -> HashSet<VarId> {
 
 /// Compute the reverse-postorder traversal of the CFG starting from `entry`.
 fn compute_rpo(func: &IrFunction) -> Vec<BlockId> {
-    let block_idx: HashMap<BlockId, usize> =
-        func.blocks.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
+    let block_idx: HashMap<BlockId, usize> = func
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.id, i))
+        .collect();
 
     let mut visited = vec![false; func.blocks.len()];
     let mut postorder = Vec::with_capacity(func.blocks.len());
 
-    dfs_postorder(func, func.entry_block, &block_idx, &mut visited, &mut postorder);
+    dfs_postorder(
+        func,
+        func.entry_block,
+        &block_idx,
+        &mut visited,
+        &mut postorder,
+    );
 
     postorder.reverse();
     postorder
@@ -164,8 +174,7 @@ fn dfs_postorder(
 fn compute_idoms(func: &IrFunction) -> HashMap<BlockId, BlockId> {
     let rpo = compute_rpo(func);
     // rpo_num[b] = index in RPO order (entry = 0, smallest index = processed first)
-    let rpo_num: HashMap<BlockId, usize> =
-        rpo.iter().enumerate().map(|(i, &b)| (b, i)).collect();
+    let rpo_num: HashMap<BlockId, usize> = rpo.iter().enumerate().map(|(i, &b)| (b, i)).collect();
 
     let preds = build_predecessors(func);
     let entry = func.entry_block;
@@ -287,7 +296,9 @@ fn collect_replacements(
                 }
             }
 
-            IrInstr::BinOp { dest, op, lhs, rhs, .. } => {
+            IrInstr::BinOp {
+                dest, op, lhs, rhs, ..
+            } => {
                 // Skip if dest is multiply-defined (same reason as Const).
                 // Also skip if any operand is multiply-defined: a loop phi
                 // var carries different values per iteration, so the same
@@ -311,7 +322,10 @@ fn collect_replacements(
                 if multi_def_vars.contains(dest) || multi_def_vars.contains(operand) {
                     continue;
                 }
-                let key = ValueKey::UnOp { op: *op, operand: *operand };
+                let key = ValueKey::UnOp {
+                    op: *op,
+                    operand: *operand,
+                };
                 if let Some(&first) = value_map.get(&key) {
                     replacements.insert(*dest, first);
                 } else {
@@ -355,8 +369,12 @@ pub fn eliminate(func: &mut IrFunction) {
 
     let idom = compute_idoms(func);
     let dom_children = build_dom_children(&idom, func.entry_block);
-    let block_idx: HashMap<BlockId, usize> =
-        func.blocks.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
+    let block_idx: HashMap<BlockId, usize> = func
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.id, i))
+        .collect();
 
     let multi_def_vars = build_multi_def_vars(func);
     let mut value_map: HashMap<ValueKey, VarId> = HashMap::new();
@@ -413,13 +431,21 @@ mod tests {
     fn cross_block_const_deduplication() {
         let b0 = IrBlock {
             id: BlockId(0),
-            instructions: vec![IrInstr::Const { dest: VarId(0), value: IrValue::I32(42) }],
+            instructions: vec![IrInstr::Const {
+                dest: VarId(0),
+                value: IrValue::I32(42),
+            }],
             terminator: IrTerminator::Jump { target: BlockId(1) },
         };
         let b1 = IrBlock {
             id: BlockId(1),
-            instructions: vec![IrInstr::Const { dest: VarId(1), value: IrValue::I32(42) }],
-            terminator: IrTerminator::Return { value: Some(VarId(1)) },
+            instructions: vec![IrInstr::Const {
+                dest: VarId(1),
+                value: IrValue::I32(42),
+            }],
+            terminator: IrTerminator::Return {
+                value: Some(VarId(1)),
+            },
         };
         let mut func = make_func(vec![b0, b1]);
         func.locals = vec![(VarId(0), WasmType::I32), (VarId(1), WasmType::I32)];
@@ -427,13 +453,19 @@ mod tests {
         eliminate(&mut func);
 
         assert!(
-            matches!(func.blocks[0].instructions[0], IrInstr::Const { dest: VarId(0), .. }),
+            matches!(
+                func.blocks[0].instructions[0],
+                IrInstr::Const { dest: VarId(0), .. }
+            ),
             "first definition should stay as Const"
         );
         assert!(
             matches!(
                 func.blocks[1].instructions[0],
-                IrInstr::Assign { dest: VarId(1), src: VarId(0) }
+                IrInstr::Assign {
+                    dest: VarId(1),
+                    src: VarId(0)
+                }
             ),
             "dominated duplicate should become Assign"
         );
@@ -460,18 +492,26 @@ mod tests {
                 lhs: VarId(0),
                 rhs: VarId(1),
             }],
-            terminator: IrTerminator::Return { value: Some(VarId(3)) },
+            terminator: IrTerminator::Return {
+                value: Some(VarId(3)),
+            },
         };
         let mut func = make_func(vec![b0, b1]);
         func.locals = vec![(VarId(2), WasmType::I32), (VarId(3), WasmType::I32)];
 
         eliminate(&mut func);
 
-        assert!(matches!(func.blocks[0].instructions[0], IrInstr::BinOp { .. }));
+        assert!(matches!(
+            func.blocks[0].instructions[0],
+            IrInstr::BinOp { .. }
+        ));
         assert!(
             matches!(
                 func.blocks[1].instructions[0],
-                IrInstr::Assign { dest: VarId(3), src: VarId(2) }
+                IrInstr::Assign {
+                    dest: VarId(3),
+                    src: VarId(2)
+                }
             ),
             "dominated duplicate BinOp should become Assign"
         );
@@ -493,12 +533,18 @@ mod tests {
         };
         let b1 = IrBlock {
             id: BlockId(1),
-            instructions: vec![IrInstr::Const { dest: VarId(1), value: IrValue::I32(7) }],
+            instructions: vec![IrInstr::Const {
+                dest: VarId(1),
+                value: IrValue::I32(7),
+            }],
             terminator: IrTerminator::Jump { target: BlockId(3) },
         };
         let b2 = IrBlock {
             id: BlockId(2),
-            instructions: vec![IrInstr::Const { dest: VarId(2), value: IrValue::I32(7) }],
+            instructions: vec![IrInstr::Const {
+                dest: VarId(2),
+                value: IrValue::I32(7),
+            }],
             terminator: IrTerminator::Jump { target: BlockId(3) },
         };
         let b3 = IrBlock {
@@ -513,11 +559,17 @@ mod tests {
 
         // Both consts should remain — neither block dominates the other.
         assert!(
-            matches!(func.blocks[1].instructions[0], IrInstr::Const { dest: VarId(1), .. }),
+            matches!(
+                func.blocks[1].instructions[0],
+                IrInstr::Const { dest: VarId(1), .. }
+            ),
             "const in B1 must not be eliminated"
         );
         assert!(
-            matches!(func.blocks[2].instructions[0], IrInstr::Const { dest: VarId(2), .. }),
+            matches!(
+                func.blocks[2].instructions[0],
+                IrInstr::Const { dest: VarId(2), .. }
+            ),
             "const in B2 must not be eliminated"
         );
     }
@@ -528,7 +580,10 @@ mod tests {
         // B0 → B1 → B2: const defined in B0, duplicated in B2
         let b0 = IrBlock {
             id: BlockId(0),
-            instructions: vec![IrInstr::Const { dest: VarId(0), value: IrValue::I32(99) }],
+            instructions: vec![IrInstr::Const {
+                dest: VarId(0),
+                value: IrValue::I32(99),
+            }],
             terminator: IrTerminator::Jump { target: BlockId(1) },
         };
         let b1 = IrBlock {
@@ -538,21 +593,30 @@ mod tests {
         };
         let b2 = IrBlock {
             id: BlockId(2),
-            instructions: vec![IrInstr::Const { dest: VarId(1), value: IrValue::I32(99) }],
-            terminator: IrTerminator::Return { value: Some(VarId(1)) },
+            instructions: vec![IrInstr::Const {
+                dest: VarId(1),
+                value: IrValue::I32(99),
+            }],
+            terminator: IrTerminator::Return {
+                value: Some(VarId(1)),
+            },
         };
         let mut func = make_func(vec![b0, b1, b2]);
         func.locals = vec![(VarId(0), WasmType::I32), (VarId(1), WasmType::I32)];
 
         eliminate(&mut func);
 
-        assert!(
-            matches!(func.blocks[0].instructions[0], IrInstr::Const { dest: VarId(0), .. })
-        );
+        assert!(matches!(
+            func.blocks[0].instructions[0],
+            IrInstr::Const { dest: VarId(0), .. }
+        ));
         assert!(
             matches!(
                 func.blocks[2].instructions[0],
-                IrInstr::Assign { dest: VarId(1), src: VarId(0) }
+                IrInstr::Assign {
+                    dest: VarId(1),
+                    src: VarId(0)
+                }
             ),
             "deeply dominated duplicate should be eliminated"
         );
@@ -579,7 +643,9 @@ mod tests {
                 lhs: VarId(1), // swapped
                 rhs: VarId(0),
             }],
-            terminator: IrTerminator::Return { value: Some(VarId(3)) },
+            terminator: IrTerminator::Return {
+                value: Some(VarId(3)),
+            },
         };
         let mut func = make_func(vec![b0, b1]);
         func.locals = vec![(VarId(2), WasmType::I32), (VarId(3), WasmType::I32)];
@@ -589,7 +655,10 @@ mod tests {
         assert!(
             matches!(
                 func.blocks[1].instructions[0],
-                IrInstr::Assign { dest: VarId(3), src: VarId(2) }
+                IrInstr::Assign {
+                    dest: VarId(3),
+                    src: VarId(2)
+                }
             ),
             "commutative cross-block BinOp should be deduplicated"
         );
@@ -601,8 +670,14 @@ mod tests {
         let b0 = IrBlock {
             id: BlockId(0),
             instructions: vec![
-                IrInstr::Const { dest: VarId(0), value: IrValue::I32(1) },
-                IrInstr::Const { dest: VarId(1), value: IrValue::I32(1) },
+                IrInstr::Const {
+                    dest: VarId(0),
+                    value: IrValue::I32(1),
+                },
+                IrInstr::Const {
+                    dest: VarId(1),
+                    value: IrValue::I32(1),
+                },
             ],
             terminator: IrTerminator::Return { value: None },
         };
@@ -612,7 +687,13 @@ mod tests {
         eliminate(&mut func);
 
         // GVN skips single-block functions; duplicates remain (local_cse's job).
-        assert!(matches!(func.blocks[0].instructions[0], IrInstr::Const { .. }));
-        assert!(matches!(func.blocks[0].instructions[1], IrInstr::Const { .. }));
+        assert!(matches!(
+            func.blocks[0].instructions[0],
+            IrInstr::Const { .. }
+        ));
+        assert!(matches!(
+            func.blocks[0].instructions[1],
+            IrInstr::Const { .. }
+        ));
     }
 }

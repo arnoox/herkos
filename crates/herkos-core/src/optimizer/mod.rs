@@ -20,13 +20,13 @@ mod copy_prop;
 mod dead_blocks;
 
 // ── Post-lowering passes ─────────────────────────────────────────────────────
+mod branch_fold;
 mod dead_instrs;
 mod empty_blocks;
-mod merge_blocks;
-mod branch_fold;
 mod gvn;
 mod licm;
 mod local_cse;
+mod merge_blocks;
 
 /// Optimizes the pure SSA IR before phi lowering.
 ///
@@ -70,7 +70,7 @@ pub fn optimize_lowered_ir(
                 dead_instrs::eliminate(func);
                 branch_fold::eliminate(func);
                 dead_instrs::eliminate(func);
-                licm::eliminate(func);
+                // licm::eliminate(func);
             }
         }
     }
