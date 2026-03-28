@@ -11,9 +11,9 @@
 //!    the source without going through the header
 //! 4. For each loop, identify invariant instructions in the header (fixpoint):
 //!    - `Const` — trivially invariant
-//!    - `BinOp`, `UnOp`, `Assign`, `Select` — invariant if all operands are
+//!    - `BinOp`, `UnOp`, `Select` — invariant if all operands are
 //!      defined outside the loop or by other invariant instructions
-//!    - Skip: `Load`, `Store`, `Call*`, `Global*`, `Memory*`
+//!    - Skip: `Assign`, `Load`, `Store`, `Call*`, `Global*`, `Memory*`
 //! 5. Create or reuse a preheader block and move invariant instructions there
 //!
 //! **V1 simplification:** only hoists from the loop header block (which
@@ -92,17 +92,25 @@ fn find_natural_loops(
     back_edges: &[(BlockId, BlockId)],
     preds: &HashMap<BlockId, HashSet<BlockId>>,
 ) -> Vec<(BlockId, HashSet<BlockId>)> {
+    // Map from loop header → set of all blocks in that loop.
     let mut loops: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
 
     for &(src, header) in back_edges {
+        // Seed the loop with its header. Multiple back edges to the same header
+        // share one entry, so their bodies are merged into a single loop.
         let loop_blocks = loops.entry(header).or_insert_with(|| {
             let mut set = HashSet::new();
             set.insert(header);
             set
         });
 
+        // Walk backwards from `src` through predecessors, collecting every block
+        // that can reach `src` without leaving the loop. The header acts as the
+        // boundary: it is already in the set, so `insert` returns false and we
+        // stop propagating past it.
         let mut worklist = vec![src];
         while let Some(n) = worklist.pop() {
+            // `insert` returns true only for newly-seen blocks, avoiding cycles.
             if loop_blocks.insert(n) {
                 if let Some(n_preds) = preds.get(&n) {
                     for &p in n_preds {
@@ -129,7 +137,6 @@ fn is_licm_hoistable(instr: &IrInstr) -> bool {
         IrInstr::Const { .. }
             | IrInstr::BinOp { .. }
             | IrInstr::UnOp { .. }
-            | IrInstr::Assign { .. }
             | IrInstr::Select { .. }
     )
 }
@@ -1250,6 +1257,113 @@ mod tests {
         assert_eq!(
             *loop_blocks,
             HashSet::from([BlockId(1), BlockId(2), BlockId(3)])
+        );
+    }
+
+    // ── Assign (counter reset) must NOT be hoisted from inner loop ────────
+    //
+    // Regression test for: `IrInstr::Assign` appearing in `is_licm_hoistable`
+    // caused inner-loop counter resets to be hoisted to the outer preheader,
+    // executing only once per function call rather than once per outer iteration.
+    // This produced an effectively infinite loop in nested-loop programs such as
+    // a bubble sort (fill_sort_sum benchmark).
+    //
+    // CFG (outer ← B0→B1 back-edge; inner ← B3→B2 back-edge):
+    //
+    //   B0 (outer-preheader): Jump → B1
+    //   B1 (outer-header):    BranchIf(cond_outer, B2, B5)
+    //   B2 (inner-header):    v_init = Const(0)
+    //                         j = Assign(v_init)   ← counter reset
+    //                         BranchIf(cond_inner, B3, B4)
+    //   B3 (inner-body):      Jump → B2            ← inner back-edge
+    //   B4 (inner-exit):      Jump → B1            ← outer back-edge
+    //   B5 (outer-exit):      Return
+    //
+    // Before the fix: LICM on the inner loop (header = B2) would see v_init as a
+    // Const (trivially invariant) and then, via the fixpoint, classify
+    // `j = Assign(v_init)` as invariant too (because v_init is in
+    // invariant_dests). Both get hoisted to the outer preheader B0. On every
+    // outer iteration B2's instructions are already gone, so `j` is never
+    // reset — the inner loop runs with a stale, ever-growing `j`, hanging.
+    //
+    // After the fix: Assign is excluded from is_licm_hoistable, so only v_init
+    // is hoisted (to B0), while `j = Assign(v_init)` stays in B2 and resets the
+    // counter correctly on every outer iteration.
+    #[test]
+    fn assign_counter_reset_not_hoisted_from_inner_loop() {
+        // Variable map:
+        //   VarId(0) = cond_outer  (defined externally, used in B1)
+        //   VarId(1) = cond_inner  (defined externally, used in B2)
+        //   VarId(2) = v_init      (Const 0, defined in inner header B2)
+        //   VarId(3) = j           (Assign(v_init), inner loop counter, in B2)
+        let mut func = make_func(vec![
+            // B0 outer preheader
+            IrBlock {
+                id: BlockId(0),
+                instructions: vec![],
+                terminator: IrTerminator::Jump { target: BlockId(1) },
+            },
+            // B1 outer header
+            IrBlock {
+                id: BlockId(1),
+                instructions: vec![],
+                terminator: IrTerminator::BranchIf {
+                    condition: VarId(0),
+                    if_true: BlockId(2),
+                    if_false: BlockId(5),
+                },
+            },
+            // B2 inner header: v_init = Const(0); j = Assign(v_init)
+            IrBlock {
+                id: BlockId(2),
+                instructions: vec![
+                    IrInstr::Const {
+                        dest: VarId(2),
+                        value: IrValue::I32(0),
+                    },
+                    IrInstr::Assign {
+                        dest: VarId(3),
+                        src: VarId(2),
+                    },
+                ],
+                terminator: IrTerminator::BranchIf {
+                    condition: VarId(1),
+                    if_true: BlockId(3),
+                    if_false: BlockId(4),
+                },
+            },
+            // B3 inner body → back-edge to inner header B2
+            IrBlock {
+                id: BlockId(3),
+                instructions: vec![],
+                terminator: IrTerminator::Jump { target: BlockId(2) },
+            },
+            // B4 inner exit → back-edge to outer header B1
+            IrBlock {
+                id: BlockId(4),
+                instructions: vec![],
+                terminator: IrTerminator::Jump { target: BlockId(1) },
+            },
+            // B5 outer exit
+            IrBlock {
+                id: BlockId(5),
+                instructions: vec![],
+                terminator: IrTerminator::Return { value: None },
+            },
+        ]);
+
+        eliminate(&mut func);
+
+        // The Assign (j = Assign(v_init)) MUST remain in the inner header B2.
+        // If it were hoisted to the outer preheader the counter reset would only
+        // happen once per function call, not once per outer iteration.
+        let inner_header = func.blocks.iter().find(|b| b.id == BlockId(2)).unwrap();
+        assert!(
+            inner_header
+                .instructions
+                .iter()
+                .any(|i| matches!(i, IrInstr::Assign { dest: VarId(3), .. })),
+            "j = Assign(v_init) must stay in the inner header B2, not be hoisted"
         );
     }
 }
