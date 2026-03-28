@@ -5,55 +5,10 @@
 //! considered (`BinOp`, `UnOp`, `Const`). Duplicates are replaced with
 //! `Assign { dest, src: previous_result }`, which copy propagation cleans up.
 
-use crate::ir::{BinOp, IrFunction, IrInstr, IrValue, UnOp, VarId};
+use crate::ir::{IrFunction, IrInstr, VarId};
 use std::collections::HashMap;
 
-use super::utils::{is_commutative, prune_dead_locals};
-
-// ── Value key ────────────────────────────────────────────────────────────────
-
-/// Hashable representation of a pure computation for deduplication.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum ValueKey {
-    /// Constant value (using bit-level equality for floats).
-    Const(ConstKey),
-
-    /// Binary operation with operand variable IDs.
-    BinOp { op: BinOp, lhs: VarId, rhs: VarId },
-
-    /// Unary operation with operand variable ID.
-    UnOp { op: UnOp, operand: VarId },
-}
-
-/// Bit-level constant key that implements Eq/Hash correctly for floats.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum ConstKey {
-    I32(i32),
-    I64(i64),
-    F32(u32),
-    F64(u64),
-}
-
-impl From<IrValue> for ConstKey {
-    fn from(v: IrValue) -> Self {
-        match v {
-            IrValue::I32(x) => ConstKey::I32(x),
-            IrValue::I64(x) => ConstKey::I64(x),
-            IrValue::F32(x) => ConstKey::F32(x.to_bits()),
-            IrValue::F64(x) => ConstKey::F64(x.to_bits()),
-        }
-    }
-}
-
-/// Build a `ValueKey` for a `BinOp`, normalizing operand order for commutative ops.
-fn binop_key(op: BinOp, lhs: VarId, rhs: VarId) -> ValueKey {
-    let (lhs, rhs) = if is_commutative(&op) && lhs.0 > rhs.0 {
-        (rhs, lhs)
-    } else {
-        (lhs, rhs)
-    };
-    ValueKey::BinOp { op, lhs, rhs }
-}
+use super::utils::{binop_key, prune_dead_locals, ConstKey, ValueKey};
 
 // ── Pass entry point ─────────────────────────────────────────────────────────
 
@@ -132,7 +87,7 @@ pub fn eliminate(func: &mut IrFunction) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{BlockId, IrBlock, IrTerminator, TypeIdx, WasmType};
+    use crate::ir::{BinOp, BlockId, IrBlock, IrTerminator, IrValue, TypeIdx, UnOp, WasmType};
 
     /// Helper: create a minimal IrFunction with the given blocks.
     fn make_func(blocks: Vec<IrBlock>) -> IrFunction {

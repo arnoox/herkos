@@ -22,235 +22,12 @@
 //! **Only pure instructions are eligible.**  Loads, calls, and memory ops are
 //! never deduplicated (they may trap or have observable side effects).
 
-use super::utils::{build_predecessors, instr_dest, prune_dead_locals, terminator_successors};
-use crate::ir::{BinOp, BlockId, IrFunction, IrInstr, IrValue, UnOp, VarId};
-use std::collections::{HashMap, HashSet};
-
-// ── Value key ────────────────────────────────────────────────────────────────
-
-/// Hashable representation of a pure computation for deduplication.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum ValueKey {
-    Const(ConstKey),
-    BinOp { op: BinOp, lhs: VarId, rhs: VarId },
-    UnOp { op: UnOp, operand: VarId },
-}
-
-/// Bit-level constant key that implements `Eq`/`Hash` correctly for floats.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum ConstKey {
-    I32(i32),
-    I64(i64),
-    F32(u32),
-    F64(u64),
-}
-
-impl From<IrValue> for ConstKey {
-    fn from(v: IrValue) -> Self {
-        match v {
-            IrValue::I32(x) => ConstKey::I32(x),
-            IrValue::I64(x) => ConstKey::I64(x),
-            IrValue::F32(x) => ConstKey::F32(x.to_bits()),
-            IrValue::F64(x) => ConstKey::F64(x.to_bits()),
-        }
-    }
-}
-
-fn is_commutative(op: &BinOp) -> bool {
-    matches!(
-        op,
-        BinOp::I32Add
-            | BinOp::I32Mul
-            | BinOp::I32And
-            | BinOp::I32Or
-            | BinOp::I32Xor
-            | BinOp::I32Eq
-            | BinOp::I32Ne
-            | BinOp::I64Add
-            | BinOp::I64Mul
-            | BinOp::I64And
-            | BinOp::I64Or
-            | BinOp::I64Xor
-            | BinOp::I64Eq
-            | BinOp::I64Ne
-            | BinOp::F32Add
-            | BinOp::F32Mul
-            | BinOp::F32Eq
-            | BinOp::F32Ne
-            | BinOp::F64Add
-            | BinOp::F64Mul
-            | BinOp::F64Eq
-            | BinOp::F64Ne
-    )
-}
-
-fn binop_key(op: BinOp, lhs: VarId, rhs: VarId) -> ValueKey {
-    let (lhs, rhs) = if is_commutative(&op) && lhs.0 > rhs.0 {
-        (rhs, lhs)
-    } else {
-        (lhs, rhs)
-    };
-    ValueKey::BinOp { op, lhs, rhs }
-}
-
-// ── Multi-definition detection ───────────────────────────────────────────────
-
-/// Build the set of variables defined more than once across the function.
-///
-/// After phi lowering the code is no longer in strict SSA form: loop phi
-/// variables receive an initial assignment in the pre-loop block and a
-/// back-edge update at the end of each iteration.  These variables carry
-/// different values at different program points, so any BinOp/UnOp that uses
-/// them cannot be safely hoisted or deduplicated across blocks.
-///
-/// `Const` instructions are always safe (they have no operands).
-fn build_multi_def_vars(func: &IrFunction) -> HashSet<VarId> {
-    let mut def_count: HashMap<VarId, usize> = HashMap::new();
-    for block in &func.blocks {
-        for instr in &block.instructions {
-            if let Some(dest) = instr_dest(instr) {
-                *def_count.entry(dest).or_insert(0) += 1;
-            }
-        }
-    }
-    def_count
-        .into_iter()
-        .filter(|&(_, count)| count > 1)
-        .map(|(v, _)| v)
-        .collect()
-}
-
-// ── Dominator tree ───────────────────────────────────────────────────────────
-
-/// Compute the reverse-postorder traversal of the CFG starting from `entry`.
-fn compute_rpo(func: &IrFunction) -> Vec<BlockId> {
-    let block_idx: HashMap<BlockId, usize> = func
-        .blocks
-        .iter()
-        .enumerate()
-        .map(|(i, b)| (b.id, i))
-        .collect();
-
-    let mut visited = vec![false; func.blocks.len()];
-    let mut postorder = Vec::with_capacity(func.blocks.len());
-
-    dfs_postorder(
-        func,
-        func.entry_block,
-        &block_idx,
-        &mut visited,
-        &mut postorder,
-    );
-
-    postorder.reverse();
-    postorder
-}
-
-fn dfs_postorder(
-    func: &IrFunction,
-    block_id: BlockId,
-    block_idx: &HashMap<BlockId, usize>,
-    visited: &mut Vec<bool>,
-    postorder: &mut Vec<BlockId>,
-) {
-    let idx = match block_idx.get(&block_id) {
-        Some(&i) => i,
-        None => return,
-    };
-    if visited[idx] {
-        return;
-    }
-    visited[idx] = true;
-
-    for succ in terminator_successors(&func.blocks[idx].terminator) {
-        dfs_postorder(func, succ, block_idx, visited, postorder);
-    }
-    postorder.push(block_id);
-}
-
-/// Compute the immediate dominator of each block using Cooper/Harvey/Kennedy.
-///
-/// Returns `idom[b] = immediate dominator of b`, with `idom[entry] = entry`.
-fn compute_idoms(func: &IrFunction) -> HashMap<BlockId, BlockId> {
-    let rpo = compute_rpo(func);
-    // rpo_num[b] = index in RPO order (entry = 0, smallest index = processed first)
-    let rpo_num: HashMap<BlockId, usize> = rpo.iter().enumerate().map(|(i, &b)| (b, i)).collect();
-
-    let preds = build_predecessors(func);
-    let entry = func.entry_block;
-
-    let mut idom: HashMap<BlockId, BlockId> = HashMap::new();
-    idom.insert(entry, entry);
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-        // Process blocks in RPO order, skipping the entry.
-        for &b in rpo.iter().skip(1) {
-            let block_preds = &preds[&b];
-
-            // Start with the first predecessor that already has an idom assigned.
-            let mut new_idom = match block_preds
-                .iter()
-                .filter(|&&p| idom.contains_key(&p))
-                .min_by_key(|&&p| rpo_num[&p])
-            {
-                Some(&p) => p,
-                None => continue, // unreachable block — skip
-            };
-
-            // Intersect (walk up dom tree) with all other processed predecessors.
-            for &p in block_preds {
-                if p != new_idom && idom.contains_key(&p) {
-                    new_idom = intersect(p, new_idom, &idom, &rpo_num);
-                }
-            }
-
-            if idom.get(&b) != Some(&new_idom) {
-                idom.insert(b, new_idom);
-                changed = true;
-            }
-        }
-    }
-
-    idom
-}
-
-/// Walk up both fingers until they meet — the standard Cooper intersect.
-fn intersect(
-    mut a: BlockId,
-    mut b: BlockId,
-    idom: &HashMap<BlockId, BlockId>,
-    rpo_num: &HashMap<BlockId, usize>,
-) -> BlockId {
-    while a != b {
-        while rpo_num[&a] > rpo_num[&b] {
-            a = idom[&a];
-        }
-        while rpo_num[&b] > rpo_num[&a] {
-            b = idom[&b];
-        }
-    }
-    a
-}
-
-/// Build dominator-tree children from the `idom` map.
-fn build_dom_children(
-    idom: &HashMap<BlockId, BlockId>,
-    entry: BlockId,
-) -> HashMap<BlockId, Vec<BlockId>> {
-    let mut children: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
-    for (&b, &d) in idom {
-        if b != entry {
-            children.entry(d).or_default().push(b);
-        }
-    }
-    // Sort children for deterministic output.
-    for v in children.values_mut() {
-        v.sort_unstable_by_key(|id| id.0);
-    }
-    children
-}
+use super::utils::{
+    binop_key, build_dom_children, build_multi_def_vars, compute_idoms, instr_dest,
+    prune_dead_locals, ConstKey, ValueKey,
+};
+use crate::ir::{BlockId, IrFunction, IrInstr, VarId};
+use std::collections::HashMap;
 
 // ── GVN walk ─────────────────────────────────────────────────────────────────
 
@@ -265,7 +42,7 @@ fn collect_replacements(
     block_id: BlockId,
     dom_children: &HashMap<BlockId, Vec<BlockId>>,
     block_idx: &HashMap<BlockId, usize>,
-    multi_def_vars: &HashSet<VarId>,
+    multi_def_vars: &std::collections::HashSet<VarId>,
     value_map: &mut HashMap<ValueKey, VarId>,
     replacements: &mut HashMap<VarId, VarId>,
 ) {
@@ -367,8 +144,11 @@ pub fn eliminate(func: &mut IrFunction) {
         return; // nothing to do for single-block functions (local_cse covers those)
     }
 
+    // Step 1: Build the dominator tree (idom map → children map).
     let idom = compute_idoms(func);
     let dom_children = build_dom_children(&idom, func.entry_block);
+
+    // Step 2: Build a block-ID → slice-index map for O(1) block lookup.
     let block_idx: HashMap<BlockId, usize> = func
         .blocks
         .iter()
@@ -376,7 +156,13 @@ pub fn eliminate(func: &mut IrFunction) {
         .map(|(i, b)| (b.id, i))
         .collect();
 
+    // Step 3: Identify variables defined more than once (loop phi vars).
+    //         These are ineligible for cross-block deduplication.
     let multi_def_vars = build_multi_def_vars(func);
+
+    // Step 4: Walk the dominator tree in preorder, collecting replacements.
+    //         The scoped value_map ensures only dominator-block computations
+    //         are visible when processing each block.
     let mut value_map: HashMap<ValueKey, VarId> = HashMap::new();
     let mut replacements: HashMap<VarId, VarId> = HashMap::new();
 
@@ -394,6 +180,8 @@ pub fn eliminate(func: &mut IrFunction) {
         return;
     }
 
+    // Step 5: Rewrite each redundant instruction to Assign { dest, src: first_var }.
+    //         Copy-propagation (run as part of the pipeline) will clean up the Assigns.
     for block in &mut func.blocks {
         for instr in &mut block.instructions {
             if let Some(dest) = instr_dest(instr) {
@@ -404,6 +192,7 @@ pub fn eliminate(func: &mut IrFunction) {
         }
     }
 
+    // Step 6: Remove locals that are no longer referenced after rewriting.
     prune_dead_locals(func);
 }
 
@@ -412,7 +201,7 @@ pub fn eliminate(func: &mut IrFunction) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{IrBlock, IrTerminator, IrValue, TypeIdx, WasmType};
+    use crate::ir::{BinOp, IrBlock, IrTerminator, IrValue, TypeIdx, WasmType};
 
     fn make_func(blocks: Vec<IrBlock>) -> IrFunction {
         IrFunction {
