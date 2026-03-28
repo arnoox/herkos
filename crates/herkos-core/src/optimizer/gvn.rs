@@ -130,7 +130,9 @@ fn collect_replacements(
         }
     }
 
-    // Pop this block's scope.
+    // Pop this block's scope so sibling blocks don't inherit our entries.
+    // Siblings are not dominated by this block, so a computation seen here
+    // is not guaranteed to have executed when a sibling is reached.
     for key in frame_keys {
         value_map.remove(&key);
     }

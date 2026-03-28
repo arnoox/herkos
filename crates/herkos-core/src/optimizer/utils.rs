@@ -495,6 +495,26 @@ pub fn build_multi_def_vars(func: &IrFunction) -> HashSet<VarId> {
 /// dominates.  This ordering is required by the Cooper/Harvey/Kennedy iterative
 /// dominator algorithm, which relies on processing a block's dominators before
 /// the block itself.
+///
+/// For example, given the CFG:
+///
+/// ```text
+///   entry
+///   /   \
+///  A     B
+///   \   /
+///     C
+/// ```
+///
+/// DFS visits entry → A → C → B (postorder: C, A, B, entry or C, B, A, entry
+/// depending on successor order).  Reversing gives RPO:
+///
+/// ```text
+/// [entry, A, B, C]
+/// ```
+///
+/// `entry` is always first; `C` is always last because it is reachable only
+/// after both `A` and `B`.
 pub fn compute_rpo(func: &IrFunction) -> Vec<BlockId> {
     let block_idx: HashMap<BlockId, usize> = func
         .blocks
@@ -552,6 +572,18 @@ fn dfs_postorder(
 ///
 /// Returns a map `idom` where `idom[b]` is the immediate dominator of `b`.
 /// The entry block is its own immediate dominator: `idom[entry] = entry`.
+///
+/// A block `d` dominates block `b` if `d` appears on *every* path from the
+/// entry block to `b`.  For example, given:
+///
+/// ```text
+/// entry → A → B
+/// entry → C → B
+/// ```
+///
+/// `entry` dominates `B` (it is on every path), but `A` and `C` do not.
+/// The immediate dominator is the closest such dominator — the last one
+/// before `b` in the dominator tree.
 ///
 /// The algorithm works by repeatedly intersecting predecessor dominators in RPO
 /// until a fixed point is reached.  Because blocks are processed in RPO order,
@@ -623,6 +655,24 @@ fn intersect(
 ///
 /// For each block `b` (except the entry), `children[idom[b]]` gains `b` as a
 /// child.  Children are sorted by block ID for deterministic traversal order.
+///
+/// For example, given the CFG:
+///
+/// ```text
+///       entry
+///      /     \
+///     A       B
+///    / \
+///   C   D
+/// ```
+///
+/// The `idom` map is `{ A → entry, B → entry, C → A, D → A }`, and the
+/// resulting children map is:
+///
+/// ```text
+/// entry → [A, B]
+/// A     → [C, D]
+/// ```
 pub fn build_dom_children(
     idom: &HashMap<BlockId, BlockId>,
     entry: BlockId,
