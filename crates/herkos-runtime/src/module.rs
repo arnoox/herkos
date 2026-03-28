@@ -102,7 +102,7 @@ pub struct LibraryModule<G, const TABLE_SIZE: usize> {
 impl<G, const TABLE_SIZE: usize> LibraryModule<G, TABLE_SIZE> {
     /// Create a new library module with the given globals and table.
     #[inline]
-    pub fn new(globals: G, table: Table<TABLE_SIZE>) -> Self {
+    pub const fn new(globals: G, table: Table<TABLE_SIZE>) -> Self {
         Self { globals, table }
     }
 }

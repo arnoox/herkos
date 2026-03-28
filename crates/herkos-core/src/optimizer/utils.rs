@@ -420,6 +420,276 @@ pub fn prune_dead_locals(func: &mut IrFunction) {
     func.locals.retain(|(var, _)| live.contains(var));
 }
 
+// ── Value key ────────────────────────────────────────────────────────────────
+
+/// Hashable representation of a pure computation for deduplication.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ValueKey {
+    /// Constant value (using bit-level equality for floats).
+    Const(ConstKey),
+    /// Binary operation with operand variable IDs.
+    BinOp { op: BinOp, lhs: VarId, rhs: VarId },
+    /// Unary operation with operand variable ID.
+    UnOp { op: UnOp, operand: VarId },
+}
+
+/// Build a [`ValueKey`] for a `BinOp`, normalizing operand order for commutative ops.
+pub fn binop_key(op: BinOp, lhs: VarId, rhs: VarId) -> ValueKey {
+    let (lhs, rhs) = if is_commutative(&op) && lhs.0 > rhs.0 {
+        (rhs, lhs)
+    } else {
+        (lhs, rhs)
+    };
+    ValueKey::BinOp { op, lhs, rhs }
+}
+
+/// Bit-level constant key that implements `Eq`/`Hash` correctly for floats.
+///
+/// Floats have no `Eq` or `Hash` impl in Rust because NaN != NaN.  This type
+/// stores the raw bit pattern instead, so two constants with identical bits
+/// hash to the same bucket and compare equal — matching Wasm's value semantics.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ConstKey {
+    I32(i32),
+    I64(i64),
+    F32(u32),
+    F64(u64),
+}
+
+impl From<IrValue> for ConstKey {
+    fn from(v: IrValue) -> Self {
+        match v {
+            IrValue::I32(x) => ConstKey::I32(x),
+            IrValue::I64(x) => ConstKey::I64(x),
+            IrValue::F32(x) => ConstKey::F32(x.to_bits()),
+            IrValue::F64(x) => ConstKey::F64(x.to_bits()),
+        }
+    }
+}
+
+// ── Multi-definition detection ────────────────────────────────────────────────
+
+/// Build the set of variables defined more than once across the function.
+///
+/// After phi lowering the code is no longer in strict SSA form: loop phi
+/// variables receive an initial assignment in the pre-loop block and a
+/// back-edge update at the end of each iteration.  These variables carry
+/// different values at different program points, so any `BinOp`/`UnOp` that
+/// uses them cannot be safely deduplicated across blocks.
+///
+/// `Const` instructions are always safe to deduplicate (they have no operands).
+pub fn build_multi_def_vars(func: &IrFunction) -> HashSet<VarId> {
+    build_global_def_count(func)
+        .into_iter()
+        .filter(|&(_, count)| count > 1)
+        .map(|(v, _)| v)
+        .collect()
+}
+
+// ── Dominator tree ────────────────────────────────────────────────────────────
+
+/// Compute the reverse-postorder (RPO) traversal of the CFG from `entry_block`.
+///
+/// RPO is the reverse of the DFS postorder: nodes are visited only after all
+/// their DFS-tree predecessors, so every dominator appears before the blocks it
+/// dominates.  This ordering is required by the Cooper/Harvey/Kennedy iterative
+/// dominator algorithm, which relies on processing a block's dominators before
+/// the block itself.
+///
+/// For example, given the CFG:
+///
+/// ```text
+///   entry
+///   /   \
+///  A     B
+///   \   /
+///     C
+/// ```
+///
+/// DFS visits entry → A → C → B (postorder: C, A, B, entry or C, B, A, entry
+/// depending on successor order).  Reversing gives RPO:
+///
+/// ```text
+/// [entry, A, B, C]
+/// ```
+///
+/// `entry` is always first; `C` is always last because it is reachable only
+/// after both `A` and `B`.
+pub fn compute_rpo(func: &IrFunction) -> Vec<BlockId> {
+    let block_idx: HashMap<BlockId, usize> = func
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.id, i))
+        .collect();
+
+    let mut visited = vec![false; func.blocks.len()];
+    let mut postorder = Vec::with_capacity(func.blocks.len());
+
+    dfs_postorder(
+        func,
+        func.entry_block,
+        &block_idx,
+        &mut visited,
+        &mut postorder,
+    );
+
+    postorder.reverse();
+    postorder
+}
+
+/// Recursive DFS helper that appends `block_id` to `postorder` after visiting
+/// all of its successors.
+///
+/// Each block is visited at most once (guarded by `visited`).  Unreachable
+/// blocks — those not reachable from the entry — are never pushed and therefore
+/// absent from the final RPO, which is the desired behaviour: the dominator
+/// algorithm only needs to reason about reachable blocks.
+fn dfs_postorder(
+    func: &IrFunction,
+    block_id: BlockId,
+    block_idx: &HashMap<BlockId, usize>,
+    visited: &mut Vec<bool>,
+    postorder: &mut Vec<BlockId>,
+) {
+    let idx = match block_idx.get(&block_id) {
+        Some(&i) => i,
+        None => return,
+    };
+    if visited[idx] {
+        return;
+    }
+    visited[idx] = true;
+
+    for succ in terminator_successors(&func.blocks[idx].terminator) {
+        dfs_postorder(func, succ, block_idx, visited, postorder);
+    }
+    postorder.push(block_id);
+}
+
+/// Compute the immediate dominator of each block using the Cooper/Harvey/Kennedy
+/// iterative algorithm.
+///
+/// Returns a map `idom` where `idom[b]` is the immediate dominator of `b`.
+/// The entry block is its own immediate dominator: `idom[entry] = entry`.
+///
+/// A block `d` dominates block `b` if `d` appears on *every* path from the
+/// entry block to `b`.  For example, given:
+///
+/// ```text
+/// entry → A → B
+/// entry → C → B
+/// ```
+///
+/// `entry` dominates `B` (it is on every path), but `A` and `C` do not.
+/// The immediate dominator is the closest such dominator — the last one
+/// before `b` in the dominator tree.
+///
+/// The algorithm works by repeatedly intersecting predecessor dominators in RPO
+/// until a fixed point is reached.  Because blocks are processed in RPO order,
+/// most dominators converge in a single pass over the function.
+pub fn compute_idoms(func: &IrFunction) -> HashMap<BlockId, BlockId> {
+    let rpo = compute_rpo(func);
+    // rpo_num[b] = index in RPO order (entry = 0, smallest = processed first).
+    let rpo_num: HashMap<BlockId, usize> = rpo.iter().enumerate().map(|(i, &b)| (b, i)).collect();
+
+    let preds = build_predecessors(func);
+    let entry = func.entry_block;
+
+    let mut idom: HashMap<BlockId, BlockId> = HashMap::new();
+    idom.insert(entry, entry);
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+        // Process blocks in RPO order, skipping the entry.
+        for &b in rpo.iter().skip(1) {
+            let block_preds = &preds[&b];
+
+            // Start with the first predecessor that already has an idom assigned.
+            let mut new_idom = match block_preds
+                .iter()
+                .filter(|&&p| idom.contains_key(&p))
+                .min_by_key(|&&p| rpo_num[&p])
+            {
+                Some(&p) => p,
+                None => continue, // unreachable block — skip
+            };
+
+            // Intersect (walk up dom tree) with all other processed predecessors.
+            for &p in block_preds {
+                if p != new_idom && idom.contains_key(&p) {
+                    new_idom = intersect(p, new_idom, &idom, &rpo_num);
+                }
+            }
+
+            if idom.get(&b) != Some(&new_idom) {
+                idom.insert(b, new_idom);
+                changed = true;
+            }
+        }
+    }
+
+    idom
+}
+
+/// Walk up both dom-tree fingers until they meet — the standard Cooper intersect.
+fn intersect(
+    mut a: BlockId,
+    mut b: BlockId,
+    idom: &HashMap<BlockId, BlockId>,
+    rpo_num: &HashMap<BlockId, usize>,
+) -> BlockId {
+    while a != b {
+        while rpo_num[&a] > rpo_num[&b] {
+            a = idom[&a];
+        }
+        while rpo_num[&b] > rpo_num[&a] {
+            b = idom[&b];
+        }
+    }
+    a
+}
+
+/// Build the dominator-tree children map from the `idom` map.
+///
+/// For each block `b` (except the entry), `children[idom[b]]` gains `b` as a
+/// child.  Children are sorted by block ID for deterministic traversal order.
+///
+/// For example, given the CFG:
+///
+/// ```text
+///       entry
+///      /     \
+///     A       B
+///    / \
+///   C   D
+/// ```
+///
+/// The `idom` map is `{ A → entry, B → entry, C → A, D → A }`, and the
+/// resulting children map is:
+///
+/// ```text
+/// entry → [A, B]
+/// A     → [C, D]
+/// ```
+pub fn build_dom_children(
+    idom: &HashMap<BlockId, BlockId>,
+    entry: BlockId,
+) -> HashMap<BlockId, Vec<BlockId>> {
+    let mut children: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
+    for (&b, &d) in idom {
+        if b != entry {
+            children.entry(d).or_default().push(b);
+        }
+    }
+    // Sort children for deterministic output.
+    for v in children.values_mut() {
+        v.sort_unstable_by_key(|id| id.0);
+    }
+    children
+}
+
 // ── Side-effect classification ───────────────────────────────────────────────
 
 /// Returns `true` if the instruction is side-effect-free and can be safely
@@ -466,6 +736,37 @@ pub fn is_side_effect_free(instr: &IrInstr) -> bool {
     }
 }
 
+// ── Commutative op detection ─────────────────────────────────────────────────
+
+/// Returns true for operations where `op(a, b) == op(b, a)`.
+pub fn is_commutative(op: &BinOp) -> bool {
+    matches!(
+        op,
+        BinOp::I32Add
+            | BinOp::I32Mul
+            | BinOp::I32And
+            | BinOp::I32Or
+            | BinOp::I32Xor
+            | BinOp::I32Eq
+            | BinOp::I32Ne
+            | BinOp::I64Add
+            | BinOp::I64Mul
+            | BinOp::I64And
+            | BinOp::I64Or
+            | BinOp::I64Xor
+            | BinOp::I64Eq
+            | BinOp::I64Ne
+            | BinOp::F32Add
+            | BinOp::F32Mul
+            | BinOp::F32Eq
+            | BinOp::F32Ne
+            | BinOp::F64Add
+            | BinOp::F64Mul
+            | BinOp::F64Eq
+            | BinOp::F64Ne
+    )
+}
+
 // ── Rewrite terminator block targets ─────────────────────────────────────────
 
 /// Rewrite all block-ID references in a terminator from `old` to `new`.
@@ -493,6 +794,14 @@ pub fn rewrite_terminator_target(term: &mut IrTerminator, old: BlockId, new: Blo
         }
         IrTerminator::Return { .. } | IrTerminator::Unreachable => {}
     }
+}
+
+/// Returns `true` if `var` is known to be zero according to `consts`.
+pub fn is_zero(var: VarId, consts: &HashMap<VarId, IrValue>) -> bool {
+    matches!(
+        consts.get(&var),
+        Some(IrValue::I32(0)) | Some(IrValue::I64(0))
+    )
 }
 
 /// Variables with exactly one definition across the function that is a `Const`
