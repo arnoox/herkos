@@ -20,7 +20,8 @@
 //! dominates all loop blocks by definition).
 
 use super::utils::{
-    build_predecessors, for_each_use, instr_dest, rewrite_terminator_target, terminator_successors,
+    build_predecessors, compute_idoms, for_each_use, instr_dest, rewrite_terminator_target,
+    terminator_successors,
 };
 use crate::ir::{BlockId, IrBlock, IrFunction, IrInstr, IrTerminator, VarId};
 use std::collections::{HashMap, HashSet};
@@ -32,8 +33,8 @@ pub fn eliminate(func: &mut IrFunction) {
     }
 
     let preds = build_predecessors(func);
-    let dominators = compute_dominators(func, &preds);
-    let back_edges = find_back_edges(func, &dominators);
+    let idom = compute_idoms(func);
+    let back_edges = find_back_edges(func, &idom);
 
     if back_edges.is_empty() {
         return;
@@ -46,81 +47,33 @@ pub fn eliminate(func: &mut IrFunction) {
     }
 }
 
-// ── Dominator computation ────────────────────────────────────────────────────
-
-/// Compute the dominator set for each block using the iterative algorithm.
-///
-/// Returns a map from each block to the set of blocks that dominate it.
-fn compute_dominators(
-    func: &IrFunction,
-    preds: &HashMap<BlockId, HashSet<BlockId>>,
-) -> HashMap<BlockId, HashSet<BlockId>> {
-    let entry = func.entry_block;
-    let all_block_ids: HashSet<BlockId> = func.blocks.iter().map(|b| b.id).collect();
-
-    let mut dom: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
-    dom.insert(entry, HashSet::from([entry]));
-
-    for block in &func.blocks {
-        if block.id != entry {
-            dom.insert(block.id, all_block_ids.clone());
-        }
-    }
-
-    loop {
-        let mut changed = false;
-        for block in &func.blocks {
-            if block.id == entry {
-                continue;
-            }
-            let pred_set = &preds[&block.id];
-            if pred_set.is_empty() {
-                continue;
-            }
-
-            // new_dom = {self} ∪ ∩(dom[p] for p in preds)
-            let mut new_dom: Option<HashSet<BlockId>> = None;
-            for p in pred_set {
-                if let Some(p_dom) = dom.get(p) {
-                    new_dom = Some(match new_dom {
-                        None => p_dom.clone(),
-                        Some(current) => current.intersection(p_dom).copied().collect(),
-                    });
-                }
-            }
-
-            let mut new_dom = new_dom.unwrap_or_default();
-            new_dom.insert(block.id);
-
-            if new_dom != dom[&block.id] {
-                dom.insert(block.id, new_dom);
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-
-    dom
-}
-
 // ── Back edge detection ──────────────────────────────────────────────────────
+
+/// Returns `true` if `d` dominates `b` according to the idom tree.
+fn dominates(d: BlockId, b: BlockId, idom: &HashMap<BlockId, BlockId>) -> bool {
+    let mut cur = b;
+    loop {
+        if cur == d {
+            return true;
+        }
+        match idom.get(&cur) {
+            Some(&parent) if parent != cur => cur = parent,
+            _ => return false,
+        }
+    }
+}
 
 /// Find all back edges in the CFG.
 ///
 /// A back edge is (src, tgt) where tgt dominates src.
 fn find_back_edges(
     func: &IrFunction,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    idom: &HashMap<BlockId, BlockId>,
 ) -> Vec<(BlockId, BlockId)> {
     let mut back_edges = Vec::new();
     for block in &func.blocks {
         for succ in terminator_successors(&block.terminator) {
-            if dominators
-                .get(&block.id)
-                .is_some_and(|dom_set| dom_set.contains(&succ))
-            {
+            if dominates(succ, block.id, idom) {
                 back_edges.push((block.id, succ));
             }
         }
@@ -1186,15 +1139,11 @@ mod tests {
             },
         ]);
 
-        let preds = build_predecessors(&func);
-        let dom = compute_dominators(&func, &preds);
+        let idom = compute_idoms(&func);
 
-        assert_eq!(dom[&BlockId(0)], HashSet::from([BlockId(0)]));
-        assert_eq!(dom[&BlockId(1)], HashSet::from([BlockId(0), BlockId(1)]));
-        assert_eq!(
-            dom[&BlockId(2)],
-            HashSet::from([BlockId(0), BlockId(1), BlockId(2)])
-        );
+        assert_eq!(idom[&BlockId(0)], BlockId(0)); // entry is its own idom
+        assert_eq!(idom[&BlockId(1)], BlockId(0));
+        assert_eq!(idom[&BlockId(2)], BlockId(1));
     }
 
     #[test]
@@ -1227,11 +1176,12 @@ mod tests {
             },
         ]);
 
-        let preds = build_predecessors(&func);
-        let dom = compute_dominators(&func, &preds);
+        let idom = compute_idoms(&func);
 
-        // B3 is dominated by B0 (only common dominator of B1 and B2).
-        assert_eq!(dom[&BlockId(3)], HashSet::from([BlockId(0), BlockId(3)]));
+        // B3's idom is B0 — the only block that dominates both B1 and B2.
+        assert_eq!(idom[&BlockId(3)], BlockId(0));
+        assert_eq!(idom[&BlockId(1)], BlockId(0));
+        assert_eq!(idom[&BlockId(2)], BlockId(0));
     }
 
     #[test]
@@ -1255,9 +1205,8 @@ mod tests {
             },
         ]);
 
-        let preds = build_predecessors(&func);
-        let dom = compute_dominators(&func, &preds);
-        let back_edges = find_back_edges(&func, &dom);
+        let idom = compute_idoms(&func);
+        let back_edges = find_back_edges(&func, &idom);
 
         assert_eq!(back_edges.len(), 1);
         assert_eq!(back_edges[0], (BlockId(2), BlockId(1)));
@@ -1291,8 +1240,8 @@ mod tests {
         ]);
 
         let preds = build_predecessors(&func);
-        let dom = compute_dominators(&func, &preds);
-        let back_edges = find_back_edges(&func, &dom);
+        let idom = compute_idoms(&func);
+        let back_edges = find_back_edges(&func, &idom);
         let loops = find_natural_loops(&back_edges, &preds);
 
         assert_eq!(loops.len(), 1);
