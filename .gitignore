@@ -29,6 +29,9 @@ docs/.ub_cache/
 *.profraw
 *.profdata
 
+# Transpiler output baselines (created by scripts/transpile_diff.sh)
+.herkos-baselines/
+
 # Temporary files
 *.tmp
 *.bak
