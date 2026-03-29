@@ -66,10 +66,7 @@ fn dominates(d: BlockId, b: BlockId, idom: &HashMap<BlockId, BlockId>) -> bool {
 /// Find all back edges in the CFG.
 ///
 /// A back edge is (src, tgt) where tgt dominates src.
-fn find_back_edges(
-    func: &IrFunction,
-    idom: &HashMap<BlockId, BlockId>,
-) -> Vec<(BlockId, BlockId)> {
+fn find_back_edges(func: &IrFunction, idom: &HashMap<BlockId, BlockId>) -> Vec<(BlockId, BlockId)> {
     let mut back_edges = Vec::new();
     for block in &func.blocks {
         for succ in terminator_successors(&block.terminator) {
