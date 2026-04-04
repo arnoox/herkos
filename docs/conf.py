@@ -1,0 +1,94 @@
+# -- Project information -------------------------------------------------------
+
+project = "herkos"
+copyright = "2025-2026, herkos contributors"
+author = "herkos contributors"
+
+# -- General configuration -----------------------------------------------------
+
+extensions = [
+    "myst_parser",
+    "sphinx_needs",
+]
+
+source_suffix = {
+    ".md": "markdown",
+    ".rst": "restructuredtext",
+}
+
+master_doc = "index"
+exclude_patterns = ["_build", ".venv", "scripts"]
+
+# -- MyST configuration --------------------------------------------------------
+
+myst_enable_extensions = [
+    "colon_fence",
+    "fieldlist",
+]
+
+# -- sphinx-needs configuration ------------------------------------------------
+
+needs_types = [
+    {
+        "directive": "wasm_spec",
+        "title": "Wasm Spec",
+        "prefix": "WASM_",
+        "color": "#9DC3E6",
+        "style": "node",
+    },
+    {
+        "directive": "req",
+        "title": "Requirement",
+        "prefix": "REQ_",
+        "color": "#A9D18E",
+        "style": "node",
+    },
+    {
+        "directive": "spec",
+        "title": "Specification",
+        "prefix": "SPEC_",
+        "color": "#FFD966",
+        "style": "node",
+    },
+    {
+        "directive": "impl",
+        "title": "Implementation",
+        "prefix": "IMPL_",
+        "color": "#F4B183",
+        "style": "node",
+    },
+    {
+        "directive": "test",
+        "title": "Test",
+        "prefix": "TEST_",
+        "color": "#C5B0D5",
+        "style": "node",
+    },
+]
+
+needs_fields = {
+    "wasm_section": {"type": str, "default": "", "description": "Wasm spec section reference"},
+    "source_file": {"type": str, "default": "", "description": "Source file path"},
+    "wasm_opcode": {"type": str, "default": "", "description": "Wasm opcode name"},
+}
+
+needs_links = {
+    "satisfies": {
+        "incoming": "is_satisfied_by",
+        "copy": False,
+    },
+    "implements": {
+        "incoming": "is_implemented_by",
+        "copy": False,
+    },
+    "verifies": {
+        "incoming": "is_verified_by",
+        "copy": False,
+    },
+}
+
+needs_id_regex = "^[A-Z][A-Z0-9_]+"
+
+# -- HTML output ---------------------------------------------------------------
+
+html_theme = "alabaster"

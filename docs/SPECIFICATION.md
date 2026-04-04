@@ -68,12 +68,12 @@ The transpiler produces a self-contained Rust source file that depends only on `
 │  use herkos_runtime::*;                      │
 │                                              │
 │  struct Globals { ... }     ← mutable globals│
-│  const G1: i64 = 42;       ← immutable      │
+│  const G1: i64 = 42;       ← immutable       │
 │                                              │
 │  fn func_0(...) { ... }    ← Wasm functions  │
 │  fn func_1(...) { ... }                      │
 │                                              │
-│  struct Module<MAX_PAGES, TABLE_SIZE> {       │
+│  struct Module<MAX_PAGES, TABLE_SIZE> {      │
 │      memory: IsolatedMemory<MAX_PAGES>,      │
 │      globals: Globals,                       │
 │      table: Table<TABLE_SIZE>,               │
@@ -186,6 +186,14 @@ This section describes how WebAssembly concepts map to Rust types. This is the c
 
 ### 2.1 Memory Model
 
+```{spec} Memory Model
+:id: SPEC_MEMORY_MODEL
+:satisfies: REQ_MEM_PAGE_MODEL, REQ_MEM_COMPILE_TIME_SIZE, REQ_MEM_BOUNDS_CHECKED, REQ_MEM_GROW_NO_ALLOC
+:tags: memory
+
+How WebAssembly linear memory maps to `IsolatedMemory<MAX_PAGES>` in Rust.
+```
+
 #### 2.1.1 Page Model
 
 WebAssembly linear memory is organized in pages of 64 KiB (65,536 bytes). A Wasm module declares an initial page count and an optional maximum page count.
@@ -292,14 +300,22 @@ Key points:
 
 ### 2.2 Module Types
 
+```{spec} Module Types
+:id: SPEC_MODULE_TYPES
+:satisfies: REQ_MOD_TWO_TYPES
+:tags: module
+
+Process-like (owns memory) and library-like (borrows memory) module representations.
+```
+
 > Implementation: [crates/herkos-runtime/src/module.rs](../crates/herkos-runtime/src/module.rs)
 
 ```
                     ┌─────────────────────────────────────┐
-                    │         Module Taxonomy              │
+                    │         Module Taxonomy             │
                     ├──────────────────┬──────────────────┤
                     │                  │                  │
-              ┌─────┴─────┐    ┌──────┴──────┐   ┌──────┴──────┐
+              ┌─────┴───-──┐    ┌──────┴──────┐   ┌───-───┴─────┐
               │  Module    │    │ Library     │   │ Pure        │
               │ (owns mem) │    │ Module      │   │ (no memory) │
               │            │    │ (borrows)   │   │             │
@@ -335,6 +351,14 @@ struct LibraryModule<G, const TABLE_SIZE: usize> {
 | Module has no memory | `LibraryModule` with no memory parameter | Pure computation |
 
 ### 2.3 Globals and Tables
+
+```{spec} Globals and Tables
+:id: SPEC_GLOBALS_TABLES
+:satisfies: REQ_MOD_GLOBALS, REQ_MOD_TABLE
+:tags: module, global, table
+
+Globals as typed struct fields, tables for indirect call dispatch.
+```
 
 > Implementation: [crates/herkos-runtime/src/table.rs](../crates/herkos-runtime/src/table.rs)
 
@@ -374,6 +398,14 @@ table.set(2, Some(FuncRef { type_index: 0, func_index: 2 })).unwrap();
 
 ### 2.4 Imports as Trait Bounds
 
+```{spec} Imports as Trait Bounds
+:id: SPEC_IMPORTS
+:satisfies: REQ_CAP_IMPORTS, REQ_CAP_ZERO_COST
+:tags: capability, import
+
+Wasm imports mapped to Rust trait bounds for capability-based security.
+```
+
 Capabilities are Rust **traits**, not bitflags. A Wasm module's imports become trait bounds on its functions:
 
 ```rust
@@ -408,6 +440,14 @@ fn pure_math(a: i32, b: i32) -> i32 { a.wrapping_add(b) }
 | Inter-module linking | Not supported | Natural via trait composition |
 
 ### 2.5 Exports as Trait Implementations
+
+```{spec} Exports as Trait Implementations
+:id: SPEC_EXPORTS
+:satisfies: REQ_CAP_EXPORTS, REQ_CAP_ZERO_COST
+:tags: capability, export
+
+Wasm exports mapped to Rust trait implementations.
+```
 
 ```rust
 // Generated from: (export "transform" (func $transform))
@@ -465,6 +505,14 @@ impl WasiRandom for PosixHost { /* /dev/urandom */ }
 Custom platform-specific capabilities beyond WASI are just additional traits (e.g., `GpioOps`, `CanBusOps`).
 
 ### 2.7 Isolation Guarantees
+
+```{spec} Isolation Guarantees
+:id: SPEC_ISOLATION
+:satisfies: REQ_ISOLATION_COMPILE_TIME, REQ_FREEDOM_FROM_INTERFERENCE, REQ_ISOLATION_SPATIAL, REQ_ISOLATION_CAPABILITY
+:tags: isolation, safety
+
+Compile-time freedom from interference via Rust ownership model.
+```
 
 The ownership model enforces freedom from interference structurally:
 
@@ -695,6 +743,14 @@ This section describes how Wasm constructs map to Rust code in the safe backend.
 
 ### 4.1 Function Translation
 
+```{spec} Function Translation
+:id: SPEC_FUNCTION_TRANSLATION
+:satisfies: REQ_TRANS_FUNCTIONS, REQ_TRANS_DETERMINISTIC
+:tags: transpilation, function
+
+Wasm functions to Rust functions via SSA IR.
+```
+
 Wasm functions become Rust functions. Module state is threaded through as parameters:
 
 ```rust
@@ -725,6 +781,14 @@ Only state that the function actually uses is passed. A function with no memory 
 
 ### 4.2 Control Flow
 
+```{spec} Control Flow Mapping
+:id: SPEC_CONTROL_FLOW
+:satisfies: REQ_TRANS_CONTROL_FLOW
+:tags: transpilation, control
+
+Wasm structured control flow mapped to safe Rust (loop/break/if).
+```
+
 | Wasm | Rust |
 |------|------|
 | `block` | `'label: { ... }` labeled block |
@@ -737,6 +801,14 @@ Only state that the function actually uses is passed. A function with no memory 
 All blocks are labeled to support Wasm's structured branch targets.
 
 ### 4.3 Error Handling
+
+```{spec} Error Handling
+:id: SPEC_ERROR_HANDLING
+:satisfies: REQ_ERR_TRAPS
+:tags: transpilation, error
+
+Trap-based error handling via WasmTrap/WasmResult.
+```
 
 > Implementation: [crates/herkos-runtime/src/lib.rs](../crates/herkos-runtime/src/lib.rs)
 
@@ -758,6 +830,14 @@ No panics, no unwinding. The `?` operator propagates traps up the call stack.
 
 ### 4.4 Arithmetic Operations
 
+```{spec} Arithmetic Operations
+:id: SPEC_ARITHMETIC
+:satisfies: REQ_TRANS_FUNCTIONS
+:tags: transpilation, arithmetic
+
+Wasm arithmetic semantics (wrapping, trapping division, IEEE 754 floats).
+```
+
 > Implementation: [crates/herkos-runtime/src/ops.rs](../crates/herkos-runtime/src/ops.rs)
 
 Wasm arithmetic operations that can trap (division, remainder, truncation) return `WasmResult`:
@@ -771,6 +851,14 @@ fn i32_trunc_f32_s(a: f32) -> WasmResult<i32>;     // traps on out-of-range
 Non-trapping arithmetic uses Rust's wrapping operations (`wrapping_add`, `wrapping_mul`, etc.) per the Wasm spec.
 
 ### 4.5 Function Calls
+
+```{spec} Function Calls
+:id: SPEC_FUNCTION_CALLS
+:satisfies: REQ_TRANS_INDIRECT_CALLS, REQ_TRANS_TYPE_EQUIVALENCE
+:tags: transpilation, call
+
+Direct calls, indirect calls via table, structural type equivalence.
+```
 
 #### 4.5.1 Direct Calls (`call`)
 
@@ -816,6 +904,14 @@ Type 2: (i32) → i32       →  canonical = 2  (new signature)
 The transpiler builds a canonical type index mapping at transpile time. Both `FuncRef.type_index` and the type check use canonical indices. At runtime, the check is a simple integer comparison.
 
 ### 4.6 Bulk Memory Operations
+
+```{spec} Bulk Memory Operations
+:id: SPEC_BULK_MEMORY
+:satisfies: REQ_MEM_BULK_OPS, REQ_MEM_DATA_SEGMENTS
+:tags: transpilation, memory, bulk
+
+memory.fill, memory.init, data.drop, memory.copy.
+```
 
 > Implementation: [crates/herkos-runtime/src/memory.rs](../crates/herkos-runtime/src/memory.rs) lines 149–174
 

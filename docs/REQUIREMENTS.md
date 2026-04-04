@@ -57,6 +57,7 @@ herkos takes a different approach: **move the isolation guarantee from runtime h
 :id: REQ_MEM_PAGE_MODEL
 :status: open
 :tags: memory, wasm-spec
+:links: WASM_MEMORY_TYPE, WASM_MOD_MEMORIES, WASM_MEMORY_GROW
 Linear memory shall be organized in pages of 64 KiB (per the WebAssembly specification).
 Each module declares an initial page count and an optional maximum page count. The
 memory.grow instruction adds pages at runtime up to the declared maximum.
@@ -75,6 +76,7 @@ sized.
 :id: REQ_MEM_BOUNDS_CHECKED
 :status: open
 :tags: memory, safety
+:links: WASM_I32_LOAD, WASM_I32_STORE, WASM_I64_LOAD, WASM_I64_STORE, WASM_EXEC_MEMORY
 All memory accesses in the safe backend shall be bounds-checked against the current
 active memory size (active_pages * PAGE_SIZE). Out-of-bounds accesses shall return
 an error (WasmTrap::OutOfBounds), never panic or invoke undefined behavior.
@@ -84,6 +86,7 @@ an error (WasmTrap::OutOfBounds), never panic or invoke undefined behavior.
 :id: REQ_MEM_GROW_NO_ALLOC
 :status: open
 :tags: memory, memory.grow, no_std
+:links: WASM_MEMORY_GROW, WASM_MEMORY_SIZE
 memory.grow shall not perform heap allocation. New pages shall be zero-initialized
 within pre-allocated storage. Returns previous page count on success, -1 on failure.
 ```
@@ -92,6 +95,7 @@ within pre-allocated storage. Returns previous page count on success, -1 on fail
 :id: REQ_MEM_BULK_OPS
 :status: open
 :tags: memory, bulk-operations, wasm-spec
+:links: WASM_EXEC_MEMORY
 The transpiler shall support WebAssembly bulk memory operations: memory.fill,
 memory.init, and data.drop. All operations shall be bounds-checked. Out-of-bounds
 operations shall trap with WasmTrap::OutOfBounds, never panic.
@@ -111,6 +115,7 @@ output. memory.init shall copy from these constants into the module's linear mem
 :id: REQ_MOD_TWO_TYPES
 :status: open
 :tags: modules, memory-ownership
+:links: WASM_MOD_MEMORIES, WASM_MOD_IMPORTS
 The system shall support two module types: (1) modules that own their own memory
 (process-like), and (2) modules that borrow memory from a caller (library-like).
 This distinction is the primary mechanism for spatial isolation.
@@ -129,6 +134,7 @@ with no dynamic lookup.
 :id: REQ_MOD_TABLE
 :status: open
 :tags: modules, table, call_indirect
+:links: WASM_TABLE_TYPE, WASM_MOD_TABLES, WASM_MOD_ELEM, WASM_CALL_INDIRECT
 Each module shall have a table for indirect call dispatch. Table entries store
 function references with type index and function index. Indirect calls shall
 validate the type signature before dispatch.
@@ -140,6 +146,7 @@ validate the type signature before dispatch.
 :id: REQ_CAP_IMPORTS
 :status: open
 :tags: imports, traits, capabilities
+:links: WASM_MOD_IMPORTS, WASM_EXTERNAL_TYPE
 Wasm module imports shall be statically checked capabilities. Related imports
 shall be grouped into discrete capability sets. If a module does not import a
 capability, no code path to invoke it shall exist.
@@ -149,6 +156,7 @@ capability, no code path to invoke it shall exist.
 :id: REQ_CAP_EXPORTS
 :status: open
 :tags: exports, traits
+:links: WASM_MOD_EXPORTS, WASM_EXTERNAL_TYPE
 Wasm module exports shall be exposed as statically typed interfaces on the
 transpiled module. This shall enable inter-module linking via interface composition.
 ```
@@ -177,6 +185,7 @@ subset it supports.
 :id: REQ_TRANS_FUNCTIONS
 :status: open
 :tags: transpilation, functions
+:links: WASM_MOD_FUNCTIONS, WASM_FUNC_TYPE
 Each Wasm function shall be transpiled to a Rust function with explicit access to
 module state (memory, globals, table) and granted capabilities.
 ```
@@ -185,6 +194,7 @@ module state (memory, globals, table) and granted capabilities.
 :id: REQ_TRANS_CONTROL_FLOW
 :status: open
 :tags: transpilation, control-flow
+:links: WASM_BLOCK, WASM_LOOP, WASM_IF, WASM_BR, WASM_BR_IF, WASM_BR_TABLE, WASM_EXEC_CONTROL
 Wasm control flow (block, loop, if, br, br_if, br_table) shall map to safe Rust
 control flow structures. No goto or unsafe control flow.
 ```
@@ -193,6 +203,7 @@ control flow structures. No goto or unsafe control flow.
 :id: REQ_TRANS_INDIRECT_CALLS
 :status: open
 :tags: transpilation, indirect-calls, safety
+:links: WASM_CALL_INDIRECT, WASM_MOD_TABLES, WASM_EXEC_CALLS
 Indirect calls (call_indirect) shall be dispatched using only safe Rust — no
 function pointers, no unsafe dispatch. The dispatch mechanism shall validate type
 signatures and enumerate only functions matching the expected type.
@@ -239,6 +250,7 @@ or random seed. Enables reproducible builds and auditable output.
 :id: REQ_ERR_TRAPS
 :status: open
 :tags: error-handling, traps
+:links: WASM_UNREACHABLE
 Wasm traps shall be reported as typed, structured errors. The following trap
 categories shall be distinguished: out-of-bounds memory access, division by zero,
 integer overflow, unreachable code, indirect call type mismatch, table out-of-bounds,
