@@ -9,6 +9,7 @@ author = "herkos contributors"
 extensions = [
     "myst_parser",
     "sphinx_needs",
+    "sphinxcontrib.mermaid",
 ]
 
 source_suffix = {
