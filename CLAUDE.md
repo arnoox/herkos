@@ -16,28 +16,34 @@ The pipeline: **WebAssembly → Rust source → Safe binary**
 
 ## Repository structure
 
-The project is a Rust workspace with three crates:
+The project is a Rust workspace with four crates:
 
 | Crate | Purpose | `no_std` |
 |-------|---------|----------|
-| `crates/herkos/` | CLI transpiler: parses `.wasm` binaries, emits Rust source code | No (`std`) |
+| `crates/herkos-core/` | Core transpiler library: parses `.wasm`, builds IR, optimizes, emits Rust | No (`std`) |
+| `crates/herkos/` | CLI wrapper around `herkos-core` | No (`std`) |
 | `crates/herkos-runtime/` | Runtime library shipped with transpiled output | **Yes** |
 | `crates/herkos-tests/` | Integration tests + benchmarks: WAT/C/Rust → .wasm → transpile → test | No (`std`) |
 
-### Transpiler pipeline (`crates/herkos/src/`)
+### Transpiler pipeline (`crates/herkos-core/src/`)
 
 ```
-.wasm → parser/ → ir/builder/ → optimizer/ → backend/safe.rs → codegen/ → rustfmt
-        (wasmparser)  (SSA IR)    (dead blocks)  (SafeBackend)   (Rust source)
+.wasm → parser/ → ir/builder/ → optimize_ir() → lower_phis() → optimize_lowered_ir() → codegen/ → rustfmt
+        (wasmparser)  (SSA IR)    (pre-lowering)  (SSA destruct)  (post-lowering)        (Rust source)
 ```
 
 Key modules:
 - `parser/` — Wasm binary parsing via `wasmparser` crate
-- `ir/` — SSA-form intermediate representation (`ModuleInfo`, `IrFunction`, `IrBlock`, `IrInstr`)
+- `ir/` — SSA-form intermediate representation
+  - `ir/types.rs` — `ModuleInfo`, `IrFunction`, `IrBlock`, `IrInstr`, `VarId`, `DefVar`, `UseVar`, `BlockId`, etc.
   - `ir/builder/` — Wasm → IR translation (core.rs, translate.rs, assembly.rs, analysis.rs)
-- `optimizer/` — IR optimization passes (currently: dead block elimination)
+  - `ir/lower_phis.rs` — SSA destruction: phi nodes → predecessor `Assign` instructions
+- `optimizer/` — IR optimization passes, split into two phases:
+  - **Pre-lowering** (on SSA IR with phi nodes): `dead_blocks`, `const_prop`, `algebraic`, `copy_prop`
+  - **Post-lowering** (on phi-free IR): `empty_blocks`, `dead_blocks`, `merge_blocks`, `copy_prop`, `local_cse`, `gvn`, `dead_instrs`, `branch_fold`, `licm`
 - `backend/` — Backend trait + `SafeBackend` (bounds-checked, no unsafe)
-- `codegen/` — IR → Rust source (module.rs, function.rs, instruction.rs, traits.rs, export.rs, constructor.rs)
+- `codegen/` — IR → Rust source (module.rs, function.rs, instruction.rs, traits.rs, export.rs, constructor.rs, env.rs, types.rs, utils.rs)
+- `c_ffi.rs` — C-compatible FFI wrapper around `transpile()`
 
 ### Runtime (`crates/herkos-runtime/src/`)
 
@@ -58,7 +64,6 @@ Key modules:
 
 ```bash
 cargo build                    # build all crates
-cargo test                     # run all tests
 cargo clippy --all-targets     # lint (CI enforced)
 cargo fmt --check              # format check (CI enforced)
 cargo bench -p herkos-tests    # benchmarks
@@ -66,15 +71,40 @@ cargo bench -p herkos-tests    # benchmarks
 
 Run a single crate's tests:
 ```bash
-cargo test -p herkos
+cargo test -p herkos-core     # transpiler unit tests (IR, optimizer, codegen)
 cargo test -p herkos-runtime
 cargo test -p herkos-tests
 ```
 
+**`herkos-tests` must always be run twice** — once with optimizations off, once on — to verify that the optimizer does not change observable behavior:
+
+```bash
+HERKOS_OPTIMIZE=0 cargo test -p herkos-tests   # unoptimized output
+HERKOS_OPTIMIZE=1 cargo test -p herkos-tests   # optimized output
+```
+
+`HERKOS_OPTIMIZE` is consumed by `herkos-tests/build.rs` at compile time to control whether the transpiled test modules are generated with `-O` or not. It has no effect on `herkos-core`, `herkos-runtime`, or production code. CI enforces both runs. For all other crates, `cargo test` without this variable is sufficient.
+
 CLI usage:
 ```bash
-cargo run -p herkos -- input.wasm --output output.rs
+cargo run -p herkos -- input.wasm --output output.rs   # transpile
+cargo run -p herkos -- input.wasm -O --output output.rs  # with optimizations
 ```
+
+### Sphinx documentation
+
+The `docs/` directory is a Sphinx project using [MyST](https://myst-parser.readthedocs.io/) (Markdown) and [sphinx-needs](https://sphinx-needs.readthedocs.io/) (traceability directives). Build with:
+
+```bash
+cd docs
+python -m venv .venv && source .venv/bin/activate   # first time only
+pip install -r requirements.txt                      # first time only
+
+make html        # generate auto-files then build HTML → _build/html/index.html
+make clean       # remove build artifacts
+```
+
+`make html` runs `python scripts/generate_all.py` first (auto-generates need files), then calls `sphinx-build`.
 
 ## Key architectural concepts
 
@@ -113,15 +143,23 @@ See SPECIFICATION.md §4.5.
 - `WasmResult<T> = Result<T, WasmTrap>` — no panics, no unwinding
 - `ConstructionError` for programming errors during module instantiation
 
+### SSA IR and phi lowering
+
+The IR is pure SSA: every variable is defined exactly once (`DefVar` token, non-`Copy`; enforced at build time). Phi nodes at join points are lowered to predecessor `Assign` instructions before codegen by `lower_phis::lower()`, which returns a `LoweredModuleInfo` newtype that statically guarantees no phi nodes remain. Optimization runs in two phases: **pre-lowering** (on SSA IR with phi nodes) and **post-lowering** (on `LoweredModuleInfo`).
+
+### Env<H> context pattern
+
+Functions that call imports or read/write mutable globals receive an `Env<'_, H>` parameter bundling `host: &mut H` and `globals: &mut Globals`. This avoids threading host + globals as separate parameters throughout every function signature.
+
 ### Current status
 
-- **Implemented**: Safe backend only (runtime bounds checking, no unsafe in output)
-- **Not yet implemented**: Verified backend, hybrid backend, `--max-pages` CLI effect, WASI traits
+- **Implemented**: Safe backend only (runtime bounds checking, no unsafe in output), full optimizer pipeline, C FFI
+- **Not yet implemented**: Verified backend, hybrid backend, `--max-pages` CLI flag, WASI traits
 - See `docs/FUTURE.md` for planned features
 
 ## `no_std` constraint
 
-`herkos-runtime` and all transpiled output **must be `#![no_std]`**. No heap allocation without the optional `alloc` feature gate. No panics, no `format!`, no `String`. Errors are `Result<T, WasmTrap>` only. The `herkos` CLI crate is a standard `std` binary.
+`herkos-runtime` and all transpiled output **must be `#![no_std]`**. No heap allocation without the optional `alloc` feature gate. No panics, no `format!`, no `String`. Errors are `Result<T, WasmTrap>` only. The `herkos` CLI and `herkos-core` crates are standard `std` binaries/libraries.
 
 ## Coding conventions
 

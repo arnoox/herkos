@@ -10,7 +10,7 @@ help:
 	@echo "  clean     remove build artifacts"
 
 generate:
-	python scripts/generate_all.py
+	python3 scripts/generate_all.py
 
 html: generate
 	$(SPHINXBUILD) -b html $(SOURCEDIR) $(BUILDDIR)/html
