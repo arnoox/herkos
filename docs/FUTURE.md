@@ -183,4 +183,4 @@ fn load_i32_verified(memory: &IsolatedMemory<MAX_PAGES>, offset: u32) -> i32 {
 - **Automated refactoring suggestions** for better Rust idioms in generated code
 - **DWARF debug info preservation** for source-level debugging of transpiled code
 - **Proof coverage reports**: per-function and per-module percentage of accesses that are proven vs. runtime-checked
-- **Dynamic linking** of transpiled modules (open question — see [SPECIFICATION.md §8](SPECIFICATION.md#8-open-questions))
+- **Dynamic linking** of transpiled modules (open question — see {ref}`SPECIFICATION §7 <open-questions>`)

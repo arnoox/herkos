@@ -12,17 +12,18 @@ For features that are planned but not yet implemented (verified/hybrid backends,
 
 ## Table of Contents
 
-1. [Module Representation](#1-module-representation)
-2. [Architecture](#2-architecture)
-3. [Transpilation Rules](#3-transpilation-rules)
-4. [Integration](#4-integration)
-5. [Performance](#5-performance)
-6. [Security Properties](#6-security-properties)
-7. [Open Questions](#7-open-questions)
-8. [References](#8-references)
+1. [Module Representation](#module-representation)
+2. [Architecture](#architecture)
+3. [Transpilation Rules](#transpilation-rules)
+4. [Integration](#integration)
+5. [Performance](#performance)
+6. [Security Properties](#security-properties)
+7. [Open Questions](#open-questions)
+8. [References](#references)
 
 ---
 
+(module-representation)=
 ## 1. Module Representation
 
 This section describes how WebAssembly concepts map to Rust types. This is the core abstraction layer — everything else (transpilation, integration, performance) builds on these types.
@@ -392,6 +393,7 @@ let result = lib.call_export_transform(&mut app.memory, ptr, len)?;
 
 ---
 
+(architecture)=
 ## 2. Architecture
 
 ### 3.1 Component Overview
@@ -426,7 +428,7 @@ let result = lib.call_export_transform(&mut app.memory, ptr, len)?;
 
 ### 3.2 Runtime (`herkos-runtime`)
 
-> Source: [crates/herkos-runtime/src/](../crates/herkos-runtime/src/)
+> Source: `crates/herkos-runtime/src/`
 
 The runtime is a `#![no_std]` crate providing the types that all transpiled code depends on. It has **zero external dependencies** in the default configuration.
 
@@ -444,11 +446,11 @@ The runtime is a `#![no_std]` crate providing the types that all transpiled code
 - Errors are `Result<T, WasmTrap>` only
 - Optional `alloc` feature gate for targets with a global allocator
 
-**Runtime verification with Kani**: The runtime includes `#[kani::proof]` harnesses that verify core invariants (no panics on any input, correct grow semantics, load/store roundtrip). Run via `cargo kani`. See [crates/herkos-runtime/KANI.md](../crates/herkos-runtime/KANI.md).
+**Runtime verification with Kani**: The runtime includes `#[kani::proof]` harnesses that verify core invariants (no panics on any input, correct grow semantics, load/store roundtrip). Run via `cargo kani`. See `crates/herkos-runtime/KANI.md` in the repository root.
 
 ### 3.3 Transpiler (`herkos-core`)
 
-> Source: [crates/herkos-core/src/](../crates/herkos-core/src/)
+> Source: `crates/herkos-core/src/`
 
 `herkos-core` is the transpiler library. The `herkos` crate is a thin CLI wrapper around it. The pipeline:
 
@@ -476,7 +478,7 @@ The runtime is a `#![no_std]` crate providing the types that all transpiled code
 
 #### 3.3.1 Parser
 
-> Source: [crates/herkos-core/src/parser/](../crates/herkos-core/src/parser/)
+> Source: `crates/herkos-core/src/parser/`
 
 Uses the `wasmparser` crate to extract module structure: types, functions, memories, tables, globals, imports, exports, data segments, element segments.
 
@@ -484,7 +486,7 @@ Uses the `wasmparser` crate to extract module structure: types, functions, memor
 
 #### 3.3.2 IR (Intermediate Representation)
 
-> Source: [crates/herkos-core/src/ir/](../crates/herkos-core/src/ir/)
+> Source: `crates/herkos-core/src/ir/`
 
 A pure SSA-form IR that sits between Wasm bytecode and Rust source. Every variable is defined exactly once (`DefVar` token, non-`Copy`) and may be read many times (`UseVar` token, `Copy`).
 
@@ -517,7 +519,7 @@ The builder (`ir/builder/`) translates Wasm stack-based instructions to SSA IR b
 
 #### 3.3.3 SSA Phi Lowering
 
-> Source: [crates/herkos-core/src/ir/lower_phis.rs](../crates/herkos-core/src/ir/lower_phis.rs)
+> Source: `crates/herkos-core/src/ir/lower_phis.rs`
 
 SSA phi nodes are inserted by the builder at join points (if/else merges, loop headers). Before codegen they must be *destroyed* — converted to ordinary assignments in predecessor blocks.
 
@@ -546,7 +548,7 @@ The pass:
 
 #### 3.3.4 Optimizer
 
-> Source: [crates/herkos-core/src/optimizer/](../crates/herkos-core/src/optimizer/)
+> Source: `crates/herkos-core/src/optimizer/`
 
 The optimizer is split into two phases separated by phi lowering:
 
@@ -577,7 +579,7 @@ Both phases run up to 2 iterations until fixed point. Passes run only when `--op
 
 #### 3.3.5 Backend
 
-> Source: [crates/herkos-core/src/backend/](../crates/herkos-core/src/backend/)
+> Source: `crates/herkos-core/src/backend/`
 
 The `Backend` trait abstracts the code emission strategy. Currently only `SafeBackend` is implemented:
 
@@ -589,7 +591,7 @@ For the planned verified and hybrid backends, see [FUTURE.md](FUTURE.md).
 
 #### 3.3.6 Code Generator
 
-> Source: [crates/herkos-core/src/codegen/](../crates/herkos-core/src/codegen/)
+> Source: `crates/herkos-core/src/codegen/`
 
 Walks the `LoweredModuleInfo` and emits Rust source code via the configured `Backend`:
 
@@ -609,7 +611,7 @@ Walks the `LoweredModuleInfo` and emits Rust source code via the configured `Bac
 
 ### 3.4 Tests (`herkos-tests`)
 
-> Source: [crates/herkos-tests/](../crates/herkos-tests/)
+> Source: `crates/herkos-tests/`
 
 End-to-end test crate that compiles WAT/C/Rust sources to `.wasm`, transpiles them, and runs the output.
 
@@ -657,7 +659,7 @@ HERKOS_OPTIMIZE=1 cargo test -p herkos-tests   # optimized transpiler output
 
 ### 3.5 Benchmarks
 
-> Source: [crates/herkos-tests/benches/](../crates/herkos-tests/benches/)
+> Source: `crates/herkos-tests/benches/`
 
 Performance benchmarks using Criterion. Currently includes Fibonacci benchmarks comparing transpiled Wasm execution against native Rust.
 
@@ -667,6 +669,7 @@ cargo bench -p herkos-tests
 
 ---
 
+(transpilation-rules)=
 ## 3. Transpilation Rules
 
 This section describes how Wasm constructs map to Rust code in the safe backend.
@@ -914,6 +917,7 @@ In future verified and hybrid backends, `data.drop` may enable optimizations: pr
 
 ---
 
+(integration)=
 ## 4. Integration
 
 ### 5.1 Trait-Based Integration (Primary)
@@ -1014,6 +1018,7 @@ impl GpioOps for EmbeddedHost { /* ... */ }
 
 ---
 
+(performance)=
 ## 5. Performance
 
 ### 6.1 Overhead
@@ -1101,6 +1106,7 @@ Activation heuristic: use `rayon` parallel iterators when the module has 20+ fun
 
 ---
 
+(security-properties)=
 ## 6. Security Properties
 
 ### 7.1 Protected Against
@@ -1126,6 +1132,7 @@ This pipeline produces **evidence** for a freedom-from-interference argument:
 
 ---
 
+(open-questions)=
 ## 7. Open Questions
 
 1. How to handle C++ exceptions in WebAssembly?
@@ -1135,6 +1142,7 @@ This pipeline produces **evidence** for a freedom-from-interference argument:
 
 ---
 
+(references)=
 ## 8. References
 
 - WebAssembly Specification: https://webassembly.github.io/spec/

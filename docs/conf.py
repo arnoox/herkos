@@ -27,6 +27,8 @@ myst_enable_extensions = [
     "fieldlist",
 ]
 
+myst_heading_anchors = 3
+
 # -- sphinx-needs configuration ------------------------------------------------
 
 needs_types = [
@@ -68,9 +70,9 @@ needs_types = [
 ]
 
 needs_fields = {
-    "wasm_section": {"type": str, "default": "", "description": "Wasm spec section reference"},
-    "source_file": {"type": str, "default": "", "description": "Source file path"},
-    "wasm_opcode": {"type": str, "default": "", "description": "Wasm opcode name"},
+    "wasm_section": {"default": "", "description": "Wasm spec section reference"},
+    "source_file": {"default": "", "description": "Source file path"},
+    "wasm_opcode": {"default": "", "description": "Wasm opcode name"},
 }
 
 needs_links = {
