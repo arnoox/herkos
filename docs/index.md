@@ -6,6 +6,7 @@ with compile-time isolation guarantees.
 ```{toctree}
 :maxdepth: 2
 
+GETTING_STARTED
 REQUIREMENTS
 SPECIFICATION
 FUTURE

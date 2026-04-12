@@ -12,169 +12,18 @@ For features that are planned but not yet implemented (verified/hybrid backends,
 
 ## Table of Contents
 
-1. [Getting Started](#1-getting-started)
-2. [Module Representation](#2-module-representation)
-3. [Architecture](#3-architecture)
-4. [Transpilation Rules](#4-transpilation-rules)
-5. [Integration](#5-integration)
-6. [Performance](#6-performance)
-7. [Security Properties](#7-security-properties)
-8. [Open Questions](#8-open-questions)
-9. [References](#9-references)
+1. [Module Representation](#1-module-representation)
+2. [Architecture](#2-architecture)
+3. [Transpilation Rules](#3-transpilation-rules)
+4. [Integration](#4-integration)
+5. [Performance](#5-performance)
+6. [Security Properties](#6-security-properties)
+7. [Open Questions](#7-open-questions)
+8. [References](#8-references)
 
 ---
 
-## 1. Getting Started
-
-### 1.1 Installation
-
-> Note: it is currently only possible to build from source.
-
-```bash
-git clone https://github.com/anthropics/herkos.git
-cd herkos
-cargo install --path crates/herkos
-```
-
-### 1.2 Basic Usage
-
-```bash
-herkos input.wasm --output output.rs
-herkos input.wasm -O --output output.rs   # with IR optimizations enabled
-```
-
-| Option | Description | Required |
-|--------|-------------|----------|
-| `input.wasm` | Path to WebAssembly module | Yes |
-| `--output`, `-o` | Output Rust file path (defaults to stdout) | No |
-| `--optimize`, `-O` | Enable IR optimization passes | No |
-
-> **Current limitations**: Only the `safe` backend is implemented. `--max-pages` is not yet exposed as a CLI flag (defaults to 256 in the library). See [FUTURE.md](FUTURE.md) for the verified and hybrid backend plans.
-
-### 1.3 Understanding the Output
-
-The transpiler produces a self-contained Rust source file that depends only on `herkos-runtime`. The output contains:
-
-```
-┌──────────────────────────────────────────────┐
-│  Generated output.rs                         │
-├──────────────────────────────────────────────┤
-│  use herkos_runtime::*;                      │
-│                                              │
-│  struct Globals { ... }     ← mutable globals│
-│  const G1: i64 = 42;       ← immutable       │
-│                                              │
-│  fn func_0(...) { ... }    ← Wasm functions  │
-│  fn func_1(...) { ... }                      │
-│                                              │
-│  struct Module<MAX_PAGES, TABLE_SIZE> {      │
-│      memory: IsolatedMemory<MAX_PAGES>,      │
-│      globals: Globals,                       │
-│      table: Table<TABLE_SIZE>,               │
-│  }                                           │
-│                                              │
-│  impl Module { ... }       ← exports as      │
-│                               methods        │
-│  trait ModuleImports { ... }  ← required     │
-│                                 capabilities │
-└──────────────────────────────────────────────┘
-```
-
-### 1.4 Using Transpiled Code
-
-#### Direct inclusion
-
-```rust
-use herkos_runtime::{IsolatedMemory, WasmResult};
-
-include!("path/to/output.rs");
-
-fn main() -> WasmResult<()> {
-    let mut module = Module::<256, 4>::new(
-        16,                      // initial pages
-        Globals::default(),      // module globals
-        Table::default(),        // call table
-    )?;
-
-    let result = module.my_function(42)?;
-    println!("Result: {}", result);
-    Ok(())
-}
-```
-
-#### Via build.rs (recommended for automated workflows)
-
-```rust
-// build.rs
-use std::env;
-use std::path::PathBuf;
-
-fn main() {
-    let out_dir = env::var("OUT_DIR").unwrap();
-    let out_path = PathBuf::from(&out_dir);
-
-    println!("cargo:rerun-if-changed=wasm-modules/math.wasm");
-
-    let wasm_bytes = std::fs::read("wasm-modules/math.wasm").unwrap();
-    let options = herkos::TranspileOptions::default();
-    let rust_code = herkos::transpile(&wasm_bytes, &options).unwrap();
-    std::fs::write(out_path.join("math_module.rs"), rust_code).unwrap();
-}
-```
-
-```rust
-// src/main.rs
-use herkos_runtime::WasmResult;
-include!(concat!(env!("OUT_DIR"), "/math_module.rs"));
-
-fn main() -> WasmResult<()> {
-    let mut module = Module::<16, 0>::new(1, Globals::default(), Table::default())?;
-    let result = module.add(5, 3)?;
-    println!("Result: {}", result);
-    Ok(())
-}
-```
-
-When including multiple modules, wrap them in Rust modules to avoid name collisions:
-
-```rust
-mod math {
-    include!(concat!(env!("OUT_DIR"), "/math_module.rs"));
-}
-mod crypto {
-    include!(concat!(env!("OUT_DIR"), "/crypto_module.rs"));
-}
-```
-
-### 1.5 Example: C to Rust via Wasm
-
-```c
-// math.c
-int add(int a, int b) { return a + b; }
-int multiply(int a, int b) { return a * b; }
-```
-
-```bash
-clang --target=wasm32 -O2 -c math.c -o math.o
-wasm-ld math.o -o math.wasm --no-entry
-herkos math.wasm --output math.rs
-```
-
-```rust
-use herkos_runtime::WasmResult;
-include!("math.rs");
-
-fn main() -> WasmResult<()> {
-    let mut module = Module::<16, 0>::new(1, Globals::default(), Table::default())?;
-    println!("2 + 3 = {}", module.add(2, 3)?);
-    println!("4 * 5 = {}", module.multiply(4, 5)?);
-    Ok(())
-}
-```
-
----
-
-## 2. Module Representation
+## 1. Module Representation
 
 This section describes how WebAssembly concepts map to Rust types. This is the core abstraction layer — everything else (transpilation, integration, performance) builds on these types.
 
@@ -274,7 +123,7 @@ When C/C++ compiles to Wasm, the compiler organizes linear memory into conventio
 │   (local variables, large structs,      │
 │    spills, return values)               │
 ├─────────────────────────────────────────┤
-│           Heap (grows ↑)               │
+│           Heap (grows ↑)                │
 │   (malloc / C++ new)                    │
 ├─────────────────────────────────────────┤
 │           Data Segments                 │
@@ -543,7 +392,7 @@ let result = lib.call_export_transform(&mut app.memory, ptr, len)?;
 
 ---
 
-## 3. Architecture
+## 2. Architecture
 
 ### 3.1 Component Overview
 
@@ -818,7 +667,7 @@ cargo bench -p herkos-tests
 
 ---
 
-## 4. Transpilation Rules
+## 3. Transpilation Rules
 
 This section describes how Wasm constructs map to Rust code in the safe backend.
 
@@ -1065,7 +914,7 @@ In future verified and hybrid backends, `data.drop` may enable optimizations: pr
 
 ---
 
-## 5. Integration
+## 4. Integration
 
 ### 5.1 Trait-Based Integration (Primary)
 
@@ -1165,7 +1014,7 @@ impl GpioOps for EmbeddedHost { /* ... */ }
 
 ---
 
-## 6. Performance
+## 5. Performance
 
 ### 6.1 Overhead
 
@@ -1252,7 +1101,7 @@ Activation heuristic: use `rayon` parallel iterators when the module has 20+ fun
 
 ---
 
-## 7. Security Properties
+## 6. Security Properties
 
 ### 7.1 Protected Against
 
@@ -1277,7 +1126,7 @@ This pipeline produces **evidence** for a freedom-from-interference argument:
 
 ---
 
-## 8. Open Questions
+## 7. Open Questions
 
 1. How to handle C++ exceptions in WebAssembly?
 2. How to represent and verify concurrent access patterns?
@@ -1286,7 +1135,7 @@ This pipeline produces **evidence** for a freedom-from-interference argument:
 
 ---
 
-## 9. References
+## 8. References
 
 - WebAssembly Specification: https://webassembly.github.io/spec/
 - Rust Reference: https://doc.rust-lang.org/reference/
