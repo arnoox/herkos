@@ -1,0 +1,248 @@
+# Wasm 1.0 Instruction Index
+# Source: W3C WebAssembly Core Specification 1.0 (https://www.w3.org/TR/wasm-core-1/)
+# Each entry produces a {wasm_spec} need in the generated output.
+
+# -- Constants (§2.4.1) --------------------------------------------------------
+
+[constants]
+section = "§2.4.1"
+
+[constants.i32]
+ops = ["const"]
+tags = ["numeric", "i32", "const"]
+
+[constants.i64]
+ops = ["const"]
+tags = ["numeric", "i64", "const"]
+
+[constants.f32]
+ops = ["const"]
+tags = ["numeric", "f32", "const"]
+
+[constants.f64]
+ops = ["const"]
+tags = ["numeric", "f64", "const"]
+
+# -- i32 Numeric Instructions (§2.4.1) ----------------------------------------
+
+[i32_unary]
+section = "§2.4.1"
+prefix = "i32"
+tags = ["numeric", "i32", "unary"]
+ops = ["clz", "ctz", "popcnt"]
+
+[i32_test]
+section = "§2.4.1"
+prefix = "i32"
+tags = ["numeric", "i32", "test"]
+ops = ["eqz"]
+
+[i32_binop]
+section = "§2.4.1"
+prefix = "i32"
+tags = ["numeric", "i32", "binop"]
+ops = ["add", "sub", "mul", "div_s", "div_u", "rem_s", "rem_u", "and", "or", "xor", "shl", "shr_s", "shr_u", "rotl", "rotr"]
+
+[i32_compare]
+section = "§2.4.1"
+prefix = "i32"
+tags = ["numeric", "i32", "comparison"]
+ops = ["eq", "ne", "lt_s", "lt_u", "gt_s", "gt_u", "le_s", "le_u", "ge_s", "ge_u"]
+
+# -- i64 Numeric Instructions (§2.4.1) ----------------------------------------
+
+[i64_unary]
+section = "§2.4.1"
+prefix = "i64"
+tags = ["numeric", "i64", "unary"]
+ops = ["clz", "ctz", "popcnt"]
+
+[i64_test]
+section = "§2.4.1"
+prefix = "i64"
+tags = ["numeric", "i64", "test"]
+ops = ["eqz"]
+
+[i64_binop]
+section = "§2.4.1"
+prefix = "i64"
+tags = ["numeric", "i64", "binop"]
+ops = ["add", "sub", "mul", "div_s", "div_u", "rem_s", "rem_u", "and", "or", "xor", "shl", "shr_s", "shr_u", "rotl", "rotr"]
+
+[i64_compare]
+section = "§2.4.1"
+prefix = "i64"
+tags = ["numeric", "i64", "comparison"]
+ops = ["eq", "ne", "lt_s", "lt_u", "gt_s", "gt_u", "le_s", "le_u", "ge_s", "ge_u"]
+
+# -- f32 Numeric Instructions (§2.4.1) ----------------------------------------
+
+[f32_unary]
+section = "§2.4.1"
+prefix = "f32"
+tags = ["numeric", "f32", "unary"]
+ops = ["abs", "neg", "sqrt", "ceil", "floor", "trunc", "nearest"]
+
+[f32_binop]
+section = "§2.4.1"
+prefix = "f32"
+tags = ["numeric", "f32", "binop"]
+ops = ["add", "sub", "mul", "div", "min", "max", "copysign"]
+
+[f32_compare]
+section = "§2.4.1"
+prefix = "f32"
+tags = ["numeric", "f32", "comparison"]
+ops = ["eq", "ne", "lt", "gt", "le", "ge"]
+
+# -- f64 Numeric Instructions (§2.4.1) ----------------------------------------
+
+[f64_unary]
+section = "§2.4.1"
+prefix = "f64"
+tags = ["numeric", "f64", "unary"]
+ops = ["abs", "neg", "sqrt", "ceil", "floor", "trunc", "nearest"]
+
+[f64_binop]
+section = "§2.4.1"
+prefix = "f64"
+tags = ["numeric", "f64", "binop"]
+ops = ["add", "sub", "mul", "div", "min", "max", "copysign"]
+
+[f64_compare]
+section = "§2.4.1"
+prefix = "f64"
+tags = ["numeric", "f64", "comparison"]
+ops = ["eq", "ne", "lt", "gt", "le", "ge"]
+
+# -- Conversion Instructions (§2.4.1) -----------------------------------------
+
+[conversions]
+section = "§2.4.1"
+tags = ["numeric", "conversion"]
+
+# Each entry is: [opcode, description]
+[[conversions.ops]]
+name = "i32.wrap_i64"
+id_suffix = "I32_WRAP_I64"
+desc = "i64 to i32 (truncate to low 32 bits)"
+
+[[conversions.ops]]
+name = "i64.extend_i32_s"
+id_suffix = "I64_EXTEND_I32_S"
+desc = "i32 to i64 (sign-extend)"
+
+[[conversions.ops]]
+name = "i64.extend_i32_u"
+id_suffix = "I64_EXTEND_I32_U"
+desc = "i32 to i64 (zero-extend)"
+
+[[conversions.ops]]
+name = "i32.trunc_f32_s"
+id_suffix = "I32_TRUNC_F32_S"
+desc = "f32 to i32 (signed, trapping)"
+
+[[conversions.ops]]
+name = "i32.trunc_f32_u"
+id_suffix = "I32_TRUNC_F32_U"
+desc = "f32 to i32 (unsigned, trapping)"
+
+[[conversions.ops]]
+name = "i32.trunc_f64_s"
+id_suffix = "I32_TRUNC_F64_S"
+desc = "f64 to i32 (signed, trapping)"
+
+[[conversions.ops]]
+name = "i32.trunc_f64_u"
+id_suffix = "I32_TRUNC_F64_U"
+desc = "f64 to i32 (unsigned, trapping)"
+
+[[conversions.ops]]
+name = "i64.trunc_f32_s"
+id_suffix = "I64_TRUNC_F32_S"
+desc = "f32 to i64 (signed, trapping)"
+
+[[conversions.ops]]
+name = "i64.trunc_f32_u"
+id_suffix = "I64_TRUNC_F32_U"
+desc = "f32 to i64 (unsigned, trapping)"
+
+[[conversions.ops]]
+name = "i64.trunc_f64_s"
+id_suffix = "I64_TRUNC_F64_S"
+desc = "f64 to i64 (signed, trapping)"
+
+[[conversions.ops]]
+name = "i64.trunc_f64_u"
+id_suffix = "I64_TRUNC_F64_U"
+desc = "f64 to i64 (unsigned, trapping)"
+
+[[conversions.ops]]
+name = "f32.convert_i32_s"
+id_suffix = "F32_CONVERT_I32_S"
+desc = "i32 to f32 (signed)"
+
+[[conversions.ops]]
+name = "f32.convert_i32_u"
+id_suffix = "F32_CONVERT_I32_U"
+desc = "i32 to f32 (unsigned)"
+
+[[conversions.ops]]
+name = "f32.convert_i64_s"
+id_suffix = "F32_CONVERT_I64_S"
+desc = "i64 to f32 (signed)"
+
+[[conversions.ops]]
+name = "f32.convert_i64_u"
+id_suffix = "F32_CONVERT_I64_U"
+desc = "i64 to f32 (unsigned)"
+
+[[conversions.ops]]
+name = "f64.convert_i32_s"
+id_suffix = "F64_CONVERT_I32_S"
+desc = "i32 to f64 (signed)"
+
+[[conversions.ops]]
+name = "f64.convert_i32_u"
+id_suffix = "F64_CONVERT_I32_U"
+desc = "i32 to f64 (unsigned)"
+
+[[conversions.ops]]
+name = "f64.convert_i64_s"
+id_suffix = "F64_CONVERT_I64_S"
+desc = "i64 to f64 (signed)"
+
+[[conversions.ops]]
+name = "f64.convert_i64_u"
+id_suffix = "F64_CONVERT_I64_U"
+desc = "i64 to f64 (unsigned)"
+
+[[conversions.ops]]
+name = "f32.demote_f64"
+id_suffix = "F32_DEMOTE_F64"
+desc = "f64 to f32"
+
+[[conversions.ops]]
+name = "f64.promote_f32"
+id_suffix = "F64_PROMOTE_F32"
+desc = "f32 to f64"
+
+[[conversions.ops]]
+name = "i32.reinterpret_f32"
+id_suffix = "I32_REINTERPRET_F32"
+desc = "f32 to i32 (bitcast)"
+
+[[conversions.ops]]
+name = "i64.reinterpret_f64"
+id_suffix = "I64_REINTERPRET_F64"
+desc = "f64 to i64 (bitcast)"
+
+[[conversions.ops]]
+name = "f32.reinterpret_i32"
+id_suffix = "F32_REINTERPRET_I32"
+desc = "i32 to f32 (bitcast)"
+
+[[conversions.ops]]
+name = "f64.reinterpret_i64"
+id_suffix = "F64_REINTERPRET_I64"
+desc = "i64 to f64 (bitcast)"

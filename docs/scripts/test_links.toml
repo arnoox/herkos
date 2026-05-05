@@ -1,0 +1,209 @@
+# Mapping of test files to the WASM_* spec needs they verify.
+# Used by generate_test_needs.py to populate :verifies: links.
+#
+# Format: [filename_without_extension]
+#         verifies = ["WASM_ID_1", "WASM_ID_2", ...]
+
+[arithmetic]
+verifies = [
+    "WASM_I32_ADD", "WASM_I32_SUB", "WASM_I32_MUL",
+    "WASM_I32_CONST", "WASM_I64_ADD", "WASM_I64_CONST",
+    "WASM_NOP", "WASM_CALL",
+    "WASM_EXEC_INTEGER_OPS",
+]
+
+[bulk_memory]
+verifies = [
+    "WASM_EXEC_MEMORY",
+]
+
+[c_e2e]
+verifies = [
+    "WASM_I32_ADD", "WASM_I32_SUB", "WASM_I32_MUL",
+    "WASM_I32_DIV_S", "WASM_I32_REM_S",
+    "WASM_I32_AND", "WASM_I32_OR", "WASM_I32_XOR",
+    "WASM_I32_SHL", "WASM_I32_SHR_U",
+    "WASM_I64_ADD",
+    "WASM_MOD_EXPORTS", "WASM_MOD_FUNCTIONS",
+]
+
+[c_e2e_i64]
+verifies = [
+    "WASM_I64_MUL", "WASM_I64_SUB", "WASM_I64_DIV_S",
+    "WASM_I64_REM_S", "WASM_I64_AND", "WASM_I64_OR", "WASM_I64_XOR",
+    "WASM_I64_SHL", "WASM_I64_SHR_S",
+]
+
+[c_e2e_loops]
+verifies = [
+    "WASM_LOOP", "WASM_BR_IF", "WASM_IF", "WASM_BLOCK",
+    "WASM_EXEC_CONTROL",
+]
+
+[c_e2e_memory]
+verifies = [
+    "WASM_I32_LOAD", "WASM_I32_STORE",
+    "WASM_EXEC_MEMORY",
+]
+
+[call_import_transitive]
+verifies = [
+    "WASM_CALL", "WASM_MOD_IMPORTS",
+]
+
+[control_flow]
+verifies = [
+    "WASM_IF", "WASM_BLOCK", "WASM_LOOP", "WASM_BR_IF",
+    "WASM_EXEC_CONTROL",
+]
+
+[early_return]
+verifies = [
+    "WASM_RETURN", "WASM_IF",
+    "WASM_EXEC_CONTROL",
+]
+
+[function_calls]
+verifies = [
+    "WASM_CALL", "WASM_CALL_INDIRECT",
+    "WASM_GLOBAL_GET", "WASM_GLOBAL_SET",
+    "WASM_I32_LOAD", "WASM_I32_STORE",
+    "WASM_I64_ADD",
+    "WASM_EXEC_CALLS",
+]
+
+[import_memory]
+verifies = [
+    "WASM_MOD_IMPORTS", "WASM_MOD_MEMORIES",
+    "WASM_MEMORY_SIZE", "WASM_MEMORY_GROW",
+    "WASM_I32_LOAD", "WASM_I32_STORE",
+]
+
+[import_multi]
+verifies = [
+    "WASM_MOD_IMPORTS", "WASM_CALL",
+    "WASM_EXEC_CALLS",
+]
+
+[import_traits]
+verifies = [
+    "WASM_MOD_IMPORTS", "WASM_MOD_EXPORTS",
+    "WASM_EXTERNAL_TYPE",
+]
+
+[indirect_call_import]
+verifies = [
+    "WASM_CALL_INDIRECT", "WASM_MOD_IMPORTS",
+    "WASM_MOD_TABLES", "WASM_MOD_ELEM",
+]
+
+[indirect_calls]
+verifies = [
+    "WASM_CALL_INDIRECT",
+    "WASM_MOD_TABLES", "WASM_MOD_ELEM",
+    "WASM_EXEC_CALLS",
+]
+
+[inter_module_lending]
+verifies = [
+    "WASM_MOD_IMPORTS", "WASM_MOD_MEMORIES",
+    "WASM_MEMORY_GROW",
+]
+
+[locals]
+verifies = [
+    "WASM_LOCAL_GET", "WASM_LOCAL_SET", "WASM_LOCAL_TEE",
+    "WASM_EXEC_VARIABLE",
+]
+
+[locals_aliasing]
+verifies = [
+    "WASM_LOCAL_GET", "WASM_LOCAL_SET", "WASM_LOCAL_TEE",
+]
+
+[memory]
+verifies = [
+    "WASM_I32_LOAD", "WASM_I32_STORE",
+    "WASM_EXEC_MEMORY",
+]
+
+[memory_grow]
+verifies = [
+    "WASM_MEMORY_SIZE", "WASM_MEMORY_GROW",
+    "WASM_EXEC_MEMORY",
+]
+
+[module_wrapper]
+verifies = [
+    "WASM_MOD_GLOBALS", "WASM_MOD_DATA",
+    "WASM_GLOBAL_GET",
+    "WASM_EXEC_INSTANTIATION",
+]
+
+[numeric_ops]
+verifies = [
+    "WASM_I64_DIV_S", "WASM_I64_AND", "WASM_I64_SHL",
+    "WASM_I64_LT_S", "WASM_I64_CLZ", "WASM_I64_ROTL",
+    "WASM_I64_REM_U",
+    "WASM_F64_DIV", "WASM_F64_MIN", "WASM_F64_LT",
+    "WASM_F64_SQRT", "WASM_F64_FLOOR", "WASM_F64_CEIL", "WASM_F64_NEG",
+    "WASM_I32_WRAP_I64", "WASM_I64_EXTEND_I32_S", "WASM_I64_EXTEND_I32_U",
+    "WASM_EXEC_INTEGER_OPS", "WASM_EXEC_FLOAT_OPS", "WASM_EXEC_CONVERSIONS",
+]
+
+[rust_e2e]
+verifies = [
+    "WASM_I32_ADD", "WASM_I32_SUB", "WASM_I32_MUL",
+    "WASM_I32_AND", "WASM_I32_OR", "WASM_I32_XOR",
+    "WASM_I32_SHL", "WASM_I32_SHR_U",
+    "WASM_I64_ADD",
+    "WASM_MOD_EXPORTS", "WASM_MOD_FUNCTIONS",
+]
+
+[rust_e2e_control]
+verifies = [
+    "WASM_LOOP", "WASM_BR_IF", "WASM_IF", "WASM_BLOCK",
+    "WASM_EXEC_CONTROL",
+]
+
+[rust_e2e_heavy_fibo]
+verifies = [
+    "WASM_CALL", "WASM_I32_ADD",
+    "WASM_I32_LOAD", "WASM_I32_STORE",
+    "WASM_EXEC_CALLS",
+]
+
+[rust_e2e_i64]
+verifies = [
+    "WASM_I64_MUL", "WASM_I64_SUB",
+    "WASM_I64_AND", "WASM_I64_OR", "WASM_I64_XOR",
+    "WASM_I64_SHL", "WASM_I64_SHR_S",
+]
+
+[rust_e2e_memory_bench]
+verifies = [
+    "WASM_I32_LOAD", "WASM_I32_STORE",
+    "WASM_EXEC_MEMORY",
+]
+
+[select]
+verifies = [
+    "WASM_SELECT",
+    "WASM_EXEC_PARAMETRIC",
+]
+
+[subwidth_mem]
+verifies = [
+    "WASM_I32_LOAD8_S", "WASM_I32_LOAD8_U",
+    "WASM_I32_LOAD16_S", "WASM_I32_LOAD16_U",
+    "WASM_I32_STORE8", "WASM_I32_STORE16",
+    "WASM_I64_LOAD8_S", "WASM_I64_LOAD8_U",
+    "WASM_I64_LOAD32_S", "WASM_I64_LOAD32_U",
+    "WASM_I64_STORE32",
+]
+
+[unreachable]
+verifies = [
+    "WASM_UNREACHABLE",
+    "WASM_EXEC_CONTROL",
+]
