@@ -7,6 +7,7 @@ herkos requirements, implementation, and tests.
 .. toctree::
    :maxdepth: 2
 
+   metamodel
    wasm_spec/index
    impl
    tests
