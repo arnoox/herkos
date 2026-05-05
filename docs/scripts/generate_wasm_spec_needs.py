@@ -2,7 +2,7 @@
 """Generate wasm_spec needs for numeric instructions from wasm_1_0_instructions.toml.
 
 Reads the curated TOML data file (derived from the W3C WebAssembly Core
-Specification 1.0) and produces MyST markdown with {wasm_spec} directives.
+Specification 1.0) and produces RST with .. wasm_spec:: directives.
 """
 
 import sys
@@ -19,7 +19,7 @@ from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).parent
 TOML_PATH = SCRIPTS_DIR / "wasm_1_0_instructions.toml"
-OUTPUT_PATH = SCRIPTS_DIR.parent / "traceability" / "wasm_spec" / "instructions_numeric.md"
+OUTPUT_PATH = SCRIPTS_DIR.parent / "traceability/wasm_spec/_gen" / "instructions_numeric.rst"
 
 
 def make_id(prefix: str, op: str) -> str:
@@ -32,28 +32,32 @@ def make_opcode(prefix: str, op: str) -> str:
     return f"{prefix}.{op}"
 
 
+def rst_heading(text: str, char: str) -> list[str]:
+    """Return RST heading lines (text + underline)."""
+    return [text, char * len(text), ""]
+
+
 def generate_grouped_section(prefix: str, ops: list[str], section: str,
-                             tags: list[str]) -> list[str]:
-    """Generate {wasm_spec} directives for a group of same-prefix instructions."""
+                              tags: list[str]) -> list[str]:
+    """Generate .. wasm_spec:: directives for a group of same-prefix instructions."""
     lines = []
     for op in ops:
         need_id = make_id(prefix, op)
         opcode = make_opcode(prefix, op)
         tag_str = ", ".join(tags)
-        lines.append(f"```{{wasm_spec}} {opcode}")
-        lines.append(f":id: {need_id}")
-        lines.append(f":wasm_section: {section}")
-        lines.append(f":wasm_opcode: {opcode}")
-        lines.append(f":tags: {tag_str}")
+        lines.append(f".. wasm_spec:: {opcode}")
+        lines.append(f"   :id: {need_id}")
+        lines.append(f"   :wasm_section: {section}")
+        lines.append(f"   :wasm_opcode: {opcode}")
+        lines.append(f"   :tags: {tag_str}")
         lines.append("")
-        lines.append(f"Wasm 1.0: `{opcode}` instruction.")
-        lines.append("```")
+        lines.append(f"   Wasm 1.0: ``{opcode}`` instruction.")
         lines.append("")
     return lines
 
 
 def generate_conversions(data: dict) -> list[str]:
-    """Generate {wasm_spec} directives for conversion instructions."""
+    """Generate .. wasm_spec:: directives for conversion instructions."""
     lines = []
     section = data["section"]
     base_tags = data["tags"]
@@ -62,14 +66,13 @@ def generate_conversions(data: dict) -> list[str]:
         need_id = f"WASM_{entry['id_suffix']}"
         desc = entry["desc"]
         tag_str = ", ".join(base_tags)
-        lines.append(f"```{{wasm_spec}} {name}")
-        lines.append(f":id: {need_id}")
-        lines.append(f":wasm_section: {section}")
-        lines.append(f":wasm_opcode: {name}")
-        lines.append(f":tags: {tag_str}")
+        lines.append(f".. wasm_spec:: {name}")
+        lines.append(f"   :id: {need_id}")
+        lines.append(f"   :wasm_section: {section}")
+        lines.append(f"   :wasm_opcode: {name}")
+        lines.append(f"   :tags: {tag_str}")
         lines.append("")
-        lines.append(f"Wasm 1.0: `{name}` — {desc}.")
-        lines.append("```")
+        lines.append(f"   Wasm 1.0: ``{name}`` — {desc}.")
         lines.append("")
     return lines
 
@@ -79,19 +82,17 @@ def main():
         data = tomllib.load(f)
 
     lines = [
-        "# Numeric Instructions",
-        "",
+        *rst_heading("Numeric Instructions", "="),
         "Wasm 1.0 numeric instructions (§2.4.1): constants, unary, binary,",
         "test, comparison, and conversion operations.",
         "",
-        "Source: [W3C WebAssembly Core Specification 1.0, §2.4.1]"
-        "(https://www.w3.org/TR/wasm-core-1/#numeric-instructions%E2%91%A0)",
+        "Source: `W3C WebAssembly Core Specification 1.0, §2.4.1"
+        " <https://www.w3.org/TR/wasm-core-1/#numeric-instructions%E2%91%A0>`_",
         "",
     ]
 
     # Constants
-    lines.append("## Constants")
-    lines.append("")
+    lines.extend(rst_heading("Constants", "-"))
     for type_key in ["i32", "i64", "f32", "f64"]:
         const_data = data["constants"][type_key]
         tags = const_data["tags"]
@@ -101,8 +102,7 @@ def main():
 
     # Per-type instruction groups
     for type_key in ["i32", "i64"]:
-        lines.append(f"## {type_key} Instructions")
-        lines.append("")
+        lines.extend(rst_heading(f"{type_key} Instructions", "-"))
 
         for group_key in [f"{type_key}_unary", f"{type_key}_test",
                           f"{type_key}_binop", f"{type_key}_compare"]:
@@ -112,8 +112,7 @@ def main():
             ))
 
     for type_key in ["f32", "f64"]:
-        lines.append(f"## {type_key} Instructions")
-        lines.append("")
+        lines.extend(rst_heading(f"{type_key} Instructions", "-"))
 
         for group_key in [f"{type_key}_unary", f"{type_key}_binop",
                           f"{type_key}_compare"]:
@@ -123,8 +122,7 @@ def main():
             ))
 
     # Conversions
-    lines.append("## Conversions")
-    lines.append("")
+    lines.extend(rst_heading("Conversions", "-"))
     lines.extend(generate_conversions(data["conversions"]))
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)

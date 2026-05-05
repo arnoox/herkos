@@ -31,66 +31,7 @@ myst_heading_anchors = 3
 
 # -- sphinx-needs configuration ------------------------------------------------
 
-needs_types = [
-    {
-        "directive": "wasm_spec",
-        "title": "Wasm Spec",
-        "prefix": "WASM_",
-        "color": "#9DC3E6",
-        "style": "node",
-    },
-    {
-        "directive": "req",
-        "title": "Requirement",
-        "prefix": "REQ_",
-        "color": "#A9D18E",
-        "style": "node",
-    },
-    {
-        "directive": "spec",
-        "title": "Specification",
-        "prefix": "SPEC_",
-        "color": "#FFD966",
-        "style": "node",
-    },
-    {
-        "directive": "impl",
-        "title": "Implementation",
-        "prefix": "IMPL_",
-        "color": "#F4B183",
-        "style": "node",
-    },
-    {
-        "directive": "test",
-        "title": "Test",
-        "prefix": "TEST_",
-        "color": "#C5B0D5",
-        "style": "node",
-    },
-]
-
-needs_fields = {
-    "wasm_section": {"default": "", "description": "Wasm spec section reference"},
-    "source_file": {"default": "", "description": "Source file path"},
-    "wasm_opcode": {"default": "", "description": "Wasm opcode name"},
-}
-
-needs_links = {
-    "satisfies": {
-        "incoming": "is_satisfied_by",
-        "copy": False,
-    },
-    "implements": {
-        "incoming": "is_implemented_by",
-        "copy": False,
-    },
-    "verifies": {
-        "incoming": "is_verified_by",
-        "copy": False,
-    },
-}
-
-needs_id_regex = "^[A-Z][A-Z0-9_]+"
+needs_from_toml = "ubproject.toml"
 
 # -- HTML output ---------------------------------------------------------------
 

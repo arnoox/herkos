@@ -1,0 +1,66 @@
+"$schema" = "https://ubcode.useblocks.com/ubproject.schema.json"
+
+[project]
+name = "herkos"
+
+[needs]
+id_regex = "^[A-Z][A-Z0-9_]+"
+
+[[needs.types]]
+directive = "wasm_spec"
+title = "Wasm Spec"
+prefix = "WASM_"
+color = "#9DC3E6"
+style = "node"
+
+[[needs.types]]
+directive = "req"
+title = "Requirement"
+prefix = "REQ_"
+color = "#A9D18E"
+style = "node"
+
+[[needs.types]]
+directive = "spec"
+title = "Specification"
+prefix = "SPEC_"
+color = "#FFD966"
+style = "node"
+
+[[needs.types]]
+directive = "impl"
+title = "Implementation"
+prefix = "IMPL_"
+color = "#F4B183"
+style = "node"
+
+[[needs.types]]
+directive = "test"
+title = "Test"
+prefix = "TEST_"
+color = "#C5B0D5"
+style = "node"
+
+[needs.fields.wasm_section]
+default = ""
+description = "Wasm spec section reference"
+
+[needs.fields.source_file]
+default = ""
+description = "Source file path"
+
+[needs.fields.wasm_opcode]
+default = ""
+description = "Wasm opcode name"
+
+[needs.links.satisfies]
+incoming = "is_satisfied_by"
+copy = false
+
+[needs.links.implements]
+incoming = "is_implemented_by"
+copy = false
+
+[needs.links.verifies]
+incoming = "is_verified_by"
+copy = false

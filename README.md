@@ -151,8 +151,8 @@ cargo bench -p herkos-tests    # benchmarks
 
 ## Documentation
 
-- [Requirements](docs/REQUIREMENTS.md) — formal requirements (REQ_* IDs)
-- [Specification](docs/SPECIFICATION.md) — architecture, transpilation rules, memory model, security analysis
+- [Requirements](docs/REQUIREMENTS.rst) — formal requirements (REQ_* IDs)
+- [Specification](docs/SPECIFICATION.rst) — architecture, transpilation rules, memory model, security analysis
 - [Future work](docs/FUTURE.md) — verified backend, hybrid backend, temporal isolation
 
 ## License

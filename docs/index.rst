@@ -1,4 +1,4 @@
-herkos Documentation
+herkos documentation
 ====================
 
 herkos is a compilation pipeline that transforms WebAssembly modules into memory-safe Rust code with compile-time isolation guarantees, replacing runtime hardware-based memory protection (MMU/MPU) with type-system-enforced safety.
@@ -31,6 +31,6 @@ Sections
 
    GETTING_STARTED
    REQUIREMENTS
-   SPECIFICATION
+   specification/index
    FUTURE
    traceability/index

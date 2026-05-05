@@ -1,6 +1,6 @@
 # Future Extensions
 
-This document describes features that are **planned but not yet implemented**. For the current specification, see [SPECIFICATION.md](SPECIFICATION.md).
+This document describes features that are **planned but not yet implemented**. For the current specification, see [Specification](specification/index.rst).
 
 ---
 
